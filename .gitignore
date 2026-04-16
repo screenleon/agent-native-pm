@@ -1,0 +1,63 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/backend/agent-native-pm
+/backend/server
+/bin/server
+
+# Go
+/vendor/
+
+# Node / Frontend
+/frontend/node_modules/
+/frontend/dist/
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal
+
+# Docker & Database
+/data/
+
+# Data directory (runtime)
+/data/
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Agent traces (if generated)
+.agent-trace/
+
+# Local planning and tool state
+.backlog.priority-planning.md
+.codex
+
+# Local budget overrides
+prompt-budget.local.yml
+
+# Test coverage
+coverage.out
+coverage.html

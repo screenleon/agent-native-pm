@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: ghcr.io/tyoho-group/postgres-uuidv7-secure
+    environment:
+      - POSTGRES_DB=anpm
+      - POSTGRES_USER=anpm
+      - POSTGRES_PASSWORD=anpm
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anpm -d anpm"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "18765:18765"
+    environment:
+      - DATABASE_URL=postgres://anpm:anpm@postgres:5432/anpm?sslmode=disable
+      - FRONTEND_DIR=/app/frontend/dist
+      - PORT=18765
+      - REPO_ROOT=/app/data/repos
+      - REPO_MAPPING_ROOT=/mirrors
+      - GIT_CONFIG_COUNT=1
+      - GIT_CONFIG_KEY_0=safe.directory
+      - GIT_CONFIG_VALUE_0=*
+    volumes:
+      - managed_repos:/app/data/repos
+      - .:/mirrors/agent-native-pm:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18765/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  pgdata:
+  managed_repos:

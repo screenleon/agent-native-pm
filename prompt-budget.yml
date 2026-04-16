@@ -1,0 +1,77 @@
+# prompt-budget.yml — Agent Native PM
+#
+# Agents read this file to determine execution mode, active roles, and loading depth.
+#
+# See docs/agent-playbook.md → Budget profiles for profile definitions.
+# See docs/operating-rules.md → Trust level for execution mode behavior.
+
+# ── Execution mode ─────────────────────────────────────────────────────────────
+#
+# supervised  — all checkpoints require human approval
+# semi-auto   — Small/low-risk tasks run autonomously; checkpoints for Large/destructive
+# autonomous  — proceeds without approval except destructive actions
+#
+execution_mode: semi-auto
+
+# ── Autonomous mode options ─────────────────────────────────────────────────────
+# Only read when execution_mode is autonomous.
+autonomous_mode:
+  auto_proceed_on_plan: true
+  auto_proceed_on_scope_expansion: true
+  halt_on_destructive_actions: true
+  halt_on_stuck_escalation: true
+  skip_critic_role: false
+  halt_on_high_severity_risk: true
+
+# ── Budget ──────────────────────────────────────────────────────────────────────
+budget:
+  # Budget profile: minimal | standard | full
+  # This project does not use the nano profile (no separate rules-nano.md).
+  profile: standard
+
+  # Target for Layer 1 (operating-rules.md + agent-playbook.md)
+  layer1_target_tokens: 4000
+
+  # Maximum for Layer 2 (AGENTS.md + templates)
+  layer2_max_tokens: 6000
+
+  # Maximum for Layer 3 (DECISIONS.md + ARCHITECTURE.md)
+  layer3_max_tokens: 3000
+
+# ── Roles ───────────────────────────────────────────────────────────────────────
+roles:
+  enabled:
+    - feature-planner
+    - backend-architect
+    - application-implementer
+    - integration-engineer
+    - documentation-architect
+    - risk-reviewer
+    - critic
+
+  disabled:
+    - ui-image-implementer  # No screenshot-driven UI workflow in this project
+
+# ── Skills ──────────────────────────────────────────────────────────────────────
+# This project does not use a separate skills/ directory.
+# Skill behaviors are executed natively by the agent.
+# These entries are informational — they indicate which behaviors are expected.
+skills:
+  always_load:
+    - demand-triage          # Classify task scale
+    - repo-exploration       # Read codebase before coding
+    - test-and-fix-loop      # Validate after every change
+    - error-recovery         # Handle failures
+    - memory-and-state       # DECISIONS.md management
+
+  on_demand: []
+
+  disabled:
+    - prompt-cache-optimization  # Not needed without skill files
+    - design-to-code             # No UI mockup workflow
+    - skill-creator              # Not using self-evolution
+
+# ── Trimming ────────────────────────────────────────────────────────────────────
+trimming:
+  decisions_archive_threshold_kb: 30
+  decisions_archive_threshold_entries: 50
