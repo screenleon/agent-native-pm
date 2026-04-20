@@ -1,6 +1,6 @@
 # Agent Native PM — Makefile
 
-.PHONY: all build test test-local lint dev clean docker-build docker-up docker-down
+.PHONY: all build build-backend build-connector test test-local lint dev clean docker-build docker-up docker-down
 
 # Default
 all: build
@@ -9,6 +9,10 @@ all: build
 
 build-backend:
 	cd backend && go build -o ../bin/server ./cmd/server
+	cd backend && go build -o ../bin/anpm-connector ./cmd/connector
+
+build-connector:
+	cd backend && go build -o ../bin/anpm-connector ./cmd/connector
 
 test:
 	./scripts/test-with-postgres.sh
@@ -20,6 +24,10 @@ test-integration:
 	cd backend && go test ./... -v -tags=integration -count=1
 
 lint:
+	cd backend && go vet ./...
+	$(MAKE) lint-frontend
+
+lint-backend:
 	cd backend && go vet ./...
 
 # ── Frontend ─────────────────────────────────────────────────────────────────
