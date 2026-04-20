@@ -67,6 +67,29 @@ func (s *SyncRunStore) GetByID(id string) (*models.SyncRun, error) {
 	return &run, nil
 }
 
+func (s *SyncRunStore) GetLatestByProject(projectID string) (*models.SyncRun, error) {
+	var run models.SyncRun
+	var completedAt sql.NullTime
+	err := s.db.QueryRow(`
+		SELECT id, project_id, started_at, completed_at, status, commits_scanned, files_changed, error_message
+		FROM sync_runs
+		WHERE project_id=$1
+		ORDER BY started_at DESC
+		LIMIT 1
+	`, projectID).Scan(&run.ID, &run.ProjectID, &run.StartedAt, &completedAt,
+		&run.Status, &run.CommitsScanned, &run.FilesChanged, &run.ErrorMessage)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if completedAt.Valid {
+		run.CompletedAt = &completedAt.Time
+	}
+	return &run, nil
+}
+
 func (s *SyncRunStore) ListByProject(projectID string, page, perPage int) ([]models.SyncRun, int, error) {
 	var total int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_runs WHERE project_id=$1`, projectID).Scan(&total); err != nil {

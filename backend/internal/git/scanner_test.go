@@ -156,6 +156,7 @@ func TestRecentChanges_EmptyRepoReturnsNoChanges(t *testing.T) {
 
 func TestRecentChanges_InvalidBranchIncludesGitStderr(t *testing.T) {
 	repo := setupGitRepo(t)
+	runGit(t, repo, nil, "branch", "-M", "main")
 
 	if err := os.WriteFile(filepath.Join(repo, "readme.md"), []byte("hello\n"), 0o644); err != nil {
 		t.Fatalf("write readme: %v", err)
@@ -166,6 +167,9 @@ func TestRecentChanges_InvalidBranchIncludesGitStderr(t *testing.T) {
 	_, _, err := RecentChanges(repo, "does-not-exist", time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	if err == nil {
 		t.Fatal("expected error for invalid branch")
+	}
+	if !strings.Contains(err.Error(), "detected default branch is \"main\"") {
+		t.Fatalf("expected detected branch hint in error, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "unknown revision") && !strings.Contains(err.Error(), "ambiguous argument") {
 		t.Fatalf("expected git stderr in error, got %v", err)

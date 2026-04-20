@@ -3,11 +3,17 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/screenleon/agent-native-pm/internal/models"
 )
+
+const agentRunIdempotencyConstraint = "agent_runs_idempotency_key_key"
+
+var ErrAgentRunIdempotencyProjectMismatch = errors.New("idempotency key belongs to another project")
 
 type AgentRunStore struct {
 	db *sql.DB
@@ -41,6 +47,35 @@ func (s *AgentRunStore) Create(projectID string, req models.CreateAgentRunReques
 		return nil, err
 	}
 	return s.GetByID(id)
+}
+
+func (s *AgentRunStore) CreateOrGetByIdempotency(projectID string, req models.CreateAgentRunRequest) (*models.AgentRun, bool, error) {
+	run, err := s.Create(projectID, req)
+	if err == nil {
+		return run, false, nil
+	}
+	if !isAgentRunIdempotencyConstraintError(err) || req.IdempotencyKey == "" {
+		return nil, false, err
+	}
+	existing, lookupErr := s.GetByIdempotencyKey(req.IdempotencyKey)
+	if lookupErr != nil {
+		return nil, false, lookupErr
+	}
+	if existing == nil {
+		return nil, false, err
+	}
+	if existing.ProjectID != projectID {
+		return nil, false, ErrAgentRunIdempotencyProjectMismatch
+	}
+	return existing, true, nil
+}
+
+func isAgentRunIdempotencyConstraintError(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	return string(pqErr.Code) == "23505" && pqErr.Constraint == agentRunIdempotencyConstraint
 }
 
 func (s *AgentRunStore) Update(id string, req models.UpdateAgentRunRequest) (*models.AgentRun, error) {
@@ -129,6 +164,18 @@ func (s *AgentRunStore) GetByID(id string) (*models.AgentRun, error) {
 	return &r, nil
 }
 
+func (s *AgentRunStore) GetByIdempotencyKey(idempotencyKey string) (*models.AgentRun, error) {
+	var id string
+	err := s.db.QueryRow(`SELECT id FROM agent_runs WHERE idempotency_key=$1`, idempotencyKey).Scan(&id)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetByID(id)
+}
+
 func (s *AgentRunStore) ListByProject(projectID string, page, perPage int) ([]models.AgentRun, int, error) {
 	var total int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_runs WHERE project_id=$1`, projectID).Scan(&total); err != nil {
@@ -169,4 +216,47 @@ func (s *AgentRunStore) ListByProject(projectID string, page, perPage int) ([]mo
 		runs = []models.AgentRun{}
 	}
 	return runs, total, rows.Err()
+}
+
+func (s *AgentRunStore) ListRecentByProject(projectID string, limit int) ([]models.AgentRun, error) {
+	if limit < 1 {
+		limit = 5
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, project_id, agent_name, action_type, status, summary, files_affected,
+		       needs_human_review, started_at, completed_at, error_message, idempotency_key, created_at
+		FROM agent_runs
+		WHERE project_id=$1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`, projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []models.AgentRun
+	for rows.Next() {
+		var r models.AgentRun
+		var filesJSON string
+		var ikey sql.NullString
+		var needsReview bool
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.AgentName, &r.ActionType, &r.Status, &r.Summary,
+			&filesJSON, &needsReview, &r.StartedAt, &r.CompletedAt, &r.ErrorMessage, &ikey, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		r.NeedsHumanReview = needsReview
+		if ikey.Valid {
+			r.IdempotencyKey = ikey.String
+		}
+		if err := json.Unmarshal([]byte(filesJSON), &r.FilesAffected); err != nil {
+			r.FilesAffected = []string{}
+		}
+		runs = append(runs, r)
+	}
+	if runs == nil {
+		runs = []models.AgentRun{}
+	}
+	return runs, rows.Err()
 }

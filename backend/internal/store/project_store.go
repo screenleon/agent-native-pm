@@ -57,10 +57,7 @@ func (s *ProjectStore) GetByID(id string) (*models.Project, error) {
 func (s *ProjectStore) Create(req models.CreateProjectRequest) (*models.Project, error) {
 	id := uuid.New().String()
 	now := time.Now().UTC()
-	branch := req.DefaultBranch
-	if branch == "" {
-		branch = "main"
-	}
+	branch := strings.TrimSpace(req.DefaultBranch)
 
 	_, err := s.db.Exec(`
 		INSERT INTO projects (id, name, description, repo_url, repo_path, default_branch, created_at, updated_at)
@@ -100,7 +97,7 @@ func (s *ProjectStore) Update(id string, req models.UpdateProjectRequest) (*mode
 	}
 	if req.DefaultBranch != nil {
 		setClauses = append(setClauses, fmt.Sprintf("default_branch = $%d", pos))
-		args = append(args, *req.DefaultBranch)
+		args = append(args, strings.TrimSpace(*req.DefaultBranch))
 		pos++
 	}
 

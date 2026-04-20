@@ -12,3 +12,11 @@ type ProjectSummary struct {
 	StaleDocuments  int     `json:"stale_documents"`
 	HealthScore     float64 `json:"health_score"`
 }
+
+type DashboardSummary struct {
+	ProjectID       string         `json:"project_id"`
+	Summary         ProjectSummary `json:"summary"`
+	LatestSyncRun   *SyncRun       `json:"latest_sync_run"`
+	OpenDriftCount  int            `json:"open_drift_count"`
+	RecentAgentRuns []AgentRun     `json:"recent_agent_runs"`
+}

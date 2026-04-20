@@ -175,6 +175,91 @@ func TestSyncServiceRun_EmptyRepoCompletesWithZeroBaseline(t *testing.T) {
 	}
 }
 
+func TestSyncServiceRun_AutoDetectsEmptyProjectBranch(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+
+	projectStore := store.NewProjectStore(db)
+	docStore := store.NewDocumentStore(db)
+	docLinkStore := store.NewDocumentLinkStore(db)
+	driftStore := store.NewDriftSignalStore(db)
+	syncStore := store.NewSyncRunStore(db)
+
+	repo := setupGitRepo(t)
+	runGit(t, repo, nil, "branch", "-M", "main")
+	codePath := filepath.Join(repo, "src", "service.go")
+	if err := os.MkdirAll(filepath.Dir(codePath), 0o755); err != nil {
+		t.Fatalf("mkdir code dir: %v", err)
+	}
+	if err := os.WriteFile(codePath, []byte("package service\n"), 0o644); err != nil {
+		t.Fatalf("write initial code: %v", err)
+	}
+	runGit(t, repo, nil, "add", ".")
+	gitCommit(t, repo, "initial", time.Now().UTC().Add(-24*time.Hour).Format(time.RFC3339))
+
+	project, err := projectStore.Create(models.CreateProjectRequest{
+		Name:          "auto detect branch project",
+		RepoPath:      repo,
+		DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	emptyBranch := ""
+	project, err = projectStore.Update(project.ID, models.UpdateProjectRequest{DefaultBranch: &emptyBranch})
+	if err != nil {
+		t.Fatalf("clear project branch: %v", err)
+	}
+
+	svc := NewSyncService(syncStore, docLinkStore, driftStore, docStore, projectStore, nil, 30, t.TempDir())
+	run, err := svc.Run(project.ID)
+	if err != nil {
+		t.Fatalf("run sync: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("expected completed run, got %s", run.Status)
+	}
+}
+
+func TestSyncServiceRun_InvalidConfiguredBranchHintsDetectedBranch(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+
+	projectStore := store.NewProjectStore(db)
+	docStore := store.NewDocumentStore(db)
+	docLinkStore := store.NewDocumentLinkStore(db)
+	driftStore := store.NewDriftSignalStore(db)
+	syncStore := store.NewSyncRunStore(db)
+
+	repo := setupGitRepo(t)
+	runGit(t, repo, nil, "branch", "-M", "main")
+	codePath := filepath.Join(repo, "src", "service.go")
+	if err := os.MkdirAll(filepath.Dir(codePath), 0o755); err != nil {
+		t.Fatalf("mkdir code dir: %v", err)
+	}
+	if err := os.WriteFile(codePath, []byte("package service\n"), 0o644); err != nil {
+		t.Fatalf("write initial code: %v", err)
+	}
+	runGit(t, repo, nil, "add", ".")
+	gitCommit(t, repo, "initial", time.Now().UTC().Add(-24*time.Hour).Format(time.RFC3339))
+
+	project, err := projectStore.Create(models.CreateProjectRequest{
+		Name:          "invalid branch project",
+		RepoPath:      repo,
+		DefaultBranch: "master",
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	svc := NewSyncService(syncStore, docLinkStore, driftStore, docStore, projectStore, nil, 30, t.TempDir())
+	_, err = svc.Run(project.ID)
+	if err == nil {
+		t.Fatal("expected sync to fail for invalid configured branch")
+	}
+	if !strings.Contains(err.Error(), "detected default branch is \"main\"") {
+		t.Fatalf("expected detected branch hint, got %v", err)
+	}
+}
+
 func TestSyncServiceRun_DedupesSignalsForSameDocumentAcrossMultipleChangedFiles(t *testing.T) {
 	now := time.Now().UTC()
 	initialDate := now.Add(-2 * 24 * time.Hour).Format(time.RFC3339)
@@ -468,6 +553,78 @@ func TestSyncServiceRun_ClonesManagedRepoFromRepoURL(t *testing.T) {
 	}
 	if !strings.HasPrefix(updatedProject.RepoPath, repoRoot) {
 		t.Fatalf("expected managed repo path under repo root, got %s", updatedProject.RepoPath)
+	}
+
+	updatedDoc, err := docStore.GetByID(doc.ID)
+	if err != nil {
+		t.Fatalf("get updated doc: %v", err)
+	}
+	if updatedDoc == nil || !updatedDoc.IsStale {
+		t.Fatalf("expected document marked stale after managed clone sync")
+	}
+}
+
+func TestSyncServiceRun_ManagedCloneAutoDetectsRemoteDefaultBranch(t *testing.T) {
+	now := time.Now().UTC()
+	initialDate := now.Add(-2 * 24 * time.Hour).Format(time.RFC3339)
+	changedDate := now.Add(-1 * 24 * time.Hour).Format(time.RFC3339)
+
+	db := testutil.OpenTestDB(t)
+	projectStore := store.NewProjectStore(db)
+	docStore := store.NewDocumentStore(db)
+	docLinkStore := store.NewDocumentLinkStore(db)
+	driftStore := store.NewDriftSignalStore(db)
+	syncStore := store.NewSyncRunStore(db)
+
+	remoteRepo := setupGitRepo(t)
+	runGit(t, remoteRepo, nil, "branch", "-M", "main")
+	codePath := filepath.Join(remoteRepo, "src", "service.go")
+	if err := os.MkdirAll(filepath.Dir(codePath), 0o755); err != nil {
+		t.Fatalf("mkdir code dir: %v", err)
+	}
+	if err := os.WriteFile(codePath, []byte("package service\n"), 0o644); err != nil {
+		t.Fatalf("write initial code: %v", err)
+	}
+	runGit(t, remoteRepo, nil, "add", ".")
+	gitCommit(t, remoteRepo, "initial", initialDate)
+
+	if err := os.WriteFile(codePath, []byte("package service\n// changed\n"), 0o644); err != nil {
+		t.Fatalf("write changed code: %v", err)
+	}
+	runGit(t, remoteRepo, nil, "add", ".")
+	gitCommit(t, remoteRepo, "changed", changedDate)
+
+	project, err := projectStore.Create(models.CreateProjectRequest{
+		Name:    "managed repo auto detect project",
+		RepoURL: "file://" + remoteRepo,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	emptyBranch := ""
+	project, err = projectStore.Update(project.ID, models.UpdateProjectRequest{DefaultBranch: &emptyBranch})
+	if err != nil {
+		t.Fatalf("clear project branch: %v", err)
+	}
+
+	doc, err := docStore.Create(project.ID, models.CreateDocumentRequest{
+		Title:    "Service Source Doc",
+		FilePath: "src/service.go",
+		DocType:  "guide",
+		Source:   "human",
+	})
+	if err != nil {
+		t.Fatalf("create document: %v", err)
+	}
+
+	repoRoot := t.TempDir()
+	svc := NewSyncService(syncStore, docLinkStore, driftStore, docStore, projectStore, nil, 30, repoRoot)
+	run, err := svc.Run(project.ID)
+	if err != nil {
+		t.Fatalf("run sync: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("expected completed run, got %s", run.Status)
 	}
 
 	updatedDoc, err := docStore.GetByID(doc.ID)
