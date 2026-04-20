@@ -65,7 +65,7 @@ Use this lightweight checklist before coding:
 - Do not silently ignore errors or remove failing tests.
 - Do not implement first and backfill requirements afterward.
 - Follow existing repository patterns unless user explicitly asks for refactor.
-- SQLite is the only data store for Phase 1-3. Do not add PostgreSQL.
+- PostgreSQL is the active runtime data store. Do not introduce SQLite-only assumptions or regress the schema/docs back to legacy Phase 1 constraints.
 - All API responses must use the JSON envelope: `{ data, error, meta }`.
 - Agent-generated content must include a source marker.
 

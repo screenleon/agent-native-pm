@@ -17,7 +17,7 @@ This is **not** a general-purpose Jira/Plane replacement. It is a focused tool t
 |-----------|-----------|
 | Backend API | Go |
 | Frontend | React + Vite (static build) |
-| Database | SQLite (Phase 1), PostgreSQL (Phase 4) |
+| Database | PostgreSQL |
 | Deployment | Docker Compose |
 | Documentation | Markdown in repo |
 
@@ -34,6 +34,64 @@ docker compose up --build
 # Open
 # http://localhost:18765
 ```
+
+## Central model settings
+
+Planning decomposition can stay fully local with the built-in deterministic provider, or it can call a real external model through one OpenAI-compatible chat completions endpoint. Provider configuration now lives inside the app under the admin-only `Model Settings` page instead of being hard-coded in deployment env vars.
+
+Runtime notes:
+
+- The only env you need for secret storage is `APP_SETTINGS_MASTER_KEY`, a base64-encoded AES key used to encrypt stored provider API keys at rest.
+- The remote model only generates candidate content fields such as title, description, and rationale.
+- Priority score, confidence, ranking, duplicate checks, and typed evidence detail remain server-owned.
+- Starting a planning run no longer accepts a user-selected provider/model override. New runs always use the centrally saved server configuration.
+- Selecting the remote provider sends compact planning context metadata to the configured upstream endpoint.
+- For private deployments, keep the app behind LAN-only access or a protected reverse proxy so the admin settings surface is not public.
+
+Source: `[agent:documentation-architect]`
+
+## Local connector runtime
+
+The server-side local connector control plane is now backed by a local Go CLI named `anpm-connector`. This is the path to use when you want planning runs to execute on your own machine instead of asking the server to call a remote provider directly.
+
+Build the connector binary:
+
+```bash
+make build-connector
+```
+
+Current commands:
+
+```bash
+./bin/anpm-connector pair --server http://localhost:18765 --code <pairing-code>
+./bin/anpm-connector doctor
+./bin/anpm-connector serve
+```
+
+Adapter flags can be supplied during `pair`, `doctor`, or `serve` and are persisted back into the local connector state file when they change:
+
+```bash
+./bin/anpm-connector pair \
+	--server http://localhost:18765 \
+	--code <pairing-code> \
+	--adapter-command /absolute/path/to/adapter \
+	--adapter-working-dir /absolute/path/to/worktree
+```
+
+The connector persists its local token and adapter configuration to:
+
+- `$ANPM_CONNECTOR_STATE_PATH`, when set
+- otherwise `~/.config/agent-native-pm/connector.json`
+
+The state file is written with `0600` permissions.
+
+`exec-json` adapter contract:
+
+- stdin JSON includes `run`, `requirement`, and `requested_max_candidates`
+- stdout JSON must return `{"candidates":[...]}` or `{"error_message":"..."}`
+- adapter execution is bounded by a timeout and stdout/stderr size limit
+
+Source: `[agent:application-implementer]`
 
 ## Repository setup for sync
 

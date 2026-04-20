@@ -1,4 +1,20 @@
-# MVP Scope — Phase 1
+# MVP Scope — Historical Phase 1 Baseline
+
+> ⚠️ **HISTORICAL DOCUMENT — DO NOT USE FOR CURRENT PLANNING.**
+>
+> This file captures the original Phase 1 scope. Implementation has advanced
+> well beyond it (planning runs, local connectors, account bindings, drift
+> signals, notifications, etc. are all live).
+>
+> **Sources of truth for current state**: `DECISIONS.md`,
+> `docs/api-surface.md`, `docs/data-model.md`, `docs/product-blueprint.md`,
+> and any open backlog priority planning notes.
+>
+> Use this file only as historical context when reasoning about why the
+> early code paths look the way they do. Do not gate new feature work on
+> what is or is not listed here.
+
+Current implementation has advanced beyond this file's original Phase 1 scope. Use `.backlog.priority-planning.md`, `DECISIONS.md`, `docs/api-surface.md`, and `docs/data-model.md` as the source of truth for current-state planning and runtime behavior.
 
 This file is the source of truth for what is in and out of scope for Phase 1 (Core CRUD + Dashboard). Consult this file when evaluating whether a feature belongs in the current development phase.
 
@@ -10,7 +26,7 @@ This file is the source of truth for what is in and out of scope for Phase 1 (Co
 - [ ] Task CRUD — create, read, update status, assign, delete tasks
 - [ ] Document registry CRUD — register documents, update metadata, track staleness
 - [ ] Summary generation — compute project health from tasks and documents
-- [ ] SQLite storage with forward-only numbered migrations
+- [ ] PostgreSQL storage with forward-only numbered migrations
 - [ ] REST API with JSON envelope (`{ data, error, meta }`)
 - [ ] Basic error handling and input validation
 - [ ] Docker Compose deployment (single container)
@@ -33,7 +49,7 @@ This file is the source of truth for what is in and out of scope for Phase 1 (Co
 - [ ] `Dockerfile` — multi-stage build (Go binary + frontend static assets)
 - [ ] `docker-compose.yml` — single service with volume mounts
 - [ ] `Makefile` — build, test, lint, dev targets
-- [ ] SQLite database file stored on mounted volume
+- [ ] PostgreSQL service configured through Docker Compose and `DATABASE_URL`
 
 ## Out of scope (Phase 1)
 
@@ -49,7 +65,7 @@ These features are planned for later phases. Do not implement them in Phase 1.
 | Document summary refresh via API | Phase 3 | Agent-specific feature |
 | User authentication (sessions) | Phase 4 | Phase 1-3 are single-user |
 | Role-based access control | Phase 4 | Depends on user auth |
-| PostgreSQL migration | Phase 4 | SQLite is sufficient for Phase 1-3 |
+| Historical SQLite-to-PostgreSQL migration planning | Superseded | PostgreSQL is already the active runtime database |
 | Search and filtering | Phase 4 | Nice-to-have, not core |
 | Notifications | Phase 4 | Requires user auth and preferences |
 | S3-compatible file storage | Phase 4 | Local disk is fine for Phase 1-3 |

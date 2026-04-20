@@ -8,7 +8,7 @@ All agent work follows three layers:
 2. **Skills** — this project does not use a separate `skills/` directory. Skill behaviors (triage, exploration, test-fix loop, error recovery, memory management) are executed natively by the agent using tool capabilities.
 3. **Loop** — every implementation follows: Discover → **Triage** → Plan → **Critique** → **Approve** → Implement → Test → Fix → Repeat → Record → **Summarize**. Steps in **bold** are trust-level-gated; see `docs/operating-rules.md` → Trust level.
 
-> **Note:** This project adapts the template's 16-step workflow into a streamlined 9-step workflow appropriate for a Phase 1 greenfield project. As the codebase matures, steps can be expanded.
+> **Note:** This project adapts the template's richer workflow into a streamlined 10-step workflow appropriate for the current repository. It deliberately keeps native agent behaviors and avoids a `skills/*`-driven primary execution model.
 
 ## Layered configuration model
 
@@ -41,6 +41,16 @@ This project uses a simplified budget model. Set `budget.profile` in `prompt-bud
 - API surface: `docs/api-surface.md`
 - MVP scope: `docs/mvp-scope.md`
 
+## Tool portability
+
+The role model in this repository is tool-portable.
+
+- Claude-style tooling maps roles through `.claude/agents/*.md`.
+- Copilot-style tooling maps the same roles through repo docs and `.github/copilot-instructions.md`.
+- Other CLIs or orchestrators should preserve the same role names and ownership boundaries even if they cannot load named subagents directly.
+
+This repository does not require `skills/*/SKILL.md` to exist as the primary execution surface. Native tool capabilities remain the default execution mechanism.
+
 ## Source of truth and precedence
 
 Use this precedence order when documents overlap:
@@ -72,6 +82,19 @@ If a tool-specific file drifts from the source-of-truth docs, update the tool-sp
 
 ## Role definitions
 
+## Role and Intent
+
+Role answers who owns the work. Intent answers what phase the same role is in right now.
+
+Use these lightweight intent modes when clarifying handoffs or same-role phase changes:
+
+- `analyze` — understand current state, scope work, reduce ambiguity
+- `implement` — apply in-scope changes and validate them
+- `review` — inspect for bugs, regressions, permissions, and test gaps
+- `document` — update rule docs, architecture notes, ADRs, and contracts
+
+Intent mode does not replace role routing and does not expand a role's permissions. It is only a clearer label for the current phase of work.
+
 ### `feature-planner`
 
 - Defines scope, non-goals, impacted modules, dependencies, order, and validation
@@ -81,7 +104,7 @@ If a tool-specific file drifts from the source-of-truth docs, update the tool-sp
 ### `backend-architect`
 
 - Owns contract-first backend design, schema changes, and high-risk backend behavior
-- For Agent Native PM: designs Go module APIs, SQLite schema, migration strategy
+- For Agent Native PM: designs Go module APIs, PostgreSQL schema, and migration strategy
 
 ### `application-implementer`
 

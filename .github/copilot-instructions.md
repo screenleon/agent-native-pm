@@ -4,6 +4,7 @@
 - **Agent-deference principle**: this project only adds rules the agent tool does not already provide natively. See `docs/operating-rules.md` → Agent-deference principle.
 - **Trust level**: defaults to `semi-auto`. Read `prompt-budget.yml` for the current mode.
 - **Profile-aware loading**: read `prompt-budget.yml` → `budget.profile` first. At `minimal`, use `docs/rules-quickstart.md` as your complete Layer 1.
+- **Tool portability**: roles are conceptual ownership boundaries. In this repo they are implemented through `.claude/agents/`, source-of-truth docs, and these Copilot instructions rather than a `skills/*`-driven primary workflow.
 - Follow `docs/operating-rules.md` for safety, scope, and validation rules.
 - Follow layered configuration precedence: Project Context > Domain Rules > Global Rules.
 
@@ -19,7 +20,7 @@
 
 ## Project-specific rules
 
-- SQLite only for Phase 1-3. No PostgreSQL.
+- PostgreSQL is the active runtime database. Do not introduce SQLite-only assumptions unless explicitly working on historical migration cleanup.
 - All API responses use envelope: `{ data, error, meta }`.
 - Agent-generated content must include a source marker.
 - Dashboard state must be computed from system data, not manual input.

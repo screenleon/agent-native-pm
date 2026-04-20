@@ -33,7 +33,7 @@ Summary:
 - Document registry with staleness tracking
 - Manual sync trigger (scan repo)
 - Basic dashboard showing project health
-- SQLite storage
+- PostgreSQL runtime storage
 - Docker Compose deployment
 
 ## Non-goals (all phases)
@@ -81,7 +81,7 @@ Summary:
 
 See `ARCHITECTURE.md` for the full diagram.
 
-Summary: modular monolith in Go, React static SPA, SQLite, embedded background worker.
+Summary: modular monolith in Go, React static SPA, PostgreSQL, embedded background worker.
 
 ## Data model
 
@@ -113,10 +113,10 @@ services:
     ports:
       - "18765:18765"
     volumes:
-      - ./data:/app/data        # SQLite file
+      - ./data:/app/data
       - /path/to/repos:/repos   # Local repos to scan
     environment:
-      - DATABASE_PATH=/app/data/agent-native-pm.db
+      - DATABASE_URL=postgres://anpm:anpm@db:5432/anpm?sslmode=disable
 ```
 
 Estimated resource usage:
@@ -129,7 +129,7 @@ Estimated resource usage:
 ### Phase 1: Core CRUD + Dashboard (weeks 1-2)
 
 - Project, task, document CRUD
-- SQLite schema and migrations
+- PostgreSQL schema and forward-only migrations
 - Basic REST API
 - React dashboard with project list, task board, document list
 - Docker Compose setup
@@ -157,14 +157,14 @@ Estimated resource usage:
 - Role-based access (admin, member, viewer)
 - Search and filtering
 - Notifications (in-app, optional email)
-- PostgreSQL migration path
+- PostgreSQL runtime hardening and operational polish
 - S3-compatible file storage (optional)
 
 ## Risks and tradeoffs
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| SQLite write contention under concurrent agents | Medium | Medium | Use WAL mode; upgrade to PostgreSQL in Phase 4 |
+| PostgreSQL query or index regression under concurrent agents | Medium | Medium | Keep schema docs aligned, preserve indexes, and validate with integration tests |
 | Git scanning performance on large repos | Low | Medium | Limit scan depth; use `--since` flag |
 | Drift detection false positives | High | Low | Allow manual dismissal; tune sensitivity |
 | Scope creep toward full PM system | High | High | Enforce MVP scope via `docs/mvp-scope.md`; record scope decisions in `DECISIONS.md` |
