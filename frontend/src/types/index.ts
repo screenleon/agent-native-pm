@@ -96,6 +96,336 @@ export interface ProjectSummary {
   health_score: number;
 }
 
+export interface ProjectDashboardSummary {
+  project_id: string;
+  summary: ProjectSummary;
+  latest_sync_run: SyncRun | null;
+  open_drift_count: number;
+  recent_agent_runs: AgentRun[];
+}
+
+export interface Requirement {
+  id: string;
+  project_id: string;
+  title: string;
+  summary: string;
+  description: string;
+  status: 'draft' | 'planned' | 'archived';
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateRequirementPayload {
+  title: string;
+  summary?: string;
+  description?: string;
+  source?: string;
+}
+
+export interface CreatePlanningRunPayload {
+  trigger_source?: string;
+  provider_id?: string;
+  model_id?: string;
+  execution_mode?: PlanningExecutionMode;
+  adapter_type?: string;
+  model_override?: string;
+}
+
+export type PlanningExecutionMode = 'deterministic' | 'server_provider' | 'local_connector';
+
+export type PlanningDispatchStatus = 'not_required' | 'queued' | 'leased' | 'returned' | 'expired';
+
+export interface PlanningSettings {
+  provider_id: string;
+  model_id: string;
+  base_url: string;
+  configured_models: string[];
+  api_key_configured: boolean;
+  credential_mode: string;
+  updated_by: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface PlanningSettingsView {
+  settings: PlanningSettings;
+  secret_storage_ready: boolean;
+}
+
+export interface UpdatePlanningSettingsPayload {
+  provider_id: string;
+  model_id: string;
+  base_url: string;
+  configured_models: string[];
+  api_key?: string;
+  clear_api_key?: boolean;
+  credential_mode?: string;
+}
+
+export interface AccountBinding {
+  id: string;
+  user_id: string;
+  provider_id: string;
+  label: string;
+  base_url: string;
+  model_id: string;
+  configured_models: string[];
+  api_key_configured: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateAccountBindingPayload {
+  provider_id: string;
+  label?: string;
+  base_url: string;
+  model_id: string;
+  configured_models?: string[];
+  api_key?: string;
+}
+
+export interface UpdateAccountBindingPayload {
+  label?: string;
+  base_url?: string;
+  model_id?: string;
+  configured_models?: string[];
+  api_key?: string;
+  clear_api_key?: boolean;
+  is_active?: boolean;
+}
+
+export interface LocalConnector {
+  id: string;
+  user_id: string;
+  label: string;
+  platform: string;
+  client_version: string;
+  status: 'pending' | 'online' | 'offline' | 'revoked';
+  capabilities: Record<string, unknown>;
+  last_seen_at: string | null;
+  last_error: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConnectorPairingSession {
+  id: string;
+  user_id: string;
+  label: string;
+  status: 'pending' | 'claimed' | 'expired' | 'cancelled';
+  expires_at: string;
+  connector_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateLocalConnectorPairingSessionPayload {
+  label?: string;
+}
+
+export interface CreateLocalConnectorPairingSessionResponse {
+  session: ConnectorPairingSession;
+  pairing_code: string;
+}
+
+export interface PlanningProviderModel {
+  id: string;
+  label: string;
+  description: string;
+  enabled: boolean;
+}
+
+export interface PlanningProviderDescriptor {
+  id: string;
+  label: string;
+  kind: string;
+  description: string;
+  default_model_id: string;
+  models: PlanningProviderModel[];
+}
+
+export interface PlanningProviderSelection {
+  provider_id: string;
+  model_id: string;
+  selection_source: 'server_default' | 'request_override';
+  binding_source?: 'system' | 'shared' | 'personal';
+  binding_label?: string;
+}
+
+export interface PlanningProviderOptions {
+  default_selection: PlanningProviderSelection;
+  providers: PlanningProviderDescriptor[];
+  credential_mode: 'shared' | 'personal_preferred' | 'personal_required';
+  resolved_binding_source?: 'system' | 'shared' | 'personal';
+  resolved_binding_label?: string;
+  available_execution_modes: PlanningExecutionMode[];
+  paired_connector_available: boolean;
+  active_connector_label?: string;
+  can_run: boolean;
+  unavailable_reason?: string;
+  allow_model_override: boolean;
+}
+
+export interface PlanningRun {
+  id: string;
+  project_id: string;
+  requirement_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  trigger_source: string;
+  provider_id: string;
+  model_id: string;
+  selection_source: 'server_default' | 'request_override';
+  binding_source: 'system' | 'shared' | 'personal';
+  binding_label?: string;
+  requested_by_user_id?: string;
+  execution_mode: PlanningExecutionMode;
+  dispatch_status: PlanningDispatchStatus;
+  connector_id?: string;
+  connector_label?: string;
+  lease_expires_at: string | null;
+  dispatch_error: string;
+  error_message: string;
+  adapter_type?: string;
+  model_override?: string;
+  connector_cli_info?: {
+    agent: string;
+    model?: string;
+    model_source?: string;
+  };
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlanningDocumentEvidence {
+  document_id: string;
+  title: string;
+  file_path: string;
+  doc_type: string;
+  is_stale: boolean;
+  staleness_days: number;
+  matched_keywords: string[];
+  contribution_reasons: string[];
+}
+
+export interface PlanningDriftSignalEvidence {
+  drift_signal_id: string;
+  document_id: string;
+  document_title: string;
+  severity: number;
+  trigger_type: string;
+  trigger_detail: string;
+  contribution_reasons: string[];
+}
+
+export interface PlanningSyncRunEvidence {
+  sync_run_id: string;
+  status: string;
+  commits_scanned: number;
+  files_changed: number;
+  error_message: string;
+  contribution_reasons: string[];
+}
+
+export interface PlanningAgentRunEvidence {
+  agent_run_id: string;
+  agent_name: string;
+  action_type: string;
+  status: string;
+  summary: string;
+  error_message: string;
+  contribution_reasons: string[];
+}
+
+export interface PlanningDuplicateEvidence {
+  title: string;
+  contribution_reasons: string[];
+}
+
+export interface PlanningScoreBreakdown {
+  impact: number;
+  urgency: number;
+  dependency_unlock: number;
+  risk_reduction: number;
+  effort: number;
+  confidence_seed: number;
+  evidence_bonus: number;
+  duplicate_penalty: number;
+  final_priority_score: number;
+  final_confidence: number;
+}
+
+export interface PlanningEvidenceDetail {
+  summary: string[];
+  documents: PlanningDocumentEvidence[];
+  drift_signals: PlanningDriftSignalEvidence[];
+  sync_run: PlanningSyncRunEvidence | null;
+  agent_runs: PlanningAgentRunEvidence[];
+  duplicates: PlanningDuplicateEvidence[];
+  score_breakdown: PlanningScoreBreakdown;
+}
+
+export interface BacklogCandidate {
+  id: string;
+  project_id: string;
+  requirement_id: string;
+  planning_run_id: string;
+  parent_candidate_id?: string;
+  suggestion_type: string;
+  title: string;
+  description: string;
+  status: 'draft' | 'approved' | 'rejected' | 'applied';
+  rationale: string;
+  validation_criteria?: string;
+  po_decision?: string;
+  priority_score: number;
+  confidence: number;
+  rank: number;
+  evidence: string[];
+  evidence_detail: PlanningEvidenceDetail;
+  duplicate_titles: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskLineage {
+  id: string;
+  project_id: string;
+  task_id: string;
+  requirement_id?: string;
+  planning_run_id?: string;
+  backlog_candidate_id?: string;
+  lineage_kind: 'applied_candidate' | 'manual_requirement' | 'merged_requirement';
+  created_at: string;
+}
+
+export interface UpdateBacklogCandidatePayload {
+  title?: string;
+  description?: string;
+  status?: 'draft' | 'approved' | 'rejected';
+}
+
+export interface ApplyBacklogCandidateResponse {
+  task: Task;
+  candidate: BacklogCandidate;
+  lineage: TaskLineage;
+  already_applied: boolean;
+}
+
+export interface BatchUpdateTaskChanges {
+  status?: Task['status'];
+  priority?: Task['priority'];
+  assignee?: string;
+}
+
+export interface BatchUpdateTaskResponse {
+  updated_count: number;
+  tasks: Task[];
+}
+
 export interface ApiResponse<T> {
   data: T;
   error: string | null;

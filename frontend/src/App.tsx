@@ -1,10 +1,14 @@
-import { useEffect, useState } from 'react'
-import { Routes, Route, Link, Navigate, useNavigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Routes, Route, Link, NavLink, Navigate, useNavigate } from 'react-router-dom'
+import Dashboard from './pages/Dashboard'
 import ProjectList from './pages/ProjectList'
 import ProjectDetail from './pages/ProjectDetail'
 import Login from './pages/Login'
 import Setup from './pages/Setup'
 import APIKeys from './pages/APIKeys'
+import ModelSettings from './pages/ModelSettings'
+import AccountBindings from './pages/AccountBindings'
+import MyConnector from './pages/MyConnector'
 import type { User, Notification, SearchResult } from './types'
 import { getMe, logout, getUnreadCount, listNotifications, markNotificationRead, markNotificationUnread, markAllNotificationsRead, search, checkNeedsSetup } from './api/client'
 import type { SearchFilters } from './api/client'
@@ -18,12 +22,15 @@ function App() {
   const [unreadCount, setUnreadCount] = useState(0)
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [showNotifications, setShowNotifications] = useState(false)
+  const [showAccountMenu, setShowAccountMenu] = useState(false)
+  const [showAdvancedSearch, setShowAdvancedSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchFilters, setSearchFilters] = useState<SearchFilters>({
     type: 'all',
     staleness: 'all',
   })
   const [searchResult, setSearchResult] = useState<SearchResult | null>(null)
+  const accountMenuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -70,6 +77,50 @@ function App() {
       mounted = false
     }
   }, [token])
+
+  // Keep the notification bell badge accurate without forcing a page reload.
+  // Polls every 20 s while the user is signed in, and triggers an immediate
+  // refresh whenever another part of the app fires the `anpm:refresh-notifications`
+  // event (e.g. ProjectDetail when a planning run reaches a terminal state).
+  useEffect(() => {
+    if (!token || !me) return
+    let cancelled = false
+    async function refreshUnread() {
+      try {
+        const resp = await getUnreadCount()
+        if (!cancelled) {
+          setUnreadCount((resp.data as { unread?: number }).unread ?? 0)
+        }
+      } catch {
+        // best-effort; keep last known count
+      }
+    }
+    const interval = window.setInterval(refreshUnread, 20000)
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshUnread()
+    }
+    const onCustomRefresh = () => refreshUnread()
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('anpm:refresh-notifications', onCustomRefresh)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('anpm:refresh-notifications', onCustomRefresh)
+    }
+  }, [token, me])
+
+  // Close the account menu when the user clicks anywhere outside it.
+  useEffect(() => {
+    if (!showAccountMenu) return
+    const onDocClick = (e: MouseEvent) => {
+      if (accountMenuRef.current && !accountMenuRef.current.contains(e.target as Node)) {
+        setShowAccountMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [showAccountMenu])
 
   async function handleLogin(nextToken: string) {
     localStorage.setItem('anpm_token', nextToken)
@@ -184,13 +235,71 @@ function App() {
     <>
       <header className="header">
         <div className="container header-inner">
-          <h1><Link to="/" style={{ color: 'inherit' }}>Agent Native PM</Link></h1>
+          <div className="header-brand">
+            <h1><Link to="/" style={{ color: 'inherit' }}>Agent Native PM</Link></h1>
+            <nav className="header-primary-nav">
+              <NavLink to="/" end>Home</NavLink>
+              <NavLink to="/projects">Projects</NavLink>
+            </nav>
+          </div>
+
           <form className="header-search" onSubmit={handleSearchSubmit}>
             <input
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Search tasks/docs"
+              placeholder="Search tasks / docs"
             />
+            <button className="btn btn-sm btn-primary" type="submit">Search</button>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              aria-expanded={showAdvancedSearch}
+              onClick={() => setShowAdvancedSearch(s => !s)}
+              title="Advanced filters"
+            >
+              {showAdvancedSearch ? 'Hide filters' : 'Filters'}
+            </button>
+          </form>
+
+          <div className="header-actions">
+            <button
+              className="icon-btn"
+              onClick={handleNotificationsToggle}
+              aria-label="Notifications"
+              title="Notifications"
+            >
+              <span aria-hidden="true">🔔</span>
+              {unreadCount > 0 && <span className="notification-badge">{unreadCount}</span>}
+            </button>
+            <div className="account-menu" ref={accountMenuRef}>
+              <button
+                className="account-btn"
+                onClick={() => setShowAccountMenu(s => !s)}
+                aria-expanded={showAccountMenu}
+                title={me.username}
+              >
+                <span className="account-avatar" aria-hidden="true">{me.username.charAt(0).toUpperCase()}</span>
+                <span className="account-name">{me.username}</span>
+                <span aria-hidden="true">▾</span>
+              </button>
+              {showAccountMenu && (
+                <div className="account-dropdown" role="menu">
+                  <Link role="menuitem" to="/settings/connector" onClick={() => setShowAccountMenu(false)}>My Connector</Link>
+                  <Link role="menuitem" to="/settings/api-keys" onClick={() => setShowAccountMenu(false)}>API Keys</Link>
+                  <Link role="menuitem" to="/settings/account-bindings" onClick={() => setShowAccountMenu(false)}>Account Bindings</Link>
+                  {me.role === 'admin' && (
+                    <Link role="menuitem" to="/settings/models" onClick={() => setShowAccountMenu(false)}>Model Settings</Link>
+                  )}
+                  <div className="account-dropdown-sep" />
+                  <button role="menuitem" type="button" onClick={() => { setShowAccountMenu(false); handleLogout() }}>Logout</button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {showAdvancedSearch && (
+          <div className="container header-advanced-search">
             <select
               value={searchFilters.type ?? 'all'}
               onChange={e => setSearchFilters(prev => ({ ...prev, type: e.target.value as SearchFilters['type'] }))}
@@ -228,17 +337,8 @@ function App() {
               <option value="stale">Stale Only</option>
               <option value="fresh">Fresh Only</option>
             </select>
-            <button className="btn btn-sm btn-primary" type="submit">Search</button>
-          </form>
-          <nav>
-            <Link to="/">Projects</Link>
-            <Link to="/api-keys">API Keys</Link>
-            <button className="notification-btn" onClick={handleNotificationsToggle}>
-              Notifications {unreadCount > 0 && <span className="notification-badge">{unreadCount}</span>}
-            </button>
-            <button className="btn btn-ghost btn-sm" onClick={handleLogout}>Logout</button>
-          </nav>
-        </div>
+          </div>
+        )}
       </header>
 
       {(searchResult || showNotifications) && (
@@ -281,9 +381,17 @@ function App() {
 
       <main className="container">
         <Routes>
-          <Route path="/" element={<ProjectList />} />
+          <Route path="/" element={<Dashboard me={me} />} />
+          <Route path="/projects" element={<ProjectList />} />
           <Route path="/projects/:id" element={<ProjectDetail />} />
-          <Route path="/api-keys" element={<APIKeys />} />
+          <Route path="/settings/api-keys" element={<APIKeys />} />
+          <Route path="/settings/account-bindings" element={<AccountBindings />} />
+          <Route path="/settings/connector" element={<MyConnector />} />
+          <Route path="/settings/models" element={<ModelSettings canEdit={me.role === 'admin'} />} />
+          {/* Legacy redirects so old bookmarks keep working. */}
+          <Route path="/api-keys" element={<Navigate to="/settings/api-keys" replace />} />
+          <Route path="/account-bindings" element={<Navigate to="/settings/account-bindings" replace />} />
+          <Route path="/my-connector" element={<Navigate to="/settings/connector" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

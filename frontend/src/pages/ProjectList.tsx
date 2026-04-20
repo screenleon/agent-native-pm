@@ -4,6 +4,7 @@ import {
   createProject,
   deleteProject,
   discoverMirrorRepos,
+  getProjectDashboardSummary,
   getProjectSummary,
   listDriftSignals,
   listProjects,
@@ -17,6 +18,7 @@ import type {
   MirrorRepoDiscovery,
   Project,
   ProjectSummary,
+  ProjectDashboardSummary,
   SyncRun,
 } from '../types'
 
@@ -36,6 +38,16 @@ type ProjectRiskQueueItem = {
   reasons: string[]
 }
 
+type RoadmapLane = 'baseline' | 'recovery' | 'review' | 'execution'
+
+type ProjectRoadmapStage = {
+  lane: RoadmapLane
+  label: string
+  detail: string
+  cta: string
+  badgeClass: string
+}
+
 type ProjectFormState = {
   name: string
   description: string
@@ -49,7 +61,7 @@ const defaultFormState: ProjectFormState = {
   description: '',
   repo_url: '',
   repo_path: '',
-  default_branch: 'main',
+  default_branch: '',
 }
 
 function buildRiskQueueItem(project: Project, snapshot: ProjectRiskSnapshot | undefined): ProjectRiskQueueItem {
@@ -109,6 +121,82 @@ function syncStatusBadgeClass(status: SyncRun['status']) {
   return 'badge-low'
 }
 
+function healthScoreClass(score: number) {
+  if (score >= 0.7) return 'health-good'
+  if (score >= 0.4) return 'health-ok'
+  return 'health-bad'
+}
+
+function getRoadmapStage(project: Project, snapshot: ProjectRiskSnapshot | undefined): ProjectRoadmapStage {
+  if (!project.repo_path && !project.repo_url) {
+    return {
+      lane: 'baseline',
+      label: 'Baseline Setup',
+      detail: 'Add a repo source and establish the first sync baseline.',
+      cta: 'Configure repository source',
+      badgeClass: 'badge-medium',
+    }
+  }
+
+  if (!snapshot?.latestSync) {
+    return {
+      lane: 'baseline',
+      label: 'Sync Baseline',
+      detail: 'Run the first sync so roadmap signals can be computed from real changes.',
+      cta: 'Run first sync',
+      badgeClass: 'badge-low',
+    }
+  }
+
+  if (snapshot.latestSync.status === 'failed') {
+    return {
+      lane: 'recovery',
+      label: 'Recovery Needed',
+      detail: 'Latest sync failed. Fix sync health before using this project for planning.',
+      cta: 'Review sync failure',
+      badgeClass: 'badge-stale',
+    }
+  }
+
+  if (snapshot.openDriftCount > 0) {
+    return {
+      lane: 'review',
+      label: 'Drift Review',
+      detail: 'Open drift signals should be triaged before pushing backlog decisions forward.',
+      cta: 'Triage drift signals',
+      badgeClass: 'badge-high',
+    }
+  }
+
+  if ((snapshot.summary?.stale_documents ?? 0) > 0) {
+    return {
+      lane: 'review',
+      label: 'Docs Refresh',
+      detail: 'Documentation freshness is lagging behind the current code baseline.',
+      cta: 'Refresh stale docs',
+      badgeClass: 'badge-medium',
+    }
+  }
+
+  if (((snapshot.summary?.tasks_todo ?? 0) + (snapshot.summary?.tasks_in_progress ?? 0)) > 0) {
+    return {
+      lane: 'execution',
+      label: 'Execution Ready',
+      detail: 'Baseline is healthy enough to drive the next backlog decisions from current tasks.',
+      cta: 'Drive next task decisions',
+      badgeClass: 'badge-fresh',
+    }
+  }
+
+  return {
+    lane: 'execution',
+    label: 'Planning Ready',
+    detail: 'Project is stable enough to accept new roadmap or planning inputs.',
+    cta: 'Open project workspace',
+    badgeClass: 'badge-fresh',
+  }
+}
+
 function formatRelativeTime(value: string | null | undefined) {
   if (!value) return '—'
   const diffMs = Date.now() - new Date(value).getTime()
@@ -161,22 +249,37 @@ function ProjectList() {
     try {
       const snapshotEntries = await Promise.all(
         targetProjects.map(async project => {
-          const [summaryRes, driftRes, syncRes] = await Promise.allSettled([
-            getProjectSummary(project.id),
-            listDriftSignals(project.id, 'open'),
-            listSyncRuns(project.id),
-          ])
+          let dashboard: ProjectDashboardSummary | null = null
 
-          const summary = summaryRes.status === 'fulfilled' ? summaryRes.value.data : null
-          const openDriftSignals: DriftSignal[] = driftRes.status === 'fulfilled' ? driftRes.value.data : []
-          const syncRuns: SyncRun[] = syncRes.status === 'fulfilled' ? syncRes.value.data : []
+          try {
+            const dashboardRes = await getProjectDashboardSummary(project.id)
+            dashboard = dashboardRes.data
+          } catch {
+            const [summaryRes, driftRes, syncRes] = await Promise.allSettled([
+              getProjectSummary(project.id),
+              listDriftSignals(project.id, 'open'),
+              listSyncRuns(project.id),
+            ])
+
+            const summary = summaryRes.status === 'fulfilled' ? summaryRes.value.data : null
+            const openDriftSignals: DriftSignal[] = driftRes.status === 'fulfilled' ? driftRes.value.data : []
+            const syncRuns: SyncRun[] = syncRes.status === 'fulfilled' ? syncRes.value.data : []
+
+            dashboard = summary ? {
+              project_id: project.id,
+              summary,
+              latest_sync_run: syncRuns[0] ?? null,
+              open_drift_count: openDriftSignals.length,
+              recent_agent_runs: [],
+            } : null
+          }
 
           return [
             project.id,
             {
-              summary,
-              openDriftCount: openDriftSignals.length,
-              latestSync: syncRuns[0] ?? null,
+              summary: dashboard?.summary ?? null,
+              openDriftCount: dashboard?.open_drift_count ?? 0,
+              latestSync: dashboard?.latest_sync_run ?? null,
             },
           ] as const
         }),
@@ -248,11 +351,11 @@ function ProjectList() {
   function handleSelectMirror(repo: MirrorRepoCandidate) {
     setSelectedMirrorPath(repo.repo_path)
     setSelectedMirrorAlias(repo.suggested_alias)
-    setSelectedMirrorBranch(repo.detected_default_branch || 'main')
+    setSelectedMirrorBranch(repo.detected_default_branch || '')
     setForm(prev => ({
       ...prev,
       name: prev.name || repo.repo_name,
-      default_branch: repo.detected_default_branch || prev.default_branch || 'main',
+      default_branch: repo.detected_default_branch || prev.default_branch || '',
     }))
   }
 
@@ -266,7 +369,7 @@ function ProjectList() {
     const payload: CreateProjectPayload = {
       name: form.name.trim(),
       description: form.description.trim() || undefined,
-      default_branch: form.default_branch.trim() || 'main',
+      default_branch: form.default_branch.trim() || undefined,
     }
 
     if (createSourceMode === 'mirror') {
@@ -347,6 +450,46 @@ function ProjectList() {
 
       return b.riskScore - a.riskScore || (b.snapshot?.openDriftCount ?? 0) - (a.snapshot?.openDriftCount ?? 0) || a.project.name.localeCompare(b.project.name)
     })
+  const roadmapBuckets = riskQueue.reduce<Record<RoadmapLane, ProjectRiskQueueItem[]>>((acc, item) => {
+    const stage = getRoadmapStage(item.project, item.snapshot)
+    acc[stage.lane].push(item)
+    return acc
+  }, {
+    baseline: [],
+    recovery: [],
+    review: [],
+    execution: [],
+  })
+  const roadmapOverview = [
+    {
+      lane: 'baseline' as const,
+      title: 'Baseline Lane',
+      count: roadmapBuckets.baseline.length,
+      detail: 'Projects that still need a repo source or first sync baseline.',
+    },
+    {
+      lane: 'recovery' as const,
+      title: 'Recovery Lane',
+      count: roadmapBuckets.recovery.length,
+      detail: 'Projects blocked by failed sync health.',
+    },
+    {
+      lane: 'review' as const,
+      title: 'Review Lane',
+      count: roadmapBuckets.review.length,
+      detail: 'Projects with open drift or stale documentation to resolve.',
+    },
+    {
+      lane: 'execution' as const,
+      title: 'Execution Lane',
+      count: roadmapBuckets.execution.length,
+      detail: 'Projects ready for backlog decisions and task flow.',
+    },
+  ]
+  const topNextActions = riskQueue.slice(0, 3).map(item => ({
+    item,
+    stage: getRoadmapStage(item.project, item.snapshot),
+  }))
 
   if (loading) return <div className="loading">Loading projects...</div>
 
@@ -377,6 +520,75 @@ function ProjectList() {
             <div className="stat-value" style={{ color: syncFailures > 0 ? 'var(--danger)' : 'var(--success)' }}>{syncFailures}</div>
             <div className="stat-label">Sync Failures</div>
           </div>
+        </div>
+      )}
+
+      {projects.length > 0 && (
+        <div className="card" style={{ marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
+            <div>
+              <h3 style={{ marginBottom: '0.2rem' }}>Roadmap Command Center</h3>
+              <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                Portfolio-level lanes for deciding which projects need baseline work, recovery, review, or execution next.
+              </p>
+            </div>
+            {topNextActions[0] && (
+              <Link to={`/projects/${topNextActions[0].item.project.id}`} className="btn btn-primary btn-sm">
+                {topNextActions[0].stage.cta}
+              </Link>
+            )}
+          </div>
+
+          <div className="roadmap-grid" style={{ marginTop: '1rem' }}>
+            {roadmapOverview.map(section => {
+              const topProjects = roadmapBuckets[section.lane].slice(0, 3)
+              return (
+                <div key={section.lane} className="roadmap-lane-card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
+                    <div>
+                      <h4>{section.title}</h4>
+                      <div className="roadmap-lane-meta">{section.detail}</div>
+                    </div>
+                    <div className="health-score health-ok" style={{ width: '48px', height: '48px', fontSize: '1rem' }}>{section.count}</div>
+                  </div>
+                  <div className="roadmap-chip-list">
+                    {topProjects.length === 0 ? (
+                      <span className="badge badge-fresh">No projects</span>
+                    ) : topProjects.map(entry => (
+                      <Link key={entry.project.id} to={`/projects/${entry.project.id}`} className="badge badge-low">
+                        {entry.project.name}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {topNextActions.length > 0 && (
+            <div style={{ marginTop: '1rem', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>Top next actions</div>
+              <div className="roadmap-next-list">
+                {topNextActions.map(({ item, stage }) => (
+                  <div key={item.project.id} className="roadmap-next-item">
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <strong>{item.project.name}</strong>
+                        <span className={`badge ${stage.badgeClass}`}>{stage.label}</span>
+                      </div>
+                      <div style={{ marginTop: '0.35rem', color: 'var(--text-muted)', fontSize: '0.84rem' }}>{stage.detail}</div>
+                      <div style={{ marginTop: '0.25rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                        Risk {item.riskScore} • {item.reasons.length > 0 ? item.reasons.join(' • ') : 'healthy baseline'}
+                      </div>
+                    </div>
+                    <Link to={`/projects/${item.project.id}`} className="btn btn-ghost btn-sm">
+                      {stage.cta}
+                    </Link>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -503,7 +715,7 @@ function ProjectList() {
                           <div style={{ marginTop: '0.35rem', color: 'var(--text-muted)', fontSize: '0.82rem' }}>{repo.repo_path}</div>
                           <div style={{ marginTop: '0.35rem', display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                             <span className="badge badge-low">alias {repo.suggested_alias}</span>
-                            <span className="badge badge-low">branch {repo.detected_default_branch || 'main'}</span>
+                            <span className="badge badge-low">branch {repo.detected_default_branch || 'auto-detect'}</span>
                           </div>
                         </label>
                       ))}
@@ -517,7 +729,7 @@ function ProjectList() {
                     </div>
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label>Mirror Branch</label>
-                      <input value={selectedMirrorBranch} onChange={e => setSelectedMirrorBranch(e.target.value)} placeholder={selectedMirror?.detected_default_branch || 'main'} />
+                      <input value={selectedMirrorBranch} onChange={e => setSelectedMirrorBranch(e.target.value)} placeholder={selectedMirror?.detected_default_branch || 'leave blank to auto-detect'} />
                     </div>
                   </div>
                 </div>
@@ -538,12 +750,12 @@ function ProjectList() {
               )}
 
               <div className="form-group">
-                <label>Default Branch</label>
-                <input value={form.default_branch} onChange={e => setForm(prev => ({ ...prev, default_branch: e.target.value }))} />
+                <label>Default Branch (Optional)</label>
+                <input value={form.default_branch} onChange={e => setForm(prev => ({ ...prev, default_branch: e.target.value }))} placeholder="leave blank to auto-detect" />
               </div>
 
               <div style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
-                Mirror mappings are the preferred local workflow because they can see mounted working tree changes. Managed clone URL and manual path remain fallback options.
+                Mirror mappings are the preferred local workflow because they can see mounted working tree changes. Leave branch blank when you want sync to auto-detect the repo default branch.
               </div>
 
               <div className="modal-actions">
@@ -569,10 +781,24 @@ function ProjectList() {
         <div className="grid-2">
           {projects.map(project => {
             const snapshot = riskByProject[project.id]
+            const stage = getRoadmapStage(project, snapshot)
+            const healthClass = healthScoreClass(snapshot?.summary?.health_score ?? 0)
+            const healthValue = Math.round((snapshot?.summary?.health_score ?? 0) * 100)
             return (
               <div key={project.id} className="card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem' }}>
-                  <Link to={`/projects/${project.id}`}><h3>{project.name}</h3></Link>
+                  <div style={{ display: 'flex', gap: '0.9rem', alignItems: 'flex-start' }}>
+                    <div className={`health-score ${healthClass}`} style={{ width: '52px', height: '52px', fontSize: '0.95rem' }}>
+                      {riskLoading || !snapshot?.summary ? '—' : `${healthValue}%`}
+                    </div>
+                    <div>
+                      <Link to={`/projects/${project.id}`}><h3>{project.name}</h3></Link>
+                      <div style={{ marginTop: '0.25rem', display: 'flex', gap: '0.45rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span className={`badge ${stage.badgeClass}`}>{stage.label}</span>
+                        <span className="badge badge-low">{stage.cta}</span>
+                      </div>
+                    </div>
+                  </div>
                   <button className="btn btn-ghost btn-sm" onClick={() => handleDelete(project.id)}>Delete</button>
                 </div>
 
@@ -600,6 +826,7 @@ function ProjectList() {
 
                 {project.description && <p>{project.description}</p>}
                 <p style={{ marginTop: '0.5rem', fontSize: '0.8rem', opacity: 0.7 }}>{describeProjectSource(project)}</p>
+                <p style={{ marginTop: '0.45rem', fontSize: '0.82rem', color: 'var(--text-muted)' }}>{stage.detail}</p>
                 {!riskLoading && snapshot?.latestSync && (
                   <p style={{ marginTop: '0.45rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                     Last sync {formatRelativeTime(snapshot.latestSync.started_at)}
@@ -609,9 +836,29 @@ function ProjectList() {
                   {syncTriageHint(project, snapshot)}
                 </p>
 
-                <div style={{ marginTop: '0.6rem' }}>
-                  <Link to={`/projects/${project.id}`} style={{ fontSize: '0.85rem' }}>
-                    Open project triage →
+                {!riskLoading && snapshot?.summary && (
+                  <div className="project-metrics">
+                    <div className="project-metric">
+                      <strong>{snapshot.summary.tasks_todo + snapshot.summary.tasks_in_progress}</strong>
+                      <span>Active Tasks</span>
+                    </div>
+                    <div className="project-metric">
+                      <strong>{snapshot.summary.stale_documents}/{snapshot.summary.total_documents}</strong>
+                      <span>Stale Docs</span>
+                    </div>
+                    <div className="project-metric">
+                      <strong>{snapshot.openDriftCount}</strong>
+                      <span>Open Drift</span>
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ marginTop: '0.85rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <Link to={`/projects/${project.id}`} className="btn btn-primary btn-sm">
+                    {stage.cta}
+                  </Link>
+                  <Link to={`/projects/${project.id}`} className="btn btn-ghost btn-sm">
+                    Open project triage
                   </Link>
                 </div>
               </div>

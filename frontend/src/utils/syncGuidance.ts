@@ -35,7 +35,7 @@ function failedSyncGuidance(errorMessage: string): SyncFailureGuidance | null {
     return {
       headline: 'Managed repository update failed',
       detail: 'The service could not clone or refresh the managed repository checkout.',
-      nextAction: 'Verify repo URL, branch, and repository access, then rerun sync.',
+      nextAction: 'Verify repo URL, branch settings, and repository access in project detail, then rerun sync.',
       triageHint: 'Sync failed: managed repository update failed. Verify repo URL, branch, and access.',
     }
   }
@@ -62,7 +62,7 @@ function failedSyncGuidance(errorMessage: string): SyncFailureGuidance | null {
     return {
       headline: 'Default branch could not be resolved',
       detail: 'Git could not resolve the configured branch or revision for history scanning.',
-      nextAction: 'Verify the project default branch matches an existing branch in the repository, then rerun sync.',
+      nextAction: 'Update the primary repo mapping branch or project default branch in Project Detail, or clear the override to auto-detect, then rerun sync.',
       triageHint: 'Sync failed: branch could not be resolved. Verify the configured default branch.',
     }
   }
@@ -71,7 +71,7 @@ function failedSyncGuidance(errorMessage: string): SyncFailureGuidance | null {
     return {
       headline: 'Git scan command failed',
       detail: 'Git history scan failed, often due to an invalid branch or inaccessible repo state.',
-      nextAction: 'Verify default branch and ensure the repo is accessible by the service.',
+      nextAction: 'Verify the active repo mapping branch or project default branch, then confirm the repo is accessible by the service.',
       triageHint: 'Sync failed: git scan command failed. Check branch and repository accessibility.',
     }
   }
