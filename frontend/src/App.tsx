@@ -95,6 +95,7 @@ function App() {
         // best-effort; keep last known count
       }
     }
+    refreshUnread()
     const interval = window.setInterval(refreshUnread, 20000)
     const onVisibility = () => {
       if (document.visibilityState === 'visible') refreshUnread()

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -178,7 +179,7 @@ func (h *TaskHandler) BatchUpdate(w http.ResponseWriter, r *http.Request) {
 
 	tasks, err := h.store.BatchUpdate(projectID, req.TaskIDs, req.Changes)
 	if err != nil {
-		if err == store.ErrTaskBatchNotFound {
+		if errors.Is(err, store.ErrTaskBatchNotFound) {
 			writeError(w, http.StatusNotFound, "one or more tasks not found in project")
 			return
 		}

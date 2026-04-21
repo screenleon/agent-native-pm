@@ -20,8 +20,8 @@ type adapterModelsResponse struct {
 }
 
 func (h *AdapterModelsHandler) Get(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, adapterModelsResponse{
+	writeSuccess(w, http.StatusOK, adapterModelsResponse{
 		Claude: h.claudeModels,
 		Codex:  h.codexModels,
-	})
+	}, nil)
 }

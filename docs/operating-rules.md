@@ -126,8 +126,7 @@ Every behavior change that affects:
 make build         # Build Go binary + frontend assets
 make test          # Run all Go unit tests
 make test-integration  # Run API integration tests
-make lint          # Run backend go vet
-cd frontend && npm run lint   # Run frontend lint separately
+make lint          # Run backend go vet and frontend lint
 cd frontend && npm run build  # Validate frontend production build
 make dev           # Start development server with hot reload
 ```

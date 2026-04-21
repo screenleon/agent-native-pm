@@ -43,7 +43,7 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	if int64(len(p)) > remaining {
-		_, _ = b.buf.Write(p[:remaining])
+		_, _ = b.buf.Write(p[:int(remaining)])
 		b.overflow = true
 		return len(p), nil
 	}

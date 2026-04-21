@@ -16,6 +16,7 @@ type TaskStore struct {
 }
 
 var ErrTaskBatchNotFound = errors.New("one or more tasks not found in project")
+var ErrTaskBatchEmpty = errors.New("task batch update requires at least one task id")
 
 func NewTaskStore(db *sql.DB) *TaskStore {
 	return &TaskStore{db: db}
@@ -221,6 +222,9 @@ func (s *TaskStore) BatchUpdate(projectID string, taskIDs []string, changes mode
 	}()
 
 	normalizedIDs := normalizeTaskIDs(taskIDs)
+	if len(normalizedIDs) == 0 {
+		return nil, ErrTaskBatchEmpty
+	}
 	countQuery, countArgs := buildTaskBatchCountQuery(projectID, normalizedIDs)
 	var matched int
 	if err := tx.QueryRow(countQuery, countArgs...).Scan(&matched); err != nil {

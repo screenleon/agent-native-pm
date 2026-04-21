@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -125,6 +126,5 @@ func filepathBase(path string) string {
 	if path == "" {
 		return ""
 	}
-	parts := strings.Split(path, "/")
-	return parts[len(parts)-1]
+	return filepath.Base(path)
 }
