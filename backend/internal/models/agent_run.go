@@ -48,3 +48,9 @@ var ValidAgentRunStatuses = map[string]bool{
 	"completed": true,
 	"failed":    true,
 }
+
+const (
+	AgentRunStatusRunning   = "running"
+	AgentRunStatusCompleted = "completed"
+	AgentRunStatusFailed    = "failed"
+)

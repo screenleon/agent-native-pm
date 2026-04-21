@@ -2,7 +2,11 @@ import type {
   ApiResponse, Project, Task, Document, ProjectSummary,
   SyncRun, AgentRun, DriftSignal, DocumentLink, DocumentContent,
   APIKey, APIKeyWithSecret, User, Notification, SearchResult, ProjectRepoMapping,
-  CreateProjectPayload, MirrorRepoDiscovery,
+  CreateProjectPayload, MirrorRepoDiscovery, ProjectDashboardSummary,
+  BatchUpdateTaskChanges, BatchUpdateTaskResponse, Requirement, CreateRequirementPayload, PlanningRun, BacklogCandidate, UpdateBacklogCandidatePayload, ApplyBacklogCandidateResponse, CreatePlanningRunPayload, PlanningProviderOptions,
+  PlanningSettingsView, UpdatePlanningSettingsPayload,
+  AccountBinding, CreateAccountBindingPayload, UpdateAccountBindingPayload,
+  LocalConnector, CreateLocalConnectorPairingSessionPayload, CreateLocalConnectorPairingSessionResponse,
 } from '../types';
 
 const BASE_URL = '/api';
@@ -72,6 +76,13 @@ export async function createProjectRepoMapping(projectId: string, data: Partial<
   });
 }
 
+export async function updateProjectRepoMapping(id: string, data: Partial<ProjectRepoMapping>) {
+  return request<ProjectRepoMapping>(`/repo-mappings/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
 export async function deleteProjectRepoMapping(id: string) {
   return request<null>(`/repo-mappings/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
@@ -92,6 +103,32 @@ export async function listTasks(projectId: string, page = 1, perPage = 20, sort?
     per_page: perPage.toString(),
     ...(sort && { sort }),
     ...(order && { order }),
+  });
+  return request<Task[]>(`/projects/${encodeURIComponent(projectId)}/tasks?${params}`);
+}
+
+export type TaskListFilters = {
+  status?: string;
+  priority?: string;
+  assignee?: string;
+};
+
+export async function listTasksFiltered(
+  projectId: string,
+  page = 1,
+  perPage = 20,
+  sort?: string,
+  order?: string,
+  filters?: TaskListFilters,
+) {
+  const params = new URLSearchParams({
+    page: page.toString(),
+    per_page: perPage.toString(),
+    ...(sort && { sort }),
+    ...(order && { order }),
+    ...(filters?.status && { status: filters.status }),
+    ...(filters?.priority && { priority: filters.priority }),
+    ...(filters?.assignee && { assignee: filters.assignee }),
   });
   return request<Task[]>(`/projects/${encodeURIComponent(projectId)}/tasks?${params}`);
 }
@@ -158,8 +195,88 @@ export async function getProjectSummary(projectId: string) {
   return request<ProjectSummary>(`/projects/${encodeURIComponent(projectId)}/summary`);
 }
 
+export async function getProjectDashboardSummary(projectId: string) {
+  return request<ProjectDashboardSummary>(`/projects/${encodeURIComponent(projectId)}/dashboard-summary`);
+}
+
 export async function getSummaryHistory(projectId: string) {
   return request<ProjectSummary[]>(`/projects/${encodeURIComponent(projectId)}/summary/history`);
+}
+
+export async function batchUpdateTasks(projectId: string, taskIds: string[], changes: BatchUpdateTaskChanges) {
+  return request<BatchUpdateTaskResponse>(`/projects/${encodeURIComponent(projectId)}/tasks/batch-update`, {
+    method: 'POST',
+    body: JSON.stringify({ task_ids: taskIds, changes }),
+  });
+}
+
+// Requirements
+export async function listRequirements(projectId: string, page = 1, perPage = 100) {
+  return request<Requirement[]>(`/projects/${encodeURIComponent(projectId)}/requirements?page=${page}&per_page=${perPage}`);
+}
+
+export async function getRequirement(id: string) {
+  return request<Requirement>(`/requirements/${encodeURIComponent(id)}`);
+}
+
+export async function createRequirement(projectId: string, data: CreateRequirementPayload) {
+  return request<Requirement>(`/projects/${encodeURIComponent(projectId)}/requirements`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getPlanningProviderOptions(projectId: string) {
+  return request<PlanningProviderOptions>(`/projects/${encodeURIComponent(projectId)}/planning-provider-options`);
+}
+
+export async function createPlanningRun(requirementId: string, data: CreatePlanningRunPayload = {}) {
+  return request<PlanningRun>(`/requirements/${encodeURIComponent(requirementId)}/planning-runs`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getPlanningSettings() {
+  return request<PlanningSettingsView>('/settings/planning');
+}
+
+export async function updatePlanningSettings(data: UpdatePlanningSettingsPayload) {
+  return request<PlanningSettingsView>('/settings/planning', {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function listPlanningRuns(requirementId: string, page = 1, perPage = 20) {
+  return request<PlanningRun[]>(`/requirements/${encodeURIComponent(requirementId)}/planning-runs?page=${page}&per_page=${perPage}`);
+}
+
+export async function getPlanningRun(id: string) {
+  return request<PlanningRun>(`/planning-runs/${encodeURIComponent(id)}`);
+}
+
+export async function cancelPlanningRun(id: string) {
+  return request<PlanningRun>(`/planning-runs/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+  });
+}
+
+export async function listPlanningRunBacklogCandidates(planningRunId: string, page = 1, perPage = 50) {
+  return request<BacklogCandidate[]>(`/planning-runs/${encodeURIComponent(planningRunId)}/backlog-candidates?page=${page}&per_page=${perPage}`);
+}
+
+export async function updateBacklogCandidate(id: string, data: UpdateBacklogCandidatePayload) {
+  return request<BacklogCandidate>(`/backlog-candidates/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function applyBacklogCandidate(id: string) {
+  return request<ApplyBacklogCandidateResponse>(`/backlog-candidates/${encodeURIComponent(id)}/apply`, {
+    method: 'POST',
+  });
 }
 
 // ─── Phase 2: Sync ──────────────────────────────────────────────────────────
@@ -292,4 +409,63 @@ export async function search(q: string, filters: SearchFilters = {}) {
   if (filters.docType) qs.set('doc_type', filters.docType);
   if (filters.staleness && filters.staleness !== 'all') qs.set('staleness', filters.staleness);
   return request<SearchResult>(`/search?${qs}`);
+}
+
+// ─── Account Bindings (Personal Credentials) ────────────────────────────────
+export async function listAccountBindings() {
+  return request<AccountBinding[]>('/me/account-bindings');
+}
+export async function createAccountBinding(data: CreateAccountBindingPayload) {
+  return request<AccountBinding>('/me/account-bindings', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+export async function updateAccountBinding(id: string, data: UpdateAccountBindingPayload) {
+  return request<AccountBinding>(`/me/account-bindings/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+export async function deleteAccountBinding(id: string) {
+  return request<null>(`/me/account-bindings/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function listLocalConnectors() {
+  return request<LocalConnector[]>('/me/local-connectors');
+}
+
+export async function createLocalConnectorPairingSession(data: CreateLocalConnectorPairingSessionPayload = {}) {
+  return request<CreateLocalConnectorPairingSessionResponse>('/me/local-connectors/pairing-sessions', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function revokeLocalConnector(id: string) {
+  return request<null>(`/me/local-connectors/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+export interface ConnectorRunStats {
+  runs_today: number;
+  runs_week: number;
+  runs_month: number;
+  runs_total: number;
+}
+
+export async function getConnectorRunStats() {
+  return request<ConnectorRunStats>('/me/local-connectors/run-stats');
+}
+
+export interface AdapterModels {
+  claude: string[];
+  codex: string[];
+}
+
+export async function getAdapterModels() {
+  return request<AdapterModels>('/adapter-models');
 }

@@ -200,9 +200,6 @@ func (s *SyncService) Run(projectID string) (*models.SyncRun, error) {
 			if branch == "" {
 				branch = project.DefaultBranch
 			}
-			if branch == "" {
-				branch = "main"
-			}
 			mappingChanges, mappingCommits, mappingErr := RecentChanges(mapping.RepoPath, branch, since)
 			if mappingErr != nil {
 				if ferr := s.syncStore.Fail(syncRun.ID, mappingErr.Error()); ferr != nil {
@@ -221,9 +218,6 @@ func (s *SyncService) Run(projectID string) (*models.SyncRun, error) {
 		}
 	} else {
 		branch := project.DefaultBranch
-		if branch == "" {
-			branch = "main"
-		}
 		projectChanges, projectCommits, projectErr := RecentChanges(project.RepoPath, branch, since)
 		if projectErr != nil {
 			if ferr := s.syncStore.Fail(syncRun.ID, projectErr.Error()); ferr != nil {

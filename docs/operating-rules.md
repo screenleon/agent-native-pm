@@ -46,6 +46,12 @@ Violation = hard stop regardless of execution mode.
 - Apply Scrum-first order: backlog definition and prioritization must happen before implementation
 - Do not treat post-implementation requirement backfill as an acceptable workflow
 
+## Documentation maintenance
+
+- Keep normative rule text in a canonical owner document instead of copy-expanding the same rule across many files.
+- When a rule changes, sync only the surfaces that explicitly expose that rule, command, workflow term, or file path.
+- `.claude/agents/` and `.github/copilot-instructions.md` are tool-specific implementations; they must stay aligned with `docs/operating-rules.md` and `docs/agent-playbook.md`.
+
 ## Always-dangerous operations (require approval)
 
 - Deleting files or directories
@@ -85,7 +91,7 @@ Precedence: Project Context > Domain Rules > Global Rules.
 
 - Backend: Go (latest stable)
 - Frontend: React 18+ with TypeScript, built with Vite
-- Database: SQLite for Phase 1-3; PostgreSQL for Phase 4+
+- Database: PostgreSQL is the active runtime database
 - No server-side rendering
 
 ### Code conventions
@@ -120,6 +126,7 @@ Every behavior change that affects:
 make build         # Build Go binary + frontend assets
 make test          # Run all Go unit tests
 make test-integration  # Run API integration tests
-make lint          # Run golangci-lint + eslint
+make lint          # Run backend go vet and frontend lint
+cd frontend && npm run build  # Validate frontend production build
 make dev           # Start development server with hot reload
 ```

@@ -11,7 +11,7 @@ import (
 
 // ChangedFile represents a single file changed in git history.
 type ChangedFile struct {
-	Path      string
+	Path       string
 	ChangeType string // M | A | D | R
 }
 
@@ -19,6 +19,15 @@ type ChangedFile struct {
 // It shells out to git so git must be available in PATH.
 func RecentChanges(repoPath, branch string, since time.Time) ([]ChangedFile, int, error) {
 	sinceStr := since.UTC().Format("2006-01-02T15:04:05")
+	configuredBranch := strings.TrimSpace(branch)
+	resolvedBranch := configuredBranch
+	if resolvedBranch == "" {
+		resolvedBranch = detectDefaultBranch(repoPath)
+		if resolvedBranch == "" {
+			resolvedBranch = "HEAD"
+		}
+	}
+
 	hasHistory, err := repoHasHistory(repoPath)
 	if err != nil {
 		return nil, 0, fmt.Errorf("git history check failed: %w", err)
@@ -31,10 +40,10 @@ func RecentChanges(repoPath, branch string, since time.Time) ([]ChangedFile, int
 	countOut, err := gitCombinedOutput(repoPath,
 		"rev-list", "--count",
 		fmt.Sprintf("--since=%s", sinceStr),
-		branch,
+		resolvedBranch,
 	)
 	if err != nil {
-		return nil, 0, fmt.Errorf("git rev-list count failed for branch %q: %w", branch, err)
+		return nil, 0, wrapBranchResolutionError(repoPath, resolvedBranch, configuredBranch != "", "git rev-list count", err)
 	}
 	commitCount := 0
 	fmt.Sscanf(countOut, "%d", &commitCount)
@@ -50,10 +59,10 @@ func RecentChanges(repoPath, branch string, since time.Time) ([]ChangedFile, int
 		"--name-status",
 		"--diff-filter=ADMR",
 		"--format=",
-		branch,
+		resolvedBranch,
 	)
 	if err != nil {
-		return nil, 0, fmt.Errorf("git log failed for branch %q: %w", branch, err)
+		return nil, 0, wrapBranchResolutionError(repoPath, resolvedBranch, configuredBranch != "", "git log", err)
 	}
 
 	seen := make(map[string]bool)
@@ -82,6 +91,16 @@ func RecentChanges(repoPath, branch string, since time.Time) ([]ChangedFile, int
 		files = []ChangedFile{}
 	}
 	return files, commitCount, scanner.Err()
+}
+
+func wrapBranchResolutionError(repoPath, branch string, explicitlyConfigured bool, command string, err error) error {
+	if explicitlyConfigured {
+		detectedBranch := detectDefaultBranch(repoPath)
+		if detectedBranch != "" && detectedBranch != branch {
+			return fmt.Errorf("%s failed for branch %q: configured branch could not be resolved; detected default branch is %q: %w", command, branch, detectedBranch, err)
+		}
+	}
+	return fmt.Errorf("%s failed for branch %q: %w", command, branch, err)
 }
 
 // IsGitRepo returns true if the given path is a git repository.

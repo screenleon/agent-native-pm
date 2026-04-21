@@ -20,6 +20,10 @@ type CreateProjectRepoMappingRequest struct {
 	IsPrimary     bool   `json:"is_primary"`
 }
 
+type UpdateProjectRepoMappingRequest struct {
+	DefaultBranch *string `json:"default_branch,omitempty"`
+}
+
 type DiscoveredMirrorRepo struct {
 	RepoName              string `json:"repo_name"`
 	RepoPath              string `json:"repo_path"`
@@ -30,6 +34,6 @@ type DiscoveredMirrorRepo struct {
 }
 
 type MirrorRepoDiscovery struct {
-	MirrorRoot string                `json:"mirror_root"`
+	MirrorRoot string                 `json:"mirror_root"`
 	Repos      []DiscoveredMirrorRepo `json:"repos"`
 }

@@ -15,6 +15,11 @@ import (
 
 type Deps struct {
 	ProjectHandler            *handlers.ProjectHandler
+	RequirementHandler        *handlers.RequirementHandler
+	PlanningRunHandler        *handlers.PlanningRunHandler
+	PlanningSettingsHandler   *handlers.PlanningSettingsHandler
+	AccountBindingHandler     *handlers.AccountBindingHandler
+	LocalConnectorHandler     *handlers.LocalConnectorHandler
 	TaskHandler               *handlers.TaskHandler
 	DocumentHandler           *handlers.DocumentHandler
 	SummaryHandler            *handlers.SummaryHandler
@@ -28,9 +33,14 @@ type Deps struct {
 	UserHandler               *handlers.UserHandler
 	NotificationHandler       *handlers.NotificationHandler
 	SearchHandler             *handlers.SearchHandler
+	AdapterModelsHandler      *handlers.AdapterModelsHandler
 	AuthMiddleware            func(http.Handler) http.Handler
 	APIKeyMiddleware          func(http.Handler) http.Handler
 	FrontendDir               string
+	// CORSAllowedOrigins is the explicit origin allowlist. When nil/empty
+	// the router falls back to safe localhost defaults so existing tests
+	// keep working without configuration plumbing.
+	CORSAllowedOrigins []string
 }
 
 func New(deps Deps) http.Handler {
@@ -41,14 +51,7 @@ func New(deps Deps) http.Handler {
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Content-Type", "Authorization", "X-API-Key"},
-		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: true,
-		MaxAge:           300,
-	}))
+	r.Use(cors.Handler(buildCORSOptions(deps.CORSAllowedOrigins)))
 
 	// Inject auth identity (session + API key) on every request
 	if deps.AuthMiddleware != nil {
@@ -61,6 +64,15 @@ func New(deps Deps) http.Handler {
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", handlers.HealthCheck)
+		if deps.AdapterModelsHandler != nil {
+			r.Get("/adapter-models", deps.AdapterModelsHandler.Get)
+		}
+		if deps.LocalConnectorHandler != nil {
+			r.Post("/connector/pair", deps.LocalConnectorHandler.Pair)
+			r.Post("/connector/heartbeat", deps.LocalConnectorHandler.Heartbeat)
+			r.Post("/connector/claim-next-run", deps.LocalConnectorHandler.ClaimNextRun)
+			r.Post("/connector/planning-runs/{id}/result", deps.LocalConnectorHandler.SubmitPlanningRunResult)
+		}
 
 		// ── Auth (public) ──────────────────────────────────────────────
 		if deps.UserHandler != nil {
@@ -84,9 +96,26 @@ func New(deps Deps) http.Handler {
 			r.Patch("/projects/{id}", deps.ProjectHandler.Update)
 			r.Delete("/projects/{id}", deps.ProjectHandler.Delete)
 
+			if deps.RequirementHandler != nil {
+				r.Get("/projects/{id}/requirements", deps.RequirementHandler.ListByProject)
+				r.Post("/projects/{id}/requirements", deps.RequirementHandler.Create)
+				r.Get("/requirements/{id}", deps.RequirementHandler.Get)
+			}
+			if deps.PlanningRunHandler != nil {
+				r.Get("/projects/{id}/planning-provider-options", deps.PlanningRunHandler.ProviderOptions)
+				r.Post("/requirements/{id}/planning-runs", deps.PlanningRunHandler.Create)
+				r.Get("/requirements/{id}/planning-runs", deps.PlanningRunHandler.ListByRequirement)
+				r.Get("/planning-runs/{id}", deps.PlanningRunHandler.Get)
+				r.Post("/planning-runs/{id}/cancel", deps.PlanningRunHandler.Cancel)
+				r.Get("/planning-runs/{id}/backlog-candidates", deps.PlanningRunHandler.ListBacklogCandidates)
+				r.Patch("/backlog-candidates/{id}", deps.PlanningRunHandler.UpdateBacklogCandidate)
+				r.Post("/backlog-candidates/{id}/apply", deps.PlanningRunHandler.ApplyBacklogCandidate)
+			}
+
 			// Tasks
 			r.Get("/projects/{id}/tasks", deps.TaskHandler.ListByProject)
 			r.Post("/projects/{id}/tasks", deps.TaskHandler.Create)
+			r.Post("/projects/{id}/tasks/batch-update", deps.TaskHandler.BatchUpdate)
 			r.Get("/tasks/{id}", deps.TaskHandler.Get)
 			r.Patch("/tasks/{id}", deps.TaskHandler.Update)
 			r.Delete("/tasks/{id}", deps.TaskHandler.Delete)
@@ -109,6 +138,7 @@ func New(deps Deps) http.Handler {
 				r.Get("/repo-mappings/discover", deps.ProjectRepoMappingHandler.Discover)
 				r.Get("/projects/{id}/repo-mappings", deps.ProjectRepoMappingHandler.ListByProject)
 				r.Post("/projects/{id}/repo-mappings", deps.ProjectRepoMappingHandler.Create)
+				r.Patch("/repo-mappings/{id}", deps.ProjectRepoMappingHandler.Update)
 				r.Delete("/repo-mappings/{id}", deps.ProjectRepoMappingHandler.Delete)
 			}
 			if deps.DocumentRefreshHandler != nil {
@@ -117,6 +147,7 @@ func New(deps Deps) http.Handler {
 
 			// Summary
 			r.Get("/projects/{id}/summary", deps.SummaryHandler.GetSummary)
+			r.Get("/projects/{id}/dashboard-summary", deps.SummaryHandler.GetDashboardSummary)
 			r.Get("/projects/{id}/summary/history", deps.SummaryHandler.GetHistory)
 
 			// Sync (Phase 2)
@@ -145,6 +176,22 @@ func New(deps Deps) http.Handler {
 				r.With(middleware.RequireAdmin).Get("/users", deps.UserHandler.List)
 				r.With(middleware.RequireAdmin).Patch("/users/{id}", deps.UserHandler.Update)
 			}
+			if deps.PlanningSettingsHandler != nil {
+				r.With(middleware.RequireAdmin).Get("/settings/planning", deps.PlanningSettingsHandler.Get)
+				r.With(middleware.RequireAdmin).Patch("/settings/planning", deps.PlanningSettingsHandler.Update)
+			}
+			if deps.AccountBindingHandler != nil {
+				r.Get("/me/account-bindings", deps.AccountBindingHandler.List)
+				r.Post("/me/account-bindings", deps.AccountBindingHandler.Create)
+				r.Patch("/me/account-bindings/{id}", deps.AccountBindingHandler.Update)
+				r.Delete("/me/account-bindings/{id}", deps.AccountBindingHandler.Delete)
+			}
+			if deps.LocalConnectorHandler != nil {
+				r.Get("/me/local-connectors", deps.LocalConnectorHandler.List)
+				r.Post("/me/local-connectors/pairing-sessions", deps.LocalConnectorHandler.CreatePairingSession)
+				r.Delete("/me/local-connectors/{id}", deps.LocalConnectorHandler.Revoke)
+				r.Get("/me/local-connectors/run-stats", deps.LocalConnectorHandler.RunStats)
+			}
 			if deps.NotificationHandler != nil {
 				r.Get("/notifications", deps.NotificationHandler.List)
 				r.Post("/notifications", deps.NotificationHandler.Create)
@@ -165,6 +212,53 @@ func New(deps Deps) http.Handler {
 	}
 
 	return r
+}
+
+// buildCORSOptions returns a CORS configuration based on the supplied
+// allowlist. A literal "*" entry disables credentialed CORS because the
+// browser rejects the wildcard + credentials combination; any other entry
+// list keeps cookies/Authorization enabled. An empty allowlist falls back
+// to safe localhost defaults so existing tests run without configuration.
+func buildCORSOptions(allowed []string) cors.Options {
+	cleaned := make([]string, 0, len(allowed))
+	wildcard := false
+	for _, origin := range allowed {
+		trimmed := strings.TrimSpace(origin)
+		if trimmed == "" {
+			continue
+		}
+		if trimmed == "*" {
+			wildcard = true
+			continue
+		}
+		cleaned = append(cleaned, trimmed)
+	}
+	if wildcard && len(cleaned) == 0 {
+		return cors.Options{
+			AllowedOrigins:   []string{"*"},
+			AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
+			AllowedHeaders:   []string{"Accept", "Content-Type", "Authorization", "X-API-Key", "X-Connector-Token"},
+			ExposedHeaders:   []string{"Link"},
+			AllowCredentials: false,
+			MaxAge:           300,
+		}
+	}
+	if len(cleaned) == 0 {
+		cleaned = []string{
+			"http://localhost:5173",
+			"http://localhost:18765",
+			"http://127.0.0.1:5173",
+			"http://127.0.0.1:18765",
+		}
+	}
+	return cors.Options{
+		AllowedOrigins:   cleaned,
+		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Content-Type", "Authorization", "X-API-Key", "X-Connector-Token"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}
 }
 
 // serveSPA serves the React SPA from the given directory.

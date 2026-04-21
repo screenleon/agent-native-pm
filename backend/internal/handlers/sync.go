@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -105,12 +106,20 @@ func (h *AgentRunHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, err := h.store.Create(req.ProjectID, req.CreateAgentRunRequest)
+	createdStatus := http.StatusCreated
+	run, existing, err := h.store.CreateOrGetByIdempotency(req.ProjectID, req.CreateAgentRunRequest)
 	if err != nil {
+		if errors.Is(err, store.ErrAgentRunIdempotencyProjectMismatch) {
+			writeError(w, http.StatusConflict, "idempotency_key already belongs to another project")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to create agent run")
 		return
 	}
-	writeSuccess(w, http.StatusCreated, run, nil)
+	if existing {
+		createdStatus = http.StatusOK
+	}
+	writeSuccess(w, createdStatus, run, nil)
 }
 
 // Update PATCH /api/agent-runs/{id}

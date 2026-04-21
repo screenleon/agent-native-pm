@@ -18,6 +18,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "18765:18765"
     environment:
@@ -26,6 +28,9 @@ services:
       - PORT=18765
       - REPO_ROOT=/app/data/repos
       - REPO_MAPPING_ROOT=/mirrors
+      # Optional: enable encrypted storage for admin-managed model provider settings.
+      # Generate a base64 AES key once and keep it private.
+      # - APP_SETTINGS_MASTER_KEY=${APP_SETTINGS_MASTER_KEY}
       - GIT_CONFIG_COUNT=1
       - GIT_CONFIG_KEY_0=safe.directory
       - GIT_CONFIG_VALUE_0=*

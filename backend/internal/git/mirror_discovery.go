@@ -57,6 +57,7 @@ func detectDefaultBranch(repoPath string) string {
 	commands := [][]string{
 		{"-C", repoPath, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"},
 		{"-C", repoPath, "symbolic-ref", "--quiet", "--short", "HEAD"},
+		{"-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD"},
 	}
 	for _, args := range commands {
 		cmd := exec.Command("git", args...)
@@ -64,13 +65,52 @@ func detectDefaultBranch(repoPath string) string {
 		if err != nil {
 			continue
 		}
-		branch := strings.TrimSpace(string(output))
-		branch = strings.TrimPrefix(branch, "origin/")
+		branch := normalizeDetectedBranch(string(output))
 		if branch != "" {
 			return branch
 		}
 	}
-	return "main"
+	return ""
+}
+
+func detectRemoteDefaultBranch(repoURL string) string {
+	if strings.TrimSpace(repoURL) == "" {
+		return ""
+	}
+
+	cmd := exec.Command("git", "ls-remote", "--symref", repoURL, "HEAD")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "ref:") || !strings.HasSuffix(line, "HEAD") {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		branch := normalizeDetectedBranch(parts[1])
+		if branch != "" {
+			return branch
+		}
+	}
+
+	return ""
+}
+
+func normalizeDetectedBranch(raw string) string {
+	branch := strings.TrimSpace(raw)
+	branch = strings.TrimPrefix(branch, "origin/")
+	branch = strings.TrimPrefix(branch, "refs/heads/")
+	branch = strings.TrimPrefix(branch, "refs/remotes/origin/")
+	if branch == "HEAD" {
+		return ""
+	}
+	return branch
 }
 
 func suggestMirrorAlias(name string) string {

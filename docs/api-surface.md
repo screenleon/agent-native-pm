@@ -1,30 +1,104 @@
-# API Surface — Agent Native PM
+# API Surface - Agent Native PM
 
-This file is the canonical API contract reference. Update this file whenever endpoints are added or modified.
+This file is the canonical API contract reference for the current deployed backend. Update this file whenever endpoints are added, removed, or behavior changes.
 
 ## Conventions
 
 - Base path: `/api`
 - Content type: `application/json`
 - Response envelope: `{ "data": <payload>, "error": <string|null>, "meta": <object|null> }`
-- Error responses: `{ "data": null, "error": "<message>", "meta": null }` with appropriate HTTP status
-- Pagination: `?page=1&per_page=20` — meta includes `{ "page": 1, "per_page": 20, "total": 42 }`
+- Error responses: `{ "data": null, "error": "<message>", "meta": null }`
+- Pagination: `?page=1&per_page=20` and `meta = { "page": 1, "per_page": 20, "total": 42 }`
 - IDs: UUID v4 strings
-- Timestamps: ISO 8601 format
+- Timestamps: ISO 8601 UTC
 
-## Authentication
+## Authentication And Authorization
 
-- Phase 1-2: No authentication (single-user local deployment)
-- Phase 3: Agent authentication via `X-API-Key` header
-- Phase 4: Session-based authentication for human users
+- Public bootstrap/auth routes:
+  - `GET /api/auth/needs-setup`
+  - `POST /api/auth/register`
+  - `POST /api/auth/login`
+  - `POST /api/auth/logout`
+  - `GET /api/auth/me` returns `401` when not authenticated
+- Human-facing application routes require authenticated user context when auth middleware is enabled. Session cookie and Bearer token are both accepted by the current auth flow.
+- Admin-only routes:
+  - `GET /api/users`
+  - `PATCH /api/users/:id`
+- API key protected routes:
+  - `POST /api/agent-runs`
+  - `PATCH /api/agent-runs/:id`
+  - `POST /api/documents/:id/refresh-summary`
+- Project-scoped API keys are limited to the allowed project. Human-authenticated requests use the same JSON endpoints as agent requests.
 
-## Phase 1 endpoints
+## CORS
+
+- Allowed origins are driven by the `CORS_ALLOWED_ORIGINS` environment variable (comma-separated). Default for unset is the developer set: `http://localhost:5173, http://localhost:18765, http://127.0.0.1:5173, http://127.0.0.1:18765`.
+- Production deployments MUST set `CORS_ALLOWED_ORIGINS` to the canonical UI host(s); leaving it unset is unsafe outside local development.
+- A literal `*` in the allowlist disables credentialed CORS (`AllowCredentials: false`) because browsers reject the wildcard + credentials combination. Provide explicit origins when cookies/Authorization headers are required.
+- Allowed methods: `GET, POST, PATCH, PUT, DELETE, OPTIONS`. Allowed headers include `Authorization`, `Content-Type`, `X-API-Key`. See DECISIONS 2026-04-21.
+
+## Current Endpoint Inventory
 
 ### Health
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/health` | Health check — returns `{ "status": "ok" }` |
+| GET | `/api/health` | Health check. Returns `{ "status": "ok" }`. |
+
+### Auth
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/auth/needs-setup` | Returns whether bootstrap registration is still allowed |
+| POST | `/api/auth/register` | Bootstrap-only registration. First user becomes admin |
+| POST | `/api/auth/login` | Create session and return `{ token, user }` |
+| POST | `/api/auth/logout` | Delete current session / bearer token |
+| GET | `/api/auth/me` | Return current authenticated user |
+
+#### Register request
+
+```json
+{
+  "username": "screenleon",
+  "email": "owner@example.com",
+  "password": "strong-password",
+  "role": "member"
+}
+```
+
+Notes:
+
+- `role` defaults to `member`, but the first user is automatically promoted to `admin`.
+- Open registration is blocked after setup is complete.
+- Password must be at least 8 characters.
+
+#### Login response
+
+```json
+{
+  "data": {
+    "token": "session-token",
+    "user": {
+      "id": "uuid",
+      "username": "screenleon",
+      "email": "owner@example.com",
+      "role": "admin",
+      "is_active": true,
+      "created_at": "2026-04-16T12:00:00Z",
+      "updated_at": "2026-04-16T12:00:00Z"
+    }
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+### Users
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/users` | Admin-only list of users |
+| PATCH | `/api/users/:id` | Admin-only update of email, role, or active state |
 
 ### Projects
 
@@ -34,19 +108,31 @@ This file is the canonical API contract reference. Update this file whenever end
 | POST | `/api/projects` | Create a project |
 | GET | `/api/projects/:id` | Get a project by ID |
 | PATCH | `/api/projects/:id` | Update a project |
-| DELETE | `/api/projects/:id` | Delete a project and its associated data |
+| DELETE | `/api/projects/:id` | Delete a project and associated data |
 
 #### Create project request
 
 ```json
 {
-  "name": "My Project",
-  "description": "A sample project",
-  "repo_url": "https://github.com/example/my-project.git",
-  "repo_path": "/path/to/repo",
-  "default_branch": "main"
+  "name": "Agent Native PM",
+  "description": "Planning workspace",
+  "repo_url": "https://github.com/example/agent-native-pm.git",
+  "repo_path": "/workspace/agent-native-pm",
+  "default_branch": "",
+  "initial_repo_mapping": {
+    "alias": "app",
+    "repo_path": "/mirrors/agent-native-pm",
+    "default_branch": "",
+    "is_primary": true
+  }
 }
 ```
+
+Notes:
+
+- `name` is required.
+- `default_branch` may be an empty string. Empty means fall back to detected default branch during sync.
+- `initial_repo_mapping` is optional. When provided, it is normalized as the primary mapping during project creation.
 
 #### Project response
 
@@ -54,14 +140,14 @@ This file is the canonical API contract reference. Update this file whenever end
 {
   "data": {
     "id": "uuid",
-    "name": "My Project",
-    "description": "A sample project",
-    "repo_url": "https://github.com/example/my-project.git",
-    "repo_path": "/path/to/repo",
-    "default_branch": "main",
+    "name": "Agent Native PM",
+    "description": "Planning workspace",
+    "repo_url": "https://github.com/example/agent-native-pm.git",
+    "repo_path": "/mirrors/agent-native-pm",
+    "default_branch": "",
     "last_sync_at": null,
-    "created_at": "2026-04-14T12:00:00Z",
-    "updated_at": "2026-04-14T12:00:00Z"
+    "created_at": "2026-04-16T12:00:00Z",
+    "updated_at": "2026-04-16T12:00:00Z"
   },
   "error": null,
   "meta": null
@@ -72,9 +158,11 @@ This file is the canonical API contract reference. Update this file whenever end
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/projects/:id/repo-mappings` | List mirror repo mappings for a project |
-| POST | `/api/projects/:id/repo-mappings` | Add a mirror repo mapping |
-| DELETE | `/api/repo-mappings/:id` | Delete a mirror repo mapping |
+| GET | `/api/repo-mappings/discover` | Discover mounted mirror repos. Optional `project_id` query |
+| GET | `/api/projects/:id/repo-mappings` | List repo mappings for a project |
+| POST | `/api/projects/:id/repo-mappings` | Create a repo mapping |
+| PATCH | `/api/repo-mappings/:id` | Update repo mapping branch override |
+| DELETE | `/api/repo-mappings/:id` | Delete a repo mapping |
 
 #### Create repo mapping request
 
@@ -87,121 +175,495 @@ This file is the canonical API contract reference. Update this file whenever end
 }
 ```
 
-#### Repo mapping response
+#### Update repo mapping request
+
+```json
+{
+  "default_branch": "review/risk-git-fixes"
+}
+```
+
+Notes:
+
+- Sending `"default_branch": ""` clears the mapping-level override so sync falls back to project branch or branch auto-detect.
+- Primary repo mapping branch wins over the project fallback branch during sync.
+
+#### Discover mirror repos response
+
+```json
+{
+  "data": {
+    "mirror_root": "/mirrors",
+    "repos": [
+      {
+        "repo_name": "agent-native-pm",
+        "repo_path": "/mirrors/agent-native-pm",
+        "suggested_alias": "agent-native-pm",
+        "detected_default_branch": "review/risk-git-fixes",
+        "is_mapped_to_project": true,
+        "is_primary_for_project": true
+      }
+    ]
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+### Requirements
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/projects/:id/requirements` | List requirements for a project |
+| POST | `/api/projects/:id/requirements` | Create a requirement under a project |
+| GET | `/api/requirements/:id` | Get a requirement by ID |
+
+#### Create requirement request
+
+```json
+{
+  "title": "Add planning intake foundation",
+  "summary": "Capture requirements before creating tasks",
+  "description": "Users should be able to submit a requirement in Project Detail before the system decomposes it into candidate backlog items.",
+  "source": "human"
+}
+```
+
+Notes:
+
+- `title` is required and is trimmed before validation.
+- `status` is always initialized to `draft` on create.
+- `source` defaults to `human` when omitted or blank.
+- Requirement intake is additive only in this slice: there is no update, delete, or archive endpoint yet.
+
+#### Requirement response
 
 ```json
 {
   "data": {
     "id": "uuid",
     "project_id": "uuid",
-    "alias": "docs-repo",
-    "repo_path": "/mirrors/agent-native-pm-docs",
-    "default_branch": "main",
-    "is_primary": false,
-    "created_at": "2026-04-15T12:00:00Z",
-    "updated_at": "2026-04-15T12:00:00Z"
+    "title": "Add planning intake foundation",
+    "summary": "Capture requirements before creating tasks",
+    "description": "Users should be able to submit a requirement in Project Detail before the system decomposes it into candidate backlog items.",
+    "status": "draft",
+    "source": "human",
+    "created_at": "2026-04-16T15:00:00Z",
+    "updated_at": "2026-04-16T15:00:00Z"
   },
   "error": null,
   "meta": null
 }
 ```
+
+#### List requirements query parameters
+
+- `page`, `per_page`: pagination
+
+Behavior:
+
+- Default order is newest-first by `created_at`.
+- Empty results return `[]`, not `null`.
+- List and create routes are project-scoped and live in the same authenticated route group as projects and tasks.
+
+### Planning Runs
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/projects/:id/planning-provider-options` | Resolve the current caller's planning execution preview and available models |
+| POST | `/api/requirements/:id/planning-runs` | Start a planning run for a requirement |
+| GET | `/api/requirements/:id/planning-runs` | List planning runs for a requirement |
+| GET | `/api/planning-runs/:id` | Get a planning run by ID |
+| GET | `/api/planning-runs/:id/backlog-candidates` | List persisted draft backlog candidates for a planning run |
+| PATCH | `/api/backlog-candidates/:id` | Review and update a persisted backlog candidate |
+| POST | `/api/backlog-candidates/:id/apply` | Apply one approved backlog candidate into the task workflow |
+
+### Personal Account Bindings
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/me/account-bindings` | List the current user's personal provider bindings |
+| POST | `/api/me/account-bindings` | Create a personal provider binding for the current user |
+| PATCH | `/api/me/account-bindings/:id` | Update one personal provider binding |
+| DELETE | `/api/me/account-bindings/:id` | Delete one personal provider binding |
+
+### Local Connectors
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/me/local-connectors` | List the current user's registered local connectors |
+| POST | `/api/me/local-connectors/pairing-sessions` | Create one short-lived pairing session for a local connector |
+| DELETE | `/api/me/local-connectors/:id` | Revoke one local connector |
+| POST | `/api/connector/pair` | Claim a pairing code and exchange it for a connector token |
+| POST | `/api/connector/heartbeat` | Refresh connector presence using `X-Connector-Token` |
+| POST | `/api/connector/claim-next-run` | Lease the next queued local-connector planning run for the connector owner |
+| POST | `/api/connector/planning-runs/:id/result` | Return success or failure for one leased planning run |
+
+Behavior:
+
+- `POST /api/me/local-connectors/pairing-sessions` is authenticated and returns both a pairing-session record and a plaintext pairing code. The server stores only the code hash.
+- `POST /api/connector/pair` is public because the pairing code itself is the temporary credential. A successful claim creates one connector record and returns a plaintext connector token once.
+- `POST /api/connector/heartbeat` requires `X-Connector-Token` and marks the connector `online` while refreshing `last_seen_at`.
+- `POST /api/connector/claim-next-run` requires `X-Connector-Token` and only leases `execution_mode = local_connector` runs requested by the same human user who owns the connector.
+- `POST /api/connector/planning-runs/:id/result` requires `X-Connector-Token`, accepts `{ success, error_message?, candidates? }`, and finalizes the leased planning run plus its correlated audit run.
+- Connector tokens are distinct from session tokens and API keys.
+
+### Planning Settings
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/settings/planning` | Get the admin-managed central planning provider configuration |
+| PATCH | `/api/settings/planning` | Update the admin-managed central planning provider configuration |
+
+Behavior:
+
+- Both planning settings routes are admin-only.
+- `GET /api/settings/planning` never returns plaintext or ciphertext for the stored provider API key. It only returns `api_key_configured` plus non-secret metadata.
+- `PATCH /api/settings/planning` accepts `provider_id`, `model_id`, `base_url`, `configured_models`, optional `api_key`, optional `clear_api_key`, and optional `credential_mode`.
+- `APP_SETTINGS_MASTER_KEY` must be configured before saving a non-empty provider API key. This env exists only to encrypt persisted secrets at rest; provider/model/base URL settings themselves are stored in the application database.
+
+#### Create planning run behavior
+
+- Request body is optional. Active fields are `trigger_source`, optional `model_id`, and optional `execution_mode`.
+- `trigger_source` still defaults to `manual`.
+- The server always resolves the provider from workspace policy, then resolves credentials from personal binding or shared settings based on `credential_mode`.
+- `model_id` may be sent as a one-run override, but it must belong to the resolved provider exposed by `GET /api/projects/:id/planning-provider-options`.
+- `provider_id` is server-controlled in the current implementation; request bodies do not select a different provider implementation.
+- `execution_mode` may be `deterministic`, `server_provider`, or `local_connector`. `local_connector` requires a signed-in user session plus at least one non-revoked paired connector for that same user.
+- A successful planning run now persists ranked backlog suggestions linked to the requirement and run.
+- A successful planning run also records one internal project-scoped agent run audit entry using action type `review` and an idempotency key derived from the planning run ID.
+- `local_connector` runs are created in `status = queued` and `dispatch_status = queued`, then stay pending until a paired connector claims and returns the run.
+- Candidate persistence remains draft-first, but approved candidates can now be applied one-by-one into tasks through the candidate-scoped apply endpoint.
+- The current implementation always stores server-owned rank, score, confidence, evidence, typed `evidence_detail`, and duplicate-title signals for UI review, even when a remote model generated the draft content.
+- When the saved central provider is `openai-compatible`, the server sends compact planning context metadata to the configured upstream chat-completions endpoint: requirement title/summary/description, a bounded slice of open task titles, recent document metadata, open drift metadata, latest sync summary, and recent agent-run summaries.
+- If a `queued` or `running` run already exists for the requirement, create returns `409`.
+- If orchestration fails after run creation, the planning run is failed, partial draft candidates are removed, and the correlated agent run is marked failed.
+
+#### Planning provider options response
+
+```json
+{
+  "data": {
+    "default_selection": {
+      "provider_id": "openai-compatible",
+      "model_id": "llama3",
+      "selection_source": "server_default"
+    },
+    "credential_mode": "personal_preferred",
+    "resolved_binding_source": "personal",
+    "resolved_binding_label": "default",
+    "available_execution_modes": ["server_provider", "local_connector"],
+    "paired_connector_available": true,
+    "active_connector_label": "My Machine",
+    "can_run": true,
+    "allow_model_override": true,
+    "providers": [
+      {
+        "id": "openai-compatible",
+        "label": "OpenAI-Compatible Planner",
+        "kind": "llm",
+        "description": "Remote planning provider using a configured OpenAI-compatible chat completions endpoint.",
+        "default_model_id": "llama3",
+        "models": [
+          {
+            "id": "llama3",
+            "label": "llama3",
+            "description": "Configured model exposed by the resolved binding or workspace settings.",
+            "enabled": true
+          }
+        ]
+      }
+    ]
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+#### Planning settings response
+
+```json
+{
+  "data": {
+    "settings": {
+      "provider_id": "openai-compatible",
+      "model_id": "gpt-5-mini",
+      "base_url": "https://api.openai.com/v1",
+      "configured_models": ["gpt-5-mini", "gpt-4.1-mini"],
+      "api_key_configured": true,
+      "credential_mode": "personal_preferred",
+      "updated_by": "admin",
+      "created_at": "2026-04-17T17:00:00Z",
+      "updated_at": "2026-04-17T17:05:00Z"
+    },
+    "secret_storage_ready": true
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+Source: `[agent:documentation-architect]`
+
+#### Planning run response
+
+```json
+{
+  "data": {
+    "id": "uuid",
+    "project_id": "uuid",
+    "requirement_id": "uuid",
+    "status": "completed",
+    "trigger_source": "manual",
+    "provider_id": "deterministic",
+    "model_id": "deterministic-v1",
+    "selection_source": "server_default",
+    "binding_source": "system",
+    "binding_label": "",
+    "error_message": "",
+    "started_at": "2026-04-16T16:10:00Z",
+    "completed_at": "2026-04-16T16:10:00Z",
+    "created_at": "2026-04-16T16:10:00Z",
+    "updated_at": "2026-04-16T16:10:00Z"
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+#### List planning runs query parameters
+
+- `page`, `per_page`: pagination
+
+Behavior:
+
+- Planning runs are listed newest-first by `created_at`.
+- Empty results return `[]`, not `null`.
+- `failed` runs preserve `error_message` for frontend visibility.
+- `binding_source` records whether the run used a personal binding, shared workspace credentials, or the built-in fallback.
+
+### Planning Run Backlog Candidates
+
+#### Backlog candidate response
+
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "project_id": "uuid",
+      "requirement_id": "uuid",
+      "planning_run_id": "uuid",
+      "parent_candidate_id": "",
+      "suggestion_type": "implementation",
+      "title": "Improve sync failure recovery UX",
+      "description": "Expose recovery options before creating tasks\n\nUsers should be able to see a saved draft candidate before deciding whether it deserves a task.\n\nDeliver the core requirement as the first shippable backlog slice.",
+      "status": "draft",
+      "rationale": "Top recommendation because it is the closest implementation slice to the stated requirement and can move directly into review once copy is confirmed.",
+      "priority_score": 82.6,
+      "confidence": 80.5,
+      "rank": 1,
+      "evidence": [
+        "Requirement summary: Expose recovery options before creating tasks",
+        "Requirement description captured for planning context."
+      ],
+      "evidence_detail": {
+        "summary": [
+          "Requirement summary: Expose recovery options before creating tasks"
+        ],
+        "documents": [
+          {
+            "document_id": "uuid",
+            "title": "Sync Recovery Guide",
+            "file_path": "docs/sync-recovery.md",
+            "doc_type": "guide",
+            "is_stale": true,
+            "staleness_days": 14,
+            "matched_keywords": ["sync", "recovery"],
+            "contribution_reasons": [
+              "Related project context influenced ranking."
+            ]
+          }
+        ],
+        "drift_signals": [],
+        "sync_run": null,
+        "agent_runs": [],
+        "duplicates": [],
+        "score_breakdown": {
+          "impact": 92,
+          "urgency": 58,
+          "dependency_unlock": 62,
+          "risk_reduction": 50,
+          "effort": 52,
+          "confidence_seed": 73,
+          "evidence_bonus": 3.6,
+          "duplicate_penalty": 0,
+          "final_priority_score": 82.6,
+          "final_confidence": 80.5
+        }
+      },
+      "duplicate_titles": [],
+      "created_at": "2026-04-16T17:00:00Z",
+      "updated_at": "2026-04-16T17:00:00Z"
+    }
+  ],
+  "error": null,
+  "meta": {
+    "page": 1,
+    "per_page": 50,
+    "total": 1
+  }
+}
+```
+
+#### List backlog candidates query parameters
+
+- `page`, `per_page`: pagination
+
+Behavior:
+
+- Results are scoped to a single planning run.
+- Default order is `rank ASC`, then `priority_score DESC`, then `created_at`, so the highest-ranked suggestion becomes the default review target.
+- Empty results return `[]`, not `null`.
+
+#### Update backlog candidate request
+
+```json
+{
+  "title": "Improve sync recovery UX",
+  "description": "Keep this candidate in review until the team decides whether it should become a task.",
+  "status": "approved"
+}
+```
+
+Behavior:
+
+- At least one mutable field must change.
+- Mutable fields are `title`, `description`, and `status`.
+- Valid review statuses are `draft`, `approved`, and `rejected`.
+- `applied` candidates are immutable and return `400` if edited.
+- Candidate updates remain project-scoped through the candidate's owning project.
+
+#### Apply backlog candidate behavior
+
+- No request body is required in the current slice.
+- Only `approved` candidates can be applied. `draft` and `rejected` candidates return `400`.
+- Apply is candidate-scoped, not requirement-scoped: each request materializes at most one task.
+- Successful apply creates one task in `todo` with default `medium` priority, writes a `task_lineage` record, and marks the candidate `applied`.
+- Apply is idempotent for the same candidate. Repeating the same call after success returns `200` with `already_applied: true` and the previously created task plus lineage.
+- Apply uses a PostgreSQL advisory transaction lock plus title conflict detection to block concurrent duplicate open tasks with the same normalized title in the same project.
+- If an open `todo` or `in_progress` task already exists with the same normalized title, apply returns `409`.
+
+#### Apply backlog candidate response
+
+```json
+{
+  "data": {
+    "task": {
+      "id": "uuid",
+      "project_id": "uuid",
+      "title": "Improve sync recovery UX",
+      "description": "Keep recovery guidance in one actionable task.",
+      "status": "todo",
+      "priority": "medium",
+      "assignee": "",
+      "source": "agent:planning-orchestrator",
+      "created_at": "2026-04-17T10:00:00Z",
+      "updated_at": "2026-04-17T10:00:00Z"
+    },
+    "candidate": {
+      "id": "uuid",
+      "project_id": "uuid",
+      "requirement_id": "uuid",
+      "planning_run_id": "uuid",
+      "parent_candidate_id": "",
+      "title": "Improve sync recovery UX",
+      "description": "Keep recovery guidance in one actionable task.",
+      "status": "applied",
+      "rationale": "Draft candidate synthesized from requirement intake and approved during review.",
+      "created_at": "2026-04-17T09:55:00Z",
+      "updated_at": "2026-04-17T10:00:00Z"
+    },
+    "lineage": {
+      "id": "uuid",
+      "project_id": "uuid",
+      "task_id": "uuid",
+      "requirement_id": "uuid",
+      "planning_run_id": "uuid",
+      "backlog_candidate_id": "uuid",
+      "lineage_kind": "applied_candidate",
+      "created_at": "2026-04-17T10:00:00Z"
+    },
+    "already_applied": false
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+Source: `[agent:backend-architect]`
 
 ### Tasks
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/projects/:id/tasks` | List tasks for a project |
-| POST | `/api/projects/:id/tasks` | Create a task under a project |
+| POST | `/api/projects/:id/tasks` | Create a task |
+| POST | `/api/projects/:id/tasks/batch-update` | Batch update multiple tasks under a project |
 | GET | `/api/tasks/:id` | Get a task by ID |
 | PATCH | `/api/tasks/:id` | Update a task |
 | DELETE | `/api/tasks/:id` | Delete a task |
 
-#### Create task request
+#### List tasks query parameters
+
+- `page`, `per_page`: pagination
+- `sort`, `order`: list ordering
+- `status`: exact match. Allowed values: `todo`, `in_progress`, `done`, `cancelled`
+- `priority`: exact match. Allowed values: `low`, `medium`, `high`
+- `assignee`: exact match assignee filter
+
+Invalid `status` or `priority` values return `400`.
+
+#### Batch update tasks request
 
 ```json
 {
-  "title": "Implement login page",
-  "description": "Build the login form with validation",
-  "status": "todo",
-  "priority": "high",
-  "assignee": "agent:application-implementer",
-  "source": "human"
-}
-```
-
-#### Task response
-
-```json
-{
-  "data": {
-    "id": "uuid",
-    "project_id": "uuid",
-    "title": "Implement login page",
-    "description": "Build the login form with validation",
-    "status": "todo",
+  "task_ids": ["uuid-1", "uuid-2"],
+  "changes": {
+    "status": "done",
     "priority": "high",
-    "assignee": "agent:application-implementer",
-    "source": "human",
-    "created_at": "2026-04-14T12:00:00Z",
-    "updated_at": "2026-04-14T12:00:00Z"
-  },
-  "error": null,
-  "meta": null
+    "assignee": ""
+  }
 }
 ```
+
+Notes:
+
+- `task_ids` must contain at least 1 task and at most 100.
+- `changes` must include at least one of `status`, `priority`, `assignee`.
+- Empty assignee clears the assignee.
+- Batch updates are atomic inside the project scope.
 
 ### Documents
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/projects/:id/documents` | List documents for a project |
-| POST | `/api/projects/:id/documents` | Register a document under a project |
-| GET | `/api/documents/:id` | Get a document by ID |
-| GET | `/api/documents/:id/content` | Read document content for in-app preview |
+| GET | `/api/projects/:id/documents` | List documents |
+| POST | `/api/projects/:id/documents` | Register a document |
+| GET | `/api/documents/:id` | Get document metadata |
+| GET | `/api/documents/:id/content` | Get document content preview |
 | PATCH | `/api/documents/:id` | Update document metadata |
-| DELETE | `/api/documents/:id` | Delete a document registration |
-
-#### Create document request
-
-```json
-{
-  "title": "API Reference",
-  "file_path": "docs/api-surface.md",
-  "doc_type": "api",
-  "source": "human"
-}
-```
-
-#### Document response
-
-```json
-{
-  "data": {
-    "id": "uuid",
-    "project_id": "uuid",
-    "title": "API Reference",
-    "file_path": "docs/api-surface.md",
-    "doc_type": "api",
-    "last_updated_at": "2026-04-14T12:00:00Z",
-    "staleness_days": 0,
-    "is_stale": false,
-    "source": "human",
-    "created_at": "2026-04-14T12:00:00Z",
-    "updated_at": "2026-04-14T12:00:00Z"
-  },
-  "error": null,
-  "meta": null
-}
-```
+| DELETE | `/api/documents/:id` | Delete document registration |
+| POST | `/api/documents/:id/refresh-summary` | API-key-only document summary refresh trigger |
 
 #### Document content preview response
 
 ```json
 {
   "data": {
-    "path": "/repos/agent-native-pm/docs/api-surface.md",
+    "path": "/mirrors/agent-native-pm/docs/api-surface.md",
     "language": "markdown",
-    "content": "# API Surface\\n...",
+    "content": "# API Surface\n...",
     "size_bytes": 2048,
     "truncated": false
   },
@@ -211,98 +673,233 @@ This file is the canonical API contract reference. Update this file whenever end
 ```
 
 Notes:
-- `file_path` must be repo-relative (path traversal blocked).
-- Secondary mirror repos use alias-prefixed file paths such as `docs-repo/docs/api-surface.md`.
-- Preview payload may be truncated for large files.
-- Source: `[agent:documentation-architect]`
+
+- `file_path` must remain repo-relative. Path traversal is blocked.
+- Secondary repo documents use alias-prefixed paths such as `docs-repo/docs/guide.md`.
+
+### Document Links
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/documents/:id/links` | List document-to-code links |
+| POST | `/api/documents/:id/links` | Create a document link |
+| DELETE | `/api/document-links/:id` | Delete a document link |
+
+#### Create document link request
+
+```json
+{
+  "code_path": "backend/internal/router/router.go",
+  "link_type": "covers"
+}
+```
+
+Allowed `link_type` values: `covers`, `references`, `depends_on`.
 
 ### Summary
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/projects/:id/summary` | Get current project summary (computed) |
+| GET | `/api/projects/:id/summary` | Get current computed project summary |
+| GET | `/api/projects/:id/dashboard-summary` | Get dashboard-ready aggregates |
 | GET | `/api/projects/:id/summary/history` | Get summary snapshot history |
 
-#### Summary response
+#### Dashboard summary response
 
 ```json
 {
   "data": {
     "project_id": "uuid",
-    "snapshot_date": "2026-04-14",
-    "total_tasks": 15,
-    "tasks_todo": 5,
-    "tasks_in_progress": 3,
-    "tasks_done": 6,
-    "tasks_cancelled": 1,
-    "total_documents": 8,
-    "stale_documents": 2,
-    "health_score": 0.72
+    "summary": {
+      "project_id": "uuid",
+      "snapshot_date": "2026-04-16",
+      "total_tasks": 15,
+      "tasks_todo": 5,
+      "tasks_in_progress": 3,
+      "tasks_done": 6,
+      "tasks_cancelled": 1,
+      "total_documents": 8,
+      "stale_documents": 2,
+      "health_score": 0.72
+    },
+    "latest_sync_run": {
+      "id": "uuid",
+      "project_id": "uuid",
+      "started_at": "2026-04-16T12:00:00Z",
+      "completed_at": "2026-04-16T12:03:00Z",
+      "status": "completed",
+      "commits_scanned": 12,
+      "files_changed": 34,
+      "error_message": ""
+    },
+    "open_drift_count": 4,
+    "recent_agent_runs": []
   },
   "error": null,
   "meta": null
 }
 ```
 
-## Phase 2 endpoints (planned)
+Notes:
+
+- `latest_sync_run` may be `null`.
+- `recent_agent_runs` returns the most recent 5 runs.
+- This contract is the current dashboard source-of-truth for frontend overview cards and planning context preparation.
+
+### Sync Runs
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/projects/:id/sync` | Trigger a repo sync |
-| GET | `/api/projects/:id/sync-runs` | List sync run history |
-| GET | `/api/projects/:id/drift-signals` | List drift signals for a project |
-| PATCH | `/api/drift-signals/:id` | Resolve or dismiss a drift signal |
-| POST | `/api/agent-runs` | Log an agent activity run (requires `X-API-Key`) |
-| GET | `/api/projects/:id/agent-runs` | List agent activity for a project |
-
-## Phase 3 endpoints (planned)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/documents/:id/refresh-summary` | Agent triggers document summary refresh (requires `X-API-Key`) |
-| GET | `/api/agent-runs/:id` | Get agent run details |
-| PATCH | `/api/agent-runs/:id` | Update agent run status (`running`/`completed`/`failed`, requires `X-API-Key`) |
+| POST | `/api/projects/:id/sync` | Trigger sync for a project |
+| GET | `/api/projects/:id/sync-runs` | List sync history for a project |
 
 Notes:
 
-- `POST /api/agent-runs` requires `X-API-Key` and accepts project-scoped keys.
-- Project-scoped keys can only read/update agent runs in their own project.
+- Sync responses use the standard envelope and sync run payload.
+- Branch resolution failures may include detected branch hints in `error_message`, for example: `detected default branch is "review/risk-git-fixes"`.
 
-## Phase 4 search filters
+### Drift Signals
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/search` | Full-text search with optional filters |
+| GET | `/api/projects/:id/drift-signals` | List drift signals for a project |
+| POST | `/api/projects/:id/drift-signals` | Create a drift signal |
+| POST | `/api/projects/:id/drift-signals/resolve-all` | Bulk resolve open drift signals |
+| PATCH | `/api/drift-signals/:id` | Update a drift signal status |
+
+#### Drift signal list query parameters
+
+- `page`, `per_page`: pagination
+- `status`: `open`, `resolved`, `dismissed`, or empty for all
+- `sort_by`: `severity` or `created_at`
+
+#### Create drift signal request
+
+```json
+{
+  "document_id": "uuid-document",
+  "trigger_type": "code_change",
+  "trigger_detail": "router changed",
+  "trigger_meta": {
+    "changed_files": [
+      { "path": "backend/internal/router/router.go", "change_type": "M" }
+    ],
+    "confidence": "high"
+  },
+  "severity": 3,
+  "sync_run_id": "uuid-sync-run"
+}
+```
+
+### Agent Runs
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/agent-runs` | API-key-only create agent run |
+| GET | `/api/projects/:id/agent-runs` | List agent runs for a project |
+| GET | `/api/agent-runs/:id` | Get agent run details |
+| PATCH | `/api/agent-runs/:id` | API-key-only update agent run |
+
+Notes:
+
+- Valid `action_type`: `create`, `update`, `review`, `sync`
+- Valid `status`: `running`, `completed`, `failed`
+- `idempotency_key` is optional but strongly recommended for automated callers.
+- Planning runs now emit an internal audit entry through this same model using `action_type: review`; this is internal correlation behavior, not a separate planning-agent API.
+- Repeating `POST /api/agent-runs` with the same `idempotency_key` for the same project returns the existing run.
+- Reusing an `idempotency_key` across different projects returns `409`.
+
+### API Keys
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/keys` | List API keys visible to the authenticated user |
+| POST | `/api/keys` | Create an API key |
+| DELETE | `/api/keys/:id` | Revoke an API key |
+
+#### Create API key request
+
+```json
+{
+  "project_id": "uuid-project",
+  "label": "planning-agent"
+}
+```
+
+Notes:
+
+- `project_id` is optional. Omit for a global key.
+- Raw secret is only returned once at creation time.
+
+### Notifications
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/notifications` | List notifications for current user |
+| POST | `/api/notifications` | Create a notification |
+| PATCH | `/api/notifications/:id/read` | Mark one notification as read |
+| PATCH | `/api/notifications/:id/unread` | Mark one notification as unread |
+| POST | `/api/notifications/read-all` | Mark all notifications as read |
+| GET | `/api/notifications/unread-count` | Return unread notification count |
+
+### Search
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/search` | Full-text search across tasks and documents |
 
 Supported query parameters:
 
-- `q` (required): full-text query term.
-- `project_id` (optional): scope results to a project.
-- `type` (optional): `all` (default), `tasks`, `documents`.
-- `status` (optional): task status filter (`todo`, `in_progress`, `done`, `cancelled`).
-- `doc_type` (optional): document type filter (`api`, `architecture`, `guide`, `adr`, `general`).
-- `staleness` (optional): `all` (default), `stale`, `fresh`.
+- `q` (required): full-text query term
+- `project_id` (optional): limit to one project
+- `type` (optional): `all`, `tasks`, `documents`
+- `status` (optional): task status filter
+- `doc_type` (optional): document type filter
+- `staleness` (optional): `all`, `stale`, `fresh`
 
-## Error codes
+#### Search response
+
+```json
+{
+  "data": {
+    "tasks": [],
+    "documents": []
+  },
+  "error": null,
+  "meta": null
+}
+```
+
+## Not Implemented Yet
+
+The following planning endpoints are intentionally not present in the current codebase yet:
+
+- `POST /api/requirements/:id/apply`
+
+These belong to the future Planning Workspace implementation, not the current deployed API.
+
+## Error Codes
 
 | HTTP Status | Meaning |
 |-------------|---------|
 | 200 | Success |
 | 201 | Created |
-| 400 | Bad request (validation error) |
+| 400 | Bad request / validation error |
+| 401 | Authentication required or invalid credentials |
+| 403 | Forbidden / setup already completed / project not allowed |
 | 404 | Resource not found |
-| 409 | Conflict (duplicate resource) |
+| 409 | Conflict / duplicate resource |
 | 500 | Internal server error |
 
-## Health score computation
+## Health Score Computation
 
-The health score is a value between 0.0 and 1.0 computed as:
+The current project health score remains:
 
-```
+```text
 health_score = (task_completion_ratio * 0.7) + (document_freshness_ratio * 0.3)
 
 task_completion_ratio = tasks_done / max(total_tasks - tasks_cancelled, 1)
 document_freshness_ratio = (total_documents - stale_documents) / max(total_documents, 1)
 ```
 
-A document is considered stale when `staleness_days > 30` (configurable in Phase 3).
+Source: `[agent:documentation-architect]`

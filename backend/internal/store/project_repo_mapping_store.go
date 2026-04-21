@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -93,6 +94,40 @@ func (s *ProjectRepoMappingStore) ListByProject(projectID string) ([]models.Proj
 		mappings = []models.ProjectRepoMapping{}
 	}
 	return mappings, rows.Err()
+}
+
+func (s *ProjectRepoMappingStore) Update(id string, req models.UpdateProjectRepoMappingRequest) (*models.ProjectRepoMapping, error) {
+	var setClauses []string
+	var args []interface{}
+	pos := 1
+
+	if req.DefaultBranch != nil {
+		setClauses = append(setClauses, fmt.Sprintf("default_branch = $%d", pos))
+		args = append(args, strings.TrimSpace(*req.DefaultBranch))
+		pos++
+	}
+
+	if len(setClauses) == 0 {
+		return s.GetByID(id)
+	}
+
+	setClauses = append(setClauses, fmt.Sprintf("updated_at = $%d", pos))
+	args = append(args, time.Now().UTC())
+	pos++
+	args = append(args, id)
+
+	query := fmt.Sprintf("UPDATE project_repo_mappings SET %s WHERE id = $%d", strings.Join(setClauses, ", "), pos)
+	result, err := s.db.Exec(query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return nil, nil
+	}
+
+	return s.GetByID(id)
 }
 
 func (s *ProjectRepoMappingStore) Delete(id string) error {

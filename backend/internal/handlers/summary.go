@@ -19,38 +19,37 @@ func NewSummaryHandler(s *store.SummaryStore, ps *store.ProjectStore) *SummaryHa
 func (h *SummaryHandler) GetSummary(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 
-	project, err := h.projectStore.GetByID(projectID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to verify project")
-		return
-	}
-	if project == nil {
-		writeError(w, http.StatusNotFound, "project not found")
+	if ok := h.ensureProject(w, projectID); !ok {
 		return
 	}
 
-	summary, err := h.store.ComputeSummary(projectID)
+	summary, err := h.store.ComputeCurrentSummary(projectID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to compute summary")
-		return
-	}
-	if err := h.store.SaveDailySnapshot(summary); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to save summary snapshot")
 		return
 	}
 	writeSuccess(w, http.StatusOK, summary, nil)
 }
 
+func (h *SummaryHandler) GetDashboardSummary(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "id")
+
+	if ok := h.ensureProject(w, projectID); !ok {
+		return
+	}
+
+	dashboard, err := h.store.ComputeDashboardSummary(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to compute dashboard summary")
+		return
+	}
+	writeSuccess(w, http.StatusOK, dashboard, nil)
+}
+
 func (h *SummaryHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 
-	project, err := h.projectStore.GetByID(projectID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to verify project")
-		return
-	}
-	if project == nil {
-		writeError(w, http.StatusNotFound, "project not found")
+	if ok := h.ensureProject(w, projectID); !ok {
 		return
 	}
 
@@ -60,4 +59,17 @@ func (h *SummaryHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeSuccess(w, http.StatusOK, history, nil)
+}
+
+func (h *SummaryHandler) ensureProject(w http.ResponseWriter, projectID string) bool {
+	project, err := h.projectStore.GetByID(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to verify project")
+		return false
+	}
+	if project == nil {
+		writeError(w, http.StatusNotFound, "project not found")
+		return false
+	}
+	return true
 }

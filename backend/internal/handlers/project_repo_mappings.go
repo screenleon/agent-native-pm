@@ -1,8 +1,8 @@
 package handlers
 
 import (
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -163,6 +163,45 @@ func (h *ProjectRepoMappingHandler) Create(w http.ResponseWriter, r *http.Reques
 	}
 
 	writeSuccess(w, http.StatusCreated, mapping, nil)
+}
+
+func (h *ProjectRepoMappingHandler) Update(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	existing, err := h.store.GetByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check repo mapping")
+		return
+	}
+	if existing == nil {
+		writeError(w, http.StatusNotFound, "repo mapping not found")
+		return
+	}
+	if !requestAllowsProject(r, existing.ProjectID) {
+		writeError(w, http.StatusForbidden, "api key not allowed for this project")
+		return
+	}
+
+	var req models.UpdateProjectRepoMappingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.DefaultBranch != nil {
+		trimmed := strings.TrimSpace(*req.DefaultBranch)
+		req.DefaultBranch = &trimmed
+	}
+
+	mapping, err := h.store.Update(id, req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update repo mapping")
+		return
+	}
+	if mapping == nil {
+		writeError(w, http.StatusNotFound, "repo mapping not found")
+		return
+	}
+
+	writeSuccess(w, http.StatusOK, mapping, nil)
 }
 
 func (h *ProjectRepoMappingHandler) Delete(w http.ResponseWriter, r *http.Request) {

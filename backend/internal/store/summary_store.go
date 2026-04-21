@@ -9,13 +9,23 @@ import (
 )
 
 type SummaryStore struct {
-	db            *sql.DB
-	taskStore     *TaskStore
-	documentStore *DocumentStore
+	db               *sql.DB
+	taskStore        *TaskStore
+	documentStore    *DocumentStore
+	syncRunStore     *SyncRunStore
+	driftSignalStore *DriftSignalStore
+	agentRunStore    *AgentRunStore
 }
 
-func NewSummaryStore(db *sql.DB, ts *TaskStore, ds *DocumentStore) *SummaryStore {
-	return &SummaryStore{db: db, taskStore: ts, documentStore: ds}
+func NewSummaryStore(db *sql.DB, ts *TaskStore, ds *DocumentStore, srs *SyncRunStore, drs *DriftSignalStore, ars *AgentRunStore) *SummaryStore {
+	return &SummaryStore{
+		db:               db,
+		taskStore:        ts,
+		documentStore:    ds,
+		syncRunStore:     srs,
+		driftSignalStore: drs,
+		agentRunStore:    ars,
+	}
 }
 
 func (s *SummaryStore) ComputeSummary(projectID string) (*models.ProjectSummary, error) {
@@ -50,6 +60,58 @@ func (s *SummaryStore) ComputeSummary(projectID string) (*models.ProjectSummary,
 	}
 
 	return summary, nil
+}
+
+func (s *SummaryStore) ComputeCurrentSummary(projectID string) (*models.ProjectSummary, error) {
+	summary, err := s.ComputeSummary(projectID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.SaveDailySnapshot(summary); err != nil {
+		return nil, err
+	}
+	return summary, nil
+}
+
+func (s *SummaryStore) ComputeDashboardSummary(projectID string) (*models.DashboardSummary, error) {
+	summary, err := s.ComputeCurrentSummary(projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	dashboard := &models.DashboardSummary{
+		ProjectID:       projectID,
+		Summary:         *summary,
+		LatestSyncRun:   nil,
+		OpenDriftCount:  0,
+		RecentAgentRuns: []models.AgentRun{},
+	}
+
+	if s.syncRunStore != nil {
+		latestSyncRun, err := s.syncRunStore.GetLatestByProject(projectID)
+		if err != nil {
+			return nil, err
+		}
+		dashboard.LatestSyncRun = latestSyncRun
+	}
+
+	if s.driftSignalStore != nil {
+		openDriftCount, err := s.driftSignalStore.CountOpenByProject(projectID)
+		if err != nil {
+			return nil, err
+		}
+		dashboard.OpenDriftCount = openDriftCount
+	}
+
+	if s.agentRunStore != nil {
+		recentAgentRuns, err := s.agentRunStore.ListRecentByProject(projectID, 5)
+		if err != nil {
+			return nil, err
+		}
+		dashboard.RecentAgentRuns = recentAgentRuns
+	}
+
+	return dashboard, nil
 }
 
 func (s *SummaryStore) SaveSnapshot(summary *models.ProjectSummary) error {

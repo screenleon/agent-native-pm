@@ -32,6 +32,32 @@ type UpdateTaskRequest struct {
 	Assignee    *string `json:"assignee,omitempty"`
 }
 
+type BatchUpdateTaskChanges struct {
+	Status   *string `json:"status,omitempty"`
+	Priority *string `json:"priority,omitempty"`
+	Assignee *string `json:"assignee,omitempty"`
+}
+
+func (c BatchUpdateTaskChanges) HasChanges() bool {
+	return c.Status != nil || c.Priority != nil || c.Assignee != nil
+}
+
+type BatchUpdateTaskRequest struct {
+	TaskIDs []string               `json:"task_ids"`
+	Changes BatchUpdateTaskChanges `json:"changes"`
+}
+
+type BatchUpdateTaskResponse struct {
+	UpdatedCount int    `json:"updated_count"`
+	Tasks        []Task `json:"tasks"`
+}
+
+type TaskListFilters struct {
+	Status   string
+	Priority string
+	Assignee string
+}
+
 var ValidTaskStatuses = map[string]bool{
 	"todo":        true,
 	"in_progress": true,

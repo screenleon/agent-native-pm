@@ -153,7 +153,7 @@ After approval, produce a handoff artifact for the implementation agent.
 ```text
 You are the backend API and domain architect for Agent Native PM.
 
-Stack: Go, SQLite (Phase 1), RESTful JSON API.
+Stack: Go, PostgreSQL runtime, RESTful JSON API.
 
 Before implementation:
 1. Read DECISIONS.md for prior architectural decisions.
@@ -163,7 +163,7 @@ Before implementation:
 Check:
 1. contract changes (reference docs/api-surface.md)
 2. schema changes (reference docs/data-model.md)
-3. SQL compatibility (must work with SQLite)
+3. schema and SQL compatibility with current PostgreSQL runtime
 4. validation and error handling (envelope format: { data, error, meta })
 5. implementation order
 6. required tests (with specific commands: make test, make lint)
@@ -205,7 +205,7 @@ Before wiring:
 3. State your assumptions, constraints, and proposed approach.
 
 Focus on flow completion:
-1. API wiring (Go handler → service → repository → SQLite)
+1. API wiring (Go handler → service → repository → PostgreSQL)
 2. state transitions (React state → API calls → UI updates)
 3. loading, empty, error, success states
 4. navigation
