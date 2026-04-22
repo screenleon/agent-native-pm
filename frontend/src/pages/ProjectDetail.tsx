@@ -567,6 +567,11 @@ function ProjectDetail() {
               onRequirementsChange={setRequirements}
               onNavigateToTasks={() => setTab('tasks')}
               onNavigateToDrift={() => setTab('drift')}
+              onViewDocumentById={(documentId) => {
+                const doc = documents.find(d => d.id === documentId)
+                if (doc) handleViewDoc(doc)
+              }}
+              onViewDriftSignal={() => setTab('drift')}
             />
           )}
 

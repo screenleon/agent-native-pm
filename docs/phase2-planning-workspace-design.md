@@ -293,7 +293,7 @@ Items explicitly not part of Phase 2 (tracked elsewhere):
 | Slice | Status | PR | Merged |
 |---|---|---|---|
 | S1 — structural split | merged | PR #5 | ✓ |
-| S2 — attention row | in review | PR #6 | — |
-| S3 — evidence links | not started | — | — |
+| S2 — attention row | merged | PR #6 | ✓ |
+| S3 — evidence links | in review | PR #7 | — |
 | S4 — applied lineage | not started | — | — |
 | S5 — rename + polish | not started | — | — |

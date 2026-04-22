@@ -49,6 +49,19 @@ interface CandidateReviewPanelProps {
   onPersistReview: (nextStatus?: 'draft' | 'approved' | 'rejected') => void
   onApplyCandidate: () => void
   onResetCandidateForm: () => void
+
+  /**
+   * Optional evidence-link callbacks. When provided, the matching
+   * evidence row becomes a clickable affordance:
+   *   - onViewDocumentById → opens the existing document-preview modal
+   *     (wired upstream in ProjectDetail.handleViewDoc).
+   *   - onViewDriftSignal → navigates to the Drift tab. Preselecting the
+   *     signal inside Drift is a post-Phase-2 enhancement.
+   * When undefined, the rows render as plain text (no regression for
+   * callers that have not opted in yet).
+   */
+  onViewDocumentById?: (documentId: string) => void
+  onViewDriftSignal?: (driftSignalId: string) => void
 }
 
 /**
@@ -80,6 +93,8 @@ export function CandidateReviewPanel({
   onPersistReview,
   onApplyCandidate,
   onResetCandidateForm,
+  onViewDocumentById,
+  onViewDriftSignal,
 }: CandidateReviewPanelProps) {
   const providerLabel = makeProviderLabeler(providerOptions)
   const modelLabel = makeModelLabeler(providerOptions)
@@ -288,14 +303,30 @@ export function CandidateReviewPanel({
                         <div>
                           <strong style={{ display: 'block', marginBottom: '0.35rem' }}>Documents</strong>
                           <div style={{ display: 'grid', gap: '0.5rem' }}>
-                            {selectedCandidate.evidence_detail.documents.map(document => (
-                              <div key={document.document_id || `${document.title}-${document.file_path}`} className="planning-run-meta" style={{ display: 'grid', gap: '0.2rem' }}>
-                                <span>{document.title || document.file_path}</span>
-                                <span>{document.doc_type || 'general'}{document.is_stale ? ` • stale ${document.staleness_days}d` : ''}</span>
-                                {document.matched_keywords.length > 0 && <span>Matched keywords: {document.matched_keywords.join(', ')}</span>}
-                                {document.contribution_reasons.map((reason, idx) => <span key={`${reason}-${idx}`}>{reason}</span>)}
-                              </div>
-                            ))}
+                            {selectedCandidate.evidence_detail.documents.map(document => {
+                              const heading = document.title || document.file_path
+                              const canOpen = Boolean(onViewDocumentById && document.document_id)
+                              return (
+                                <div key={document.document_id || `${document.title}-${document.file_path}`} className="planning-run-meta" style={{ display: 'grid', gap: '0.2rem' }}>
+                                  {canOpen ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-link"
+                                      onClick={() => onViewDocumentById!(document.document_id!)}
+                                      style={{ alignSelf: 'start', padding: 0, background: 'none', border: 'none', color: 'var(--link, #60a5fa)', textDecoration: 'underline', cursor: 'pointer', textAlign: 'left' }}
+                                      aria-label={`Open document preview for ${heading}`}
+                                    >
+                                      {heading}
+                                    </button>
+                                  ) : (
+                                    <span>{heading}</span>
+                                  )}
+                                  <span>{document.doc_type || 'general'}{document.is_stale ? ` • stale ${document.staleness_days}d` : ''}</span>
+                                  {document.matched_keywords.length > 0 && <span>Matched keywords: {document.matched_keywords.join(', ')}</span>}
+                                  {document.contribution_reasons.map((reason, idx) => <span key={`${reason}-${idx}`}>{reason}</span>)}
+                                </div>
+                              )
+                            })}
                           </div>
                         </div>
                       )}
@@ -304,13 +335,29 @@ export function CandidateReviewPanel({
                         <div>
                           <strong style={{ display: 'block', marginBottom: '0.35rem' }}>Drift signals</strong>
                           <div style={{ display: 'grid', gap: '0.5rem' }}>
-                            {selectedCandidate.evidence_detail.drift_signals.map(signal => (
-                              <div key={signal.drift_signal_id} className="planning-run-meta" style={{ display: 'grid', gap: '0.2rem' }}>
-                                <span>{signal.document_title || signal.trigger_detail || signal.trigger_type}</span>
-                                <span>Severity {signal.severity} • {signal.trigger_type}</span>
-                                {signal.contribution_reasons.map((reason, idx) => <span key={`${reason}-${idx}`}>{reason}</span>)}
-                              </div>
-                            ))}
+                            {selectedCandidate.evidence_detail.drift_signals.map(signal => {
+                              const heading = signal.document_title || signal.trigger_detail || signal.trigger_type
+                              const canOpen = Boolean(onViewDriftSignal)
+                              return (
+                                <div key={signal.drift_signal_id} className="planning-run-meta" style={{ display: 'grid', gap: '0.2rem' }}>
+                                  {canOpen ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-link"
+                                      onClick={() => onViewDriftSignal!(signal.drift_signal_id)}
+                                      style={{ alignSelf: 'start', padding: 0, background: 'none', border: 'none', color: 'var(--link, #60a5fa)', textDecoration: 'underline', cursor: 'pointer', textAlign: 'left' }}
+                                      aria-label={`Jump to drift signal ${heading}`}
+                                    >
+                                      {heading}
+                                    </button>
+                                  ) : (
+                                    <span>{heading}</span>
+                                  )}
+                                  <span>Severity {signal.severity} • {signal.trigger_type}</span>
+                                  {signal.contribution_reasons.map((reason, idx) => <span key={`${reason}-${idx}`}>{reason}</span>)}
+                                </div>
+                              )
+                            })}
                           </div>
                         </div>
                       )}
