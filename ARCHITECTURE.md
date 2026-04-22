@@ -164,11 +164,14 @@ This preserves a single JSON API surface for both humans and agents.
 - Planning foundation now exists at the data and API layer via requirement intake and traceability tables
 - Planning Workspace shell is now live inside `ProjectDetail`, with requirement intake, requirement queue, and a reserved planning-run slot
 - Planning run orchestration records and draft candidate persistence are now live for selected requirements, each run emits a correlated internal `agent_runs` audit entry, candidate review happens in-place, and approved candidates now materialize into traceable tasks through candidate-scoped apply
-- Local connector registration now exists as a separate control-plane module for future subscription-first execution, but planning-run dispatch to connectors is not implemented yet
+- Local connector registration exists as a separate control-plane module. Planning-run dispatch is live end-to-end: `LeaseNextLocalConnectorRun` in `planning_run_store.go` picks the oldest queued run for the connector's owning user, `ClaimNextRun` returns it plus a sanitized `context.v1` payload (`handlers/local_connectors.go`), and `SubmitPlanningRunResult` finalises the run and fans out a notification through the SSE broker. Server-side provider runs (OpenAI-compatible) and connector-dispatched runs now share the same terminal-state notification path.
+- Two runtime modes are supported from the same binary: **local mode** (SQLite at `$REPO_ROOT/.anpm/data.db`, auto-detected when `DATABASE_URL` is unset and a `.git` directory is found, derives a stable port in `[3100, 3999]`, auth bypassed via `InjectLocalAdmin`) and **server mode** (`DATABASE_URL` set, full auth, multi-user). See the 2026-04-22 Dual-runtime-mode decision for the driver-parity constraint.
+- Real-time UI updates use Server-Sent Events via an in-process fan-out broker (`backend/internal/events`). `GET /api/notifications/stream` uses `text/event-stream` + `http.Flusher`; `EventSource` clients pass session tokens via `?token=`. 20 s polling + `anpm:refresh-notifications` window event remain as a fallback.
+- Distribution: `goreleaser` builds `server` and `anpm` binaries for linux/darwin/windows × amd64/arm64. A pre-build hook runs `npm run build` and copies `frontend/dist` into `backend/internal/frontend/dist`, where `//go:embed all:dist` bakes the SPA into the Go binary for single-binary installs. Docker Compose remains the server-mode deployment path.
 
 ## Near-Term Architectural Direction
 
-The next architectural expansion is not another infrastructure tier. It is the UI and orchestration layer on top of the planning domain foundation and existing context sources:
+With v1.post shipped, the next architectural focus is the **Planning Workspace UX consolidation** — joining up the pieces that now exist but are still surfaced piecemeal across tabs:
 
 - dashboard summary
 - open tasks
@@ -176,7 +179,10 @@ The next architectural expansion is not another infrastructure tier. It is the U
 - sync status and sync runs
 - drift signals
 - recent agent activity
+- planning runs (requirement → run → candidates → applied tasks)
 
-That Planning Workspace should remain draft-first, traceable, and human-approved before creating tasks.
+That Planning Workspace must remain draft-first, traceable, and human-approved before creating tasks. Structural rule from the 2026-04-22 Tier-3 decision: new product additions to `ProjectDetail` MUST land as siblings under `frontend/src/pages/ProjectDetail/` rather than appending to the existing function.
+
+Deferred work not on the near-term path: subscription CLI bridge (needs client-side architecture design), SSE-broker horizontal scaling (triggers only on multi-instance deployment), further `DECISIONS.md` archival (remaining entries are still load-bearing).
 
 Source: `[agent:documentation-architect]`, `[agent:backend-architect]`

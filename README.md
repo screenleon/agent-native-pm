@@ -16,24 +16,51 @@ This is **not** a general-purpose Jira/Plane replacement. It is a focused tool t
 | Component | Technology |
 |-----------|-----------|
 | Backend API | Go |
-| Frontend | React + Vite (static build) |
-| Database | PostgreSQL |
-| Deployment | Docker Compose |
+| Frontend | React + Vite (static build, embedded into the Go binary) |
+| Runtime DB | SQLite (local mode) · PostgreSQL (server mode) |
+| Distribution | Single `anpm` / `server` binary via goreleaser · Docker Compose for server mode |
 | Documentation | Markdown in repo |
 
-## Quick start
+## Install & run
+
+The project ships two runtime modes that share one schema and one codebase:
+
+- **Local mode** — `anpm serve` inside any git repo. SQLite at `$REPO_ROOT/.anpm/data.db`, no login, port derived from the repo path. Best for single-operator / developer-laptop use.
+- **Server mode** — `docker compose up` (or the standalone `server` binary with `DATABASE_URL` set). PostgreSQL, full auth, multi-user, multi-project.
+
+### Local mode (quick start)
+
+From inside any git repo:
 
 ```bash
-# Clone
+# Option A: run straight from this source tree
+cd agent-native-pm
+make serve             # auto-builds backend + frontend if stale, then starts
+
+# Option B: use the installed CLI (after goreleaser install or local build)
+make build-anpm        # produces ./bin/anpm
+cd /path/to/your/project   # any git repo
+/path/to/agent-native-pm/bin/anpm serve
+```
+
+`anpm serve` auto-detects the git root, creates `.anpm/data.db` there, picks a stable port in `[3100, 3999]` based on the repo path, and opens the SPA at `http://localhost:<port>`. Run `anpm status` from the same repo to check whether a server is already listening, or `anpm version` for the build tag.
+
+Setting `DATABASE_URL` in the environment skips local mode and falls through to server mode.
+
+### Server mode (Docker Compose)
+
+```bash
 git clone <repo-url>
 cd agent-native-pm
-
-# Build and run
 docker compose up --build
-
-# Open
 # http://localhost:18765
 ```
+
+Server mode runs PostgreSQL alongside the Go binary and enables the full session-auth / multi-user / multi-project surface. Use this when multiple operators share one deployment or when you need full-text search over Postgres `tsvector`.
+
+### Real-time updates
+
+Notifications and planning-run state changes stream over Server-Sent Events at `GET /api/notifications/stream` (`text/event-stream`, session token via `?token=` since `EventSource` cannot set custom headers). The frontend falls back to 20 s polling + the `anpm:refresh-notifications` window event when `EventSource` is unavailable or the connection drops.
 
 ## Central model settings
 
@@ -192,28 +219,38 @@ Source: `[agent:documentation-architect]`
 
 ```text
 agent-native-pm/
-├── backend/          # Go API server (planned — Phase 1 implementation)
-│   ├── cmd/          # Entry points
-│   ├── internal/     # Core modules
-│   │   ├── projects/
-│   │   ├── tasks/
-│   │   ├── documents/
-│   │   ├── sync/
-│   │   ├── agent_runs/
-│   │   ├── summaries/
-│   │   └── drift/
-│   └── db/           # SQLite migrations
-├── frontend/         # React + Vite (planned — Phase 1 implementation)
+├── backend/                    # Go API server
+│   ├── cmd/
+│   │   ├── server/             # HTTP server entry point
+│   │   ├── anpm/               # CLI: serve / status / version
+│   │   └── connector/          # Local connector daemon
+│   ├── db/                     # SQL migrations (both SQLite + PostgreSQL)
+│   └── internal/
+│       ├── config/             # Config + workspace auto-detection for local mode
+│       ├── database/           # Driver dispatch + migrations
+│       ├── events/             # In-process SSE broker
+│       ├── frontend/           # //go:embed target for SPA (populated at build)
+│       ├── handlers/           # HTTP handlers (projects, tasks, drift, planning, etc.)
+│       ├── middleware/         # Session / API-key / InjectLocalAdmin
+│       ├── planning/           # Planning orchestrator + wire DTO (context.v1)
+│       ├── store/              # Data access (dialect-aware)
+│       └── router/             # Chi router wiring
+├── frontend/                   # React + Vite SPA
 │   ├── src/
-│   │   ├── pages/
-│   │   ├── components/
-│   │   └── api/
-│   └── dist/         # Built static assets
-├── docs/             # Product and agent documentation
-├── project/          # Project-local agent constraints
-├── rules/            # Layered agent rules
-├── .claude/agents/   # Claude subagent definitions
-└── .github/          # Copilot instructions
+│   │   ├── pages/              # Top-level routes (ProjectDetail, ProjectList, Dashboard, …)
+│   │   ├── components/         # Tab/panel components extracted from ProjectDetail
+│   │   ├── utils/              # formatters, syncGuidance, …
+│   │   ├── api/                # API client
+│   │   └── test/               # vitest setup
+│   └── dist/                   # Built static assets (copied into backend/internal/frontend/dist before go build)
+├── adapters/                   # Reference exec-json adapters (backlog_adapter.py)
+├── docs/                       # Product / agent / data-model documentation
+├── project/                    # Project-local agent manifest
+├── rules/                      # Layered agent rules (global, domain)
+├── scripts/                    # serve.sh, governance lints, test-with-postgres
+├── .claude/agents/             # Claude subagent definitions
+├── .goreleaser.yml             # Multi-OS / arch release config
+└── Makefile                    # Build / test / lint / governance entry points
 ```
 
 ## Agent workflow
@@ -222,6 +259,19 @@ Start with `AGENTS.md`. It routes you to the correct docs and rules.
 
 For implementation tasks, follow:
 1. Discover → 2. Triage → 3. Plan (if Medium/Large) → 4. Implement → 5. Validate → 6. Record decisions
+
+## Governance checks
+
+| Command | What it does |
+|---|---|
+| `make lint-rules` | Rule-ID uniqueness, stability field, supersession chain integrity |
+| `make lint-docs` | Prompt-budget wording / doc consistency |
+| `make validate-prompt-budget` | Schema check of `prompt-budget.yml` |
+| `make budget-report` | Per-layer token estimate vs the targets in `prompt-budget.yml` |
+| `make decisions-conflict-check TEXT="..."` | Overlap check against `DECISIONS.md` before a new plan |
+| `make lint-governance` | Runs rule-lint + doc-lint + budget validator together |
+| `make test-frontend` | vitest suite (unit + component smoke) |
+| `make test` | Full Go test suite against PostgreSQL (starts a temp container) |
 
 ## Phase roadmap
 
