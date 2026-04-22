@@ -12,15 +12,17 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/screenleon/agent-native-pm/internal/database"
 	"github.com/screenleon/agent-native-pm/internal/models"
 )
 
 type LocalConnectorStore struct {
-	db *sql.DB
+	db      *sql.DB
+	dialect database.Dialect
 }
 
-func NewLocalConnectorStore(db *sql.DB) *LocalConnectorStore {
-	return &LocalConnectorStore{db: db}
+func NewLocalConnectorStore(db *sql.DB, dialect database.Dialect) *LocalConnectorStore {
+	return &LocalConnectorStore{db: db, dialect: dialect}
 }
 
 func (s *LocalConnectorStore) ListByUser(userID string) ([]models.LocalConnector, error) {
@@ -106,12 +108,19 @@ func (s *LocalConnectorStore) ClaimPairingSession(req models.PairLocalConnectorR
 	defer tx.Rollback()
 
 	var session models.ConnectorPairingSession
-	err = tx.QueryRow(`
+	claimQuery := `
 		SELECT id, user_id, label, status, expires_at, COALESCE(connector_id, ''), created_at, updated_at
 		FROM connector_pairing_sessions
-		WHERE pairing_code_hash = $1 AND status = $2 AND expires_at > NOW()
-		FOR UPDATE
-	`, hashSecret(code), models.ConnectorPairingStatusPending).Scan(
+		WHERE pairing_code_hash = $1 AND status = $2 AND expires_at > CURRENT_TIMESTAMP
+		FOR UPDATE`
+	if s.dialect.IsSQLite() {
+		// SQLite serialises writes natively; FOR UPDATE is unsupported syntax.
+		claimQuery = `
+		SELECT id, user_id, label, status, expires_at, COALESCE(connector_id, ''), created_at, updated_at
+		FROM connector_pairing_sessions
+		WHERE pairing_code_hash = $1 AND status = $2 AND expires_at > CURRENT_TIMESTAMP`
+	}
+	err = tx.QueryRow(claimQuery, hashSecret(code), models.ConnectorPairingStatusPending).Scan(
 		&session.ID, &session.UserID, &session.Label, &session.Status, &session.ExpiresAt,
 		&session.ConnectorID, &session.CreatedAt, &session.UpdatedAt,
 	)
@@ -205,7 +214,7 @@ func (s *LocalConnectorStore) HeartbeatByToken(token string, req models.LocalCon
 func (s *LocalConnectorStore) Revoke(id, userID string) error {
 	result, err := s.db.Exec(`
 		UPDATE local_connectors
-		SET status = $1, updated_at = NOW()
+		SET status = $1, updated_at = CURRENT_TIMESTAMP
 		WHERE id = $2 AND user_id = $3 AND status <> $1
 	`, models.LocalConnectorStatusRevoked, id, userID)
 	if err != nil {
@@ -249,7 +258,22 @@ func (s *LocalConnectorStore) GetByToken(token string) (*models.LocalConnector, 
 const LocalConnectorLivenessWindow = 90 * time.Second
 
 func (s *LocalConnectorStore) GetFirstUsableByUser(userID string) (*models.LocalConnector, error) {
-	row := s.db.QueryRow(`
+	seconds := fmt.Sprintf("%d", int(LocalConnectorLivenessWindow.Seconds()))
+	var query string
+	if s.dialect.IsSQLite() {
+		// SQLite date arithmetic: subtract seconds using datetime modifier.
+		query = `
+		SELECT id, user_id, label, platform, client_version, status, capabilities,
+		       last_seen_at, last_error, created_at, updated_at
+		FROM local_connectors
+		WHERE user_id = $1
+		  AND status = $2
+		  AND last_seen_at IS NOT NULL
+		  AND last_seen_at >= datetime('now', '-' || $3 || ' seconds')
+		ORDER BY last_seen_at DESC, created_at DESC
+		LIMIT 1`
+	} else {
+		query = `
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
 		       last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
@@ -258,8 +282,9 @@ func (s *LocalConnectorStore) GetFirstUsableByUser(userID string) (*models.Local
 		  AND last_seen_at IS NOT NULL
 		  AND last_seen_at >= NOW() - ($3 || ' seconds')::interval
 		ORDER BY last_seen_at DESC NULLS LAST, created_at DESC
-		LIMIT 1
-	`, userID, models.LocalConnectorStatusOnline, fmt.Sprintf("%d", int(LocalConnectorLivenessWindow.Seconds())))
+		LIMIT 1`
+	}
+	row := s.db.QueryRow(query, userID, models.LocalConnectorStatusOnline, seconds)
 	return scanOneLocalConnector(row)
 }
 

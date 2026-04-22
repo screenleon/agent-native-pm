@@ -29,7 +29,7 @@ func deactivateOtherActiveBindings(exec sqlExecutor, userID, providerID, keepID 
 	query := `
 		UPDATE account_bindings
 		SET is_active = FALSE,
-		    updated_at = NOW()
+		    updated_at = CURRENT_TIMESTAMP
 		WHERE user_id = $1 AND provider_id = $2 AND is_active = TRUE
 	`
 	args := []interface{}{userID, providerID}

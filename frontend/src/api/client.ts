@@ -32,6 +32,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<ApiRespo
   return json;
 }
 
+export async function getMeta() {
+  return request<{ local_mode: boolean; project_id: string; project_name: string; port: string }>('/meta');
+}
+
 export async function checkNeedsSetup() {
   return request<{ needs_setup: boolean }>('/auth/needs-setup');
 }

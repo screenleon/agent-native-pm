@@ -6,7 +6,10 @@
 *.dylib
 /backend/agent-native-pm
 /backend/server
+/backend/anpm
+/backend/bin/
 /bin/server
+/bin/anpm
 
 # Go
 /vendor/
@@ -61,3 +64,10 @@ prompt-budget.local.yml
 # Test coverage
 coverage.out
 coverage.html
+
+# anpm local data
+.anpm/
+
+# Embedded frontend assets (populated by serve.sh / Makefile before go build)
+/backend/internal/frontend/dist/*
+!/backend/internal/frontend/dist/.gitkeep

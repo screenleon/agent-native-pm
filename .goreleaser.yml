@@ -1,0 +1,77 @@
+version: 2
+
+project_name: anpm
+
+# Build the frontend and stage it for embedding before compiling Go binaries.
+before:
+  hooks:
+    - cmd: bash -c "cd frontend && npm ci --silent && npm run build --silent"
+      dir: "{{ .Env.PWD }}"
+    - cmd: bash -c "rm -rf backend/internal/frontend/dist && cp -r frontend/dist backend/internal/frontend/dist"
+      dir: "{{ .Env.PWD }}"
+
+builds:
+  # Main server binary
+  - id: server
+    binary: server
+    main: ./cmd/server
+    dir: backend
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+  # anpm CLI binary
+  - id: anpm
+    binary: anpm
+    main: ./cmd/anpm
+    dir: backend
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.Version={{ .Version }}
+
+archives:
+  - id: anpm-release
+    ids: [anpm, server]
+    name_template: "anpm_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - src: scripts/serve.sh
+        dst: serve.sh
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: screenleon
+    name: agent-native-pm
+  draft: true
+  name_template: "v{{ .Version }}"

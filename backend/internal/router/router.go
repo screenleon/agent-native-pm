@@ -1,6 +1,7 @@
 package router
 
 import (
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/screenleon/agent-native-pm/internal/frontend"
 	"github.com/screenleon/agent-native-pm/internal/handlers"
 	"github.com/screenleon/agent-native-pm/internal/middleware"
 )
@@ -34,9 +36,14 @@ type Deps struct {
 	NotificationHandler       *handlers.NotificationHandler
 	SearchHandler             *handlers.SearchHandler
 	AdapterModelsHandler      *handlers.AdapterModelsHandler
+	MetaHandler               *handlers.MetaHandler
+	HealthHandler             *handlers.HealthHandler
 	AuthMiddleware            func(http.Handler) http.Handler
 	APIKeyMiddleware          func(http.Handler) http.Handler
-	FrontendDir               string
+	// LocalModeMiddleware, when non-nil, is applied before AuthMiddleware
+	// to inject a synthetic admin user on every request (local mode).
+	LocalModeMiddleware func(http.Handler) http.Handler
+	FrontendDir         string
 	// CORSAllowedOrigins is the explicit origin allowlist. When nil/empty
 	// the router falls back to safe localhost defaults so existing tests
 	// keep working without configuration plumbing.
@@ -53,6 +60,11 @@ func New(deps Deps) http.Handler {
 	r.Use(chimiddleware.RealIP)
 	r.Use(cors.Handler(buildCORSOptions(deps.CORSAllowedOrigins)))
 
+	// Local mode: inject synthetic admin before normal auth middlewares.
+	if deps.LocalModeMiddleware != nil {
+		r.Use(deps.LocalModeMiddleware)
+	}
+
 	// Inject auth identity (session + API key) on every request
 	if deps.AuthMiddleware != nil {
 		r.Use(deps.AuthMiddleware)
@@ -63,7 +75,14 @@ func New(deps Deps) http.Handler {
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
-		r.Get("/health", handlers.HealthCheck)
+		if deps.HealthHandler != nil {
+			r.Get("/health", deps.HealthHandler.Check)
+		} else {
+			r.Get("/health", handlers.HealthCheck)
+		}
+		if deps.MetaHandler != nil {
+			r.Get("/meta", deps.MetaHandler.Get)
+		}
 		if deps.AdapterModelsHandler != nil {
 			r.Get("/adapter-models", deps.AdapterModelsHandler.Get)
 		}
@@ -199,6 +218,7 @@ func New(deps Deps) http.Handler {
 				r.Patch("/notifications/{id}/unread", deps.NotificationHandler.MarkUnread)
 				r.Post("/notifications/read-all", deps.NotificationHandler.MarkAllRead)
 				r.Get("/notifications/unread-count", deps.NotificationHandler.UnreadCount)
+				r.Get("/notifications/stream", deps.NotificationHandler.Stream)
 			}
 			if deps.SearchHandler != nil {
 				r.Get("/search", deps.SearchHandler.Search)
@@ -206,8 +226,12 @@ func New(deps Deps) http.Handler {
 		})
 	})
 
-	// Serve frontend static files
-	if deps.FrontendDir != "" {
+	// Serve frontend static files: prefer embedded assets, fall back to disk.
+	if frontend.HasAssets() {
+		if sub, err := frontend.Sub(); err == nil {
+			serveSPAEmbedded(r, sub)
+		}
+	} else if deps.FrontendDir != "" {
 		serveSPA(r, deps.FrontendDir)
 	}
 
@@ -280,5 +304,21 @@ func serveSPA(r chi.Router, dir string) {
 
 		// Fall back to index.html for SPA routing
 		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
+	})
+}
+
+// serveSPAEmbedded serves the React SPA from an embedded fs.FS.
+func serveSPAEmbedded(r chi.Router, assets fs.FS) {
+	fileServer := http.FileServer(http.FS(assets))
+
+	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
+		path := strings.TrimPrefix(req.URL.Path, "/")
+		if f, err := assets.Open(path); err == nil {
+			f.Close()
+			fileServer.ServeHTTP(w, req)
+			return
+		}
+		// Fall back to index.html for SPA client-side routing.
+		http.ServeFileFS(w, req, assets, "index.html")
 	})
 }

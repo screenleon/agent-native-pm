@@ -5,15 +5,23 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/screenleon/agent-native-pm/internal/events"
 	"github.com/screenleon/agent-native-pm/internal/models"
 )
 
 type NotificationStore struct {
-	db *sql.DB
+	db     *sql.DB
+	broker *events.Broker
 }
 
 func NewNotificationStore(db *sql.DB) *NotificationStore {
 	return &NotificationStore{db: db}
+}
+
+// SetBroker attaches an event broker so that new notifications are pushed
+// immediately to any open SSE connections for the target user.
+func (s *NotificationStore) SetBroker(b *events.Broker) {
+	s.broker = b
 }
 
 func (s *NotificationStore) Create(req models.CreateNotificationRequest) (*models.Notification, error) {
@@ -26,7 +34,18 @@ func (s *NotificationStore) Create(req models.CreateNotificationRequest) (*model
 	if err != nil {
 		return nil, err
 	}
-	return s.GetByID(id)
+	note, err := s.GetByID(id)
+	if err != nil || note == nil {
+		return note, err
+	}
+	if s.broker != nil {
+		count, _ := s.CountUnread(req.UserID)
+		s.broker.Publish(req.UserID, events.Event{
+			Type: "unread-count",
+			Data: map[string]int{"unread": count},
+		})
+	}
+	return note, nil
 }
 
 func (s *NotificationStore) GetByID(id string) (*models.Notification, error) {

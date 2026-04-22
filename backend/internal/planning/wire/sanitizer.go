@@ -8,10 +8,9 @@ import (
 // Redaction placeholder.
 const redactedPlaceholder = "[REDACTED]"
 
-// Redaction patterns for sanitizer v1. These expressions match secret
-// shapes anywhere in the input string. See docs/local-connector-context.md
-// §7 for rationale. Bare hex sequences (commit SHAs, generic digests) are
-// deliberately NOT in this set.
+// Prefix-anchored redaction patterns for sanitizer v1. See
+// docs/local-connector-context.md §7 for rationale. Bare hex sequences
+// (commit SHAs, generic digests) are deliberately NOT in this set.
 var sanitizerPatterns = []*regexp.Regexp{
 	// OpenAI-style API keys.
 	regexp.MustCompile(`(?i)sk-[A-Za-z0-9]{20,}`),

@@ -10,11 +10,12 @@ import ModelSettings from './pages/ModelSettings'
 import AccountBindings from './pages/AccountBindings'
 import MyConnector from './pages/MyConnector'
 import type { User, Notification, SearchResult } from './types'
-import { getMe, logout, getUnreadCount, listNotifications, markNotificationRead, markNotificationUnread, markAllNotificationsRead, search, checkNeedsSetup } from './api/client'
+import { getMe, getMeta, logout, getUnreadCount, listNotifications, markNotificationRead, markNotificationUnread, markAllNotificationsRead, search, checkNeedsSetup } from './api/client'
 import type { SearchFilters } from './api/client'
 
 function App() {
   const navigate = useNavigate()
+  const [localMode, setLocalMode] = useState<{ projectId: string; projectName: string } | null>(null)
   const [token, setToken] = useState<string>(() => localStorage.getItem('anpm_token') || '')
   const [me, setMe] = useState<User | null>(null)
   const [checkingAuth, setCheckingAuth] = useState(true)
@@ -35,6 +36,18 @@ function App() {
   useEffect(() => {
     let mounted = true
     async function bootstrap() {
+      // Fast-path: detect local mode before any auth checks.
+      try {
+        const metaResp = await getMeta()
+        if (mounted && metaResp.data.local_mode && metaResp.data.project_id) {
+          setLocalMode({ projectId: metaResp.data.project_id, projectName: metaResp.data.project_name })
+          setCheckingAuth(false)
+          return
+        }
+      } catch {
+        // Server not in local mode — proceed with normal auth.
+      }
+
       // Always check setup state first (fast, public endpoint)
       try {
         const setupResp = await checkNeedsSetup()
@@ -79,24 +92,54 @@ function App() {
   }, [token])
 
   // Keep the notification bell badge accurate without forcing a page reload.
-  // Polls every 20 s while the user is signed in, and triggers an immediate
-  // refresh whenever another part of the app fires the `anpm:refresh-notifications`
-  // event (e.g. ProjectDetail when a planning run reaches a terminal state).
+  // Tries SSE first (/api/notifications/stream); falls back to 20s polling
+  // if SSE is unavailable or errors. Also refreshes immediately on
+  // visibilitychange and the anpm:refresh-notifications custom event.
   useEffect(() => {
     if (!token || !me) return
     let cancelled = false
+    let pollInterval: ReturnType<typeof window.setInterval> | null = null
+    let es: EventSource | null = null
+
     async function refreshUnread() {
       try {
         const resp = await getUnreadCount()
-        if (!cancelled) {
-          setUnreadCount((resp.data as { unread?: number }).unread ?? 0)
-        }
+        if (!cancelled) setUnreadCount((resp.data as { unread?: number }).unread ?? 0)
       } catch {
         // best-effort; keep last known count
       }
     }
-    refreshUnread()
-    const interval = window.setInterval(refreshUnread, 20000)
+
+    function startPolling() {
+      if (pollInterval !== null) return
+      refreshUnread()
+      pollInterval = window.setInterval(refreshUnread, 20000)
+    }
+
+    function connectSSE() {
+      const streamURL = `/api/notifications/stream?token=${encodeURIComponent(token)}`
+      es = new EventSource(streamURL)
+      es.addEventListener('unread-count', (e: MessageEvent) => {
+        if (cancelled) return
+        try {
+          const data = JSON.parse(e.data) as { unread?: number }
+          setUnreadCount(data.unread ?? 0)
+        } catch { /* malformed — ignore */ }
+      })
+      es.onerror = () => {
+        es?.close()
+        es = null
+        // SSE failed; degrade gracefully to polling
+        if (!cancelled) startPolling()
+      }
+    }
+
+    if (typeof EventSource !== 'undefined') {
+      connectSSE()
+    } else {
+      startPolling()
+    }
+
     const onVisibility = () => {
       if (document.visibilityState === 'visible') refreshUnread()
     }
@@ -105,7 +148,8 @@ function App() {
     window.addEventListener('anpm:refresh-notifications', onCustomRefresh)
     return () => {
       cancelled = true
-      window.clearInterval(interval)
+      es?.close()
+      if (pollInterval !== null) window.clearInterval(pollInterval)
       document.removeEventListener('visibilitychange', onVisibility)
       window.removeEventListener('anpm:refresh-notifications', onCustomRefresh)
     }
@@ -208,6 +252,27 @@ function App() {
   }
 
   if (checkingAuth) return <div className="loading">Loading…</div>
+
+  if (localMode) {
+    return (
+      <>
+        <header className="header">
+          <div className="container header-inner">
+            <div className="header-brand">
+              <h1 style={{ color: 'inherit' }}>{localMode.projectName}</h1>
+              <span className="badge badge-low" style={{ fontSize: '0.75rem' }}>local</span>
+            </div>
+          </div>
+        </header>
+        <main className="container">
+          <Routes>
+            <Route path="/projects/:id" element={<ProjectDetail />} />
+            <Route path="*" element={<Navigate to={`/projects/${localMode.projectId}`} replace />} />
+          </Routes>
+        </main>
+      </>
+    )
+  }
 
   if (needsSetup) {
     return (

@@ -24,12 +24,20 @@ type Config struct {
 	// Setting it to "*" disables credentialed CORS (cookies/Authorization)
 	// because browsers reject the wildcard + credentials combination.
 	CORSAllowedOrigins []string
+
+	// LocalMode is true when the server auto-detected a git repo and is
+	// operating in single-project, no-auth mode backed by SQLite.
+	LocalMode        bool
+	LocalRepoRoot    string
+	LocalProjectName string
+	// AnpmDir is the .anpm/ directory for the current workspace (local mode only).
+	AnpmDir string
 }
 
 func Load() *Config {
-	return &Config{
+	cfg := &Config{
 		Port:                     getEnv("PORT", "18765"),
-		DatabaseURL:              getEnv("DATABASE_URL", "postgres://anpm:anpm@localhost:5432/anpm?sslmode=disable"),
+		DatabaseURL:              getEnv("DATABASE_URL", ""),
 		FrontendDir:              getEnv("FRONTEND_DIR", "./frontend/dist"),
 		StaleDaysThreshold:       getEnvInt("STALE_DAYS_THRESHOLD", 30),
 		RepoRoot:                 getEnv("REPO_ROOT", "/app/data/repos"),
@@ -55,6 +63,25 @@ func Load() *Config {
 			"http://127.0.0.1:18765",
 		}),
 	}
+
+	// If DATABASE_URL is not explicitly set, try workspace auto-detection.
+	if cfg.DatabaseURL == "" {
+		if ws, err := FindWorkspace(); err == nil {
+			cfg.LocalMode = true
+			cfg.DatabaseURL = "sqlite://" + ws.DataDB
+			cfg.LocalRepoRoot = ws.RepoRoot
+			cfg.LocalProjectName = ws.ProjectName
+			cfg.AnpmDir = ws.AnpmDir
+			if os.Getenv("PORT") == "" {
+				cfg.Port = strconv.Itoa(ws.Port)
+			}
+		} else {
+			// No git repo found; fall back to PostgreSQL default.
+			cfg.DatabaseURL = "postgres://anpm:anpm@localhost:5432/anpm?sslmode=disable"
+		}
+	}
+
+	return cfg
 }
 
 func getEnv(key, fallback string) string {

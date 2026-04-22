@@ -61,6 +61,20 @@ func APIKeyAuth(apiKeyStore *store.APIKeyStore) func(http.Handler) http.Handler 
 	}
 }
 
+// InjectLocalAdmin injects a synthetic admin user on every request.
+// Used in local mode to bypass the normal authentication flow.
+func InjectLocalAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), contextKeyUser, &models.User{
+			ID:       "local-admin",
+			Username: "local",
+			Role:     "admin",
+			IsActive: true,
+		})
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // RequireAPIKey returns 401 if no validated API key is in context.
 func RequireAPIKey(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
