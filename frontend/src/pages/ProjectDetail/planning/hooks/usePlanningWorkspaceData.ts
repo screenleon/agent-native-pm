@@ -85,16 +85,15 @@ export function usePlanningWorkspaceData({
   const [cancellingPlanningRunId, setCancellingPlanningRunId] = useState<string | null>(null)
   const [planningRunFlash, setPlanningRunFlash] = useState<{ runId: string; kind: 'success' | 'error'; message: string } | null>(null)
 
-  // pendingSelection holds a triple the operator asked us to select *after*
-  // the async load chain catches up. The AppliedLineage lane uses it: when
-  // the operator clicks a lineage row we set { requirementId, runId,
-  // candidateId }, switch the requirement, and let the three auto-select
-  // effects consume the remaining fields as runs / candidates load in.
+  // pendingSelection holds the run + candidate pair the operator asked us
+  // to select *after* the async load chain catches up. The requirement tier
+  // is not part of the pending triple because handleSelectLineage sets
+  // selectedRequirementId synchronously — only runs and candidates need the
+  // pending-handoff because they load asynchronously from the requirement.
   //
   // Each field is cleared as soon as it has been applied, so subsequent
   // organic user clicks aren't overridden by stale intent.
   const [pendingSelection, setPendingSelection] = useState<{
-    requirementId?: string
     runId?: string
     candidateId?: string
   }>({})
@@ -385,7 +384,7 @@ export function usePlanningWorkspaceData({
    */
   function handleSelectLineage(requirementId: string, runId?: string, candidateId?: string) {
     if (!confirmDiscardCandidateEdits()) return
-    setPendingSelection({ requirementId, runId, candidateId })
+    setPendingSelection({ runId, candidateId })
     // Switching requirement triggers loadPlanningRuns via effect; the
     // auto-select effects then consume runId / candidateId.
     if (requirementId !== selectedRequirementId) {
