@@ -296,4 +296,6 @@ Items explicitly not part of Phase 2 (tracked elsewhere):
 | S2 — attention row | merged | PR #6 | ✓ |
 | S3 — evidence links | merged | PR #7 | ✓ |
 | S4 — applied lineage | merged | PR #8 | ✓ |
-| S5 — rename + polish | in review | PR #10 | — |
+| S5 — rename + polish | merged | PR #10 | ✓ |
+
+**Phase 2 complete** as of 2026-04-22. All five slices shipped. Post-PR ADR `2026-04-22: Planning Workspace is the per-project primary surface` in `DECISIONS.md` ratifies the final shape. This document is retained as a historical reference; future Workspace work is tracked as Phase 3+ items.
