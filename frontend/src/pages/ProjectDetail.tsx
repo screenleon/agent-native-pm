@@ -559,11 +559,14 @@ function ProjectDetail() {
               projectId={id!}
               requirements={requirements}
               tasks={tasks}
+              openDriftCount={openDriftCount}
               planningLoadError={planningLoadError}
               onReload={loadData}
               onError={setError}
               onSuccess={setSuccessMessage}
               onRequirementsChange={setRequirements}
+              onNavigateToTasks={() => setTab('tasks')}
+              onNavigateToDrift={() => setTab('drift')}
             />
           )}
 

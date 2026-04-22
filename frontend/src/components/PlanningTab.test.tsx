@@ -44,11 +44,14 @@ function makeRequirement(overrides: Partial<Requirement> = {}): Requirement {
 const baseProps = {
   projectId: 'p1',
   tasks: [],
+  openDriftCount: 0,
   planningLoadError: null as string | null,
   onReload: vi.fn().mockResolvedValue(undefined),
   onError: vi.fn(),
   onSuccess: vi.fn(),
   onRequirementsChange: vi.fn(),
+  onNavigateToTasks: vi.fn(),
+  onNavigateToDrift: vi.fn(),
 }
 
 function renderPlanningTab(props: React.ComponentProps<typeof PlanningTab>) {
