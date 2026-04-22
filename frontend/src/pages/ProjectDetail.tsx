@@ -47,7 +47,12 @@ function ProjectDetail() {
   const [syncRuns, setSyncRuns] = useState<SyncRun[]>([])
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([])
   const [driftSignals, setDriftSignals] = useState<DriftSignal[]>([])
-  const [tab, setTab] = useState<Tab>('overview')
+  // Per Phase 2 S5 / design-decision D1: the Planning Workspace is the
+  // per-project default landing surface (the operator's "what needs my
+  // review?" surface). Overview remains at its tab index for read-only
+  // status browsing. Tab-index values are unchanged so deep links like
+  // `?tab=overview` still resolve as before.
+  const [tab, setTab] = useState<Tab>('planning')
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -517,7 +522,7 @@ function ProjectDetail() {
             <span>Overview</span>
           </button>
           <button className={tab === 'planning' ? 'is-active' : ''} onClick={() => setTab('planning')}>
-            <span>Planning</span>
+            <span>Workspace</span>
             <span className="rail-count">{requirements.length}</span>
           </button>
           <button className={tab === 'tasks' ? 'is-active' : ''} onClick={() => setTab('tasks')}>

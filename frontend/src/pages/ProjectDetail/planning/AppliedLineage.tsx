@@ -13,11 +13,31 @@ interface AppliedLineageProps {
    * only requires that a change in value means "reload me".
    */
   reloadSignal: string | number
-  onJumpToRequirement: (requirementId: string) => void
+  /**
+   * Cross-tier deep-link. Called with (requirementId, runId?, candidateId?)
+   * when the operator clicks a segment of the chain. The workspace's
+   * pending-selection state machine then selects the requirement,
+   * auto-selects the run after runs load, and auto-selects the candidate
+   * after candidates load. Passing only requirementId is also supported
+   * (requirement-level jump).
+   */
+  onSelectLineage: (requirementId: string, runId?: string, candidateId?: string) => void
   onJumpToTasks: () => void
 }
 
 type LoadState = 'idle' | 'loading' | 'error' | 'ready'
+
+// Shared link style for every clickable segment in the lineage chain.
+// Extracted because four segments share it; inline duplication would drift.
+const lineageLinkStyle: React.CSSProperties = {
+  padding: 0,
+  background: 'none',
+  border: 'none',
+  color: 'var(--link, #60a5fa)',
+  textDecoration: 'underline',
+  cursor: 'pointer',
+  fontSize: '0.9rem',
+}
 
 /**
  * Applied-task lineage lane (Phase 2 slice S4).
@@ -42,7 +62,7 @@ type LoadState = 'idle' | 'loading' | 'error' | 'ready'
 export function AppliedLineage({
   projectId,
   reloadSignal,
-  onJumpToRequirement,
+  onSelectLineage,
   onJumpToTasks,
 }: AppliedLineageProps) {
   const [entries, setEntries] = useState<AppliedLineageEntry[]>([])
@@ -112,17 +132,9 @@ export function AppliedLineage({
                   <button
                     type="button"
                     className="applied-lineage-link"
-                    onClick={() => onJumpToRequirement(entry.requirement_id!)}
+                    onClick={() => onSelectLineage(entry.requirement_id!)}
                     aria-label={`Open requirement ${entry.requirement_title || entry.requirement_id}`}
-                    style={{
-                      padding: 0,
-                      background: 'none',
-                      border: 'none',
-                      color: 'var(--link, #60a5fa)',
-                      textDecoration: 'underline',
-                      cursor: 'pointer',
-                      fontSize: '0.9rem',
-                    }}
+                    style={lineageLinkStyle}
                   >
                     {entry.requirement_title || `Requirement ${entry.requirement_id}`}
                   </button>
@@ -130,28 +142,48 @@ export function AppliedLineage({
                   <span style={{ color: 'var(--text-muted)' }}>(no requirement)</span>
                 )}
                 <span style={{ color: 'var(--text-muted)' }}>→</span>
-                <span className="badge badge-low" title={entry.planning_run_id || 'no run'}>
-                  run {entry.planning_run_status || '—'}
-                </span>
+                {entry.requirement_id && entry.planning_run_id ? (
+                  <button
+                    type="button"
+                    className="applied-lineage-link applied-lineage-link-run"
+                    onClick={() => onSelectLineage(entry.requirement_id!, entry.planning_run_id!)}
+                    aria-label={`Open planning run ${entry.planning_run_id}`}
+                    title={entry.planning_run_id}
+                    style={{ ...lineageLinkStyle, textDecoration: 'none' }}
+                  >
+                    <span className="badge badge-low">
+                      run {entry.planning_run_status || '—'}
+                    </span>
+                  </button>
+                ) : (
+                  <span className="badge badge-low" title={entry.planning_run_id || 'no run'}>
+                    run {entry.planning_run_status || '—'}
+                  </span>
+                )}
                 <span style={{ color: 'var(--text-muted)' }}>→</span>
-                <span title={entry.backlog_candidate_id || 'no candidate'}>
-                  {entry.backlog_candidate_title || '(unnamed candidate)'}
-                </span>
+                {entry.requirement_id && entry.planning_run_id && entry.backlog_candidate_id ? (
+                  <button
+                    type="button"
+                    className="applied-lineage-link"
+                    onClick={() => onSelectLineage(entry.requirement_id!, entry.planning_run_id!, entry.backlog_candidate_id!)}
+                    aria-label={`Open candidate ${entry.backlog_candidate_title || entry.backlog_candidate_id}`}
+                    title={entry.backlog_candidate_id}
+                    style={lineageLinkStyle}
+                  >
+                    {entry.backlog_candidate_title || '(unnamed candidate)'}
+                  </button>
+                ) : (
+                  <span title={entry.backlog_candidate_id || 'no candidate'}>
+                    {entry.backlog_candidate_title || '(unnamed candidate)'}
+                  </span>
+                )}
                 <span style={{ color: 'var(--text-muted)' }}>→</span>
                 <button
                   type="button"
                   className="applied-lineage-link"
                   onClick={onJumpToTasks}
                   aria-label={`Open task ${entry.task_title}`}
-                  style={{
-                    padding: 0,
-                    background: 'none',
-                    border: 'none',
-                    color: 'var(--link, #60a5fa)',
-                    textDecoration: 'underline',
-                    cursor: 'pointer',
-                    fontSize: '0.9rem',
-                  }}
+                  style={lineageLinkStyle}
                 >
                   {entry.task_title}
                 </button>
