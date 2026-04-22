@@ -7,6 +7,7 @@ interface RequirementQueueProps {
   selectedRequirementId: string | null
   onSelectRequirement: (id: string) => void
   planningLoadError: string | null
+  onArchiveRequirement?: (id: string) => Promise<void>
 }
 
 /**
@@ -14,12 +15,16 @@ interface RequirementQueueProps {
  * the project. Clicking a card selects it; the selected requirement drives
  * the downstream PlanningLauncher + PlanningRunList + CandidateReviewPanel
  * surfaces.
+ *
+ * Archive button closes out requirements that are planned or no longer needed,
+ * keeping the queue focused on active work.
  */
 export function RequirementQueue({
   requirements,
   selectedRequirementId,
   onSelectRequirement,
   planningLoadError,
+  onArchiveRequirement,
 }: RequirementQueueProps) {
   const draftCount = requirements.filter(r => r.status === 'draft').length
   const plannedCount = requirements.filter(r => r.status === 'planned').length
@@ -51,23 +56,51 @@ export function RequirementQueue({
       ) : (
         <div className="requirement-list">
           {requirements.map(requirement => (
-            <button
+            <div
               key={requirement.id}
-              type="button"
-              className={`requirement-card ${selectedRequirementId === requirement.id ? 'is-active' : ''}`}
-              onClick={() => onSelectRequirement(requirement.id)}
+              style={{ position: 'relative' }}
             >
-              <div className="requirement-card-top">
-                <strong>{requirement.title}</strong>
-                <span className={`badge ${requirementStatusBadgeClass(requirement.status)}`}>{requirement.status}</span>
-              </div>
-              {requirement.summary && <p>{requirement.summary}</p>}
-              {requirement.description && <div className="requirement-description">{requirement.description}</div>}
-              <div className="requirement-meta">
-                <span>{requirement.source}</span>
-                <span>Updated {formatRelativeTime(requirement.updated_at)}</span>
-              </div>
-            </button>
+              <button
+                type="button"
+                className={`requirement-card ${selectedRequirementId === requirement.id ? 'is-active' : ''}`}
+                onClick={() => onSelectRequirement(requirement.id)}
+                style={{ width: '100%', paddingRight: requirement.status !== 'archived' && onArchiveRequirement ? '3.5rem' : undefined }}
+              >
+                <div className="requirement-card-top">
+                  <strong>{requirement.title}</strong>
+                  <span className={`badge ${requirementStatusBadgeClass(requirement.status)}`}>{requirement.status}</span>
+                </div>
+                {requirement.summary && <p>{requirement.summary}</p>}
+                {requirement.description && <div className="requirement-description">{requirement.description}</div>}
+                <div className="requirement-meta">
+                  <span>{requirement.source}</span>
+                  <span>Updated {formatRelativeTime(requirement.updated_at)}</span>
+                </div>
+              </button>
+
+              {requirement.status !== 'archived' && onArchiveRequirement && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  title="Archive this requirement"
+                  onClick={e => {
+                    e.stopPropagation()
+                    onArchiveRequirement(requirement.id)
+                  }}
+                  style={{
+                    position: 'absolute',
+                    top: '0.5rem',
+                    right: '0.5rem',
+                    padding: '0.2rem 0.45rem',
+                    fontSize: '0.75rem',
+                    color: 'var(--text-muted)',
+                    opacity: 0.7,
+                  }}
+                >
+                  Archive
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}

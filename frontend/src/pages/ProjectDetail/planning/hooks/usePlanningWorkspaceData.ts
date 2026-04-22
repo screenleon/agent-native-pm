@@ -10,6 +10,7 @@ import type {
 } from '../../../../types'
 import {
   createRequirement,
+  updateRequirement,
   getPlanningProviderOptions,
   listPlanningRuns,
   createPlanningRun,
@@ -437,6 +438,17 @@ export function usePlanningWorkspaceData({
     }
   }
 
+  async function handleArchiveRequirement(id: string) {
+    try {
+      const response = await updateRequirement(id, { status: 'archived' })
+      onRequirementsChange(requirements.map(r => r.id === id ? response.data : r))
+      if (selectedRequirementId === id) setSelectedRequirementId(null)
+      onSuccess('Requirement archived.')
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to archive requirement')
+    }
+  }
+
   async function handleCreatePlanningRun() {
     if (!selectedRequirement || !planningRunReady) return
     try {
@@ -651,6 +663,7 @@ export function usePlanningWorkspaceData({
     onToggleRequirementIntake: () => setShowRequirementIntake(prev => !prev),
     onResetRequirementForm: () => setRequirementForm({ title: '', summary: '', description: '', source: 'human' }),
     onCreateRequirement: handleCreateRequirement,
+    onArchiveRequirement: handleArchiveRequirement,
     // run flash
     planningRunFlash,
     onDismissRunFlash: () => setPlanningRunFlash(null),

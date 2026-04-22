@@ -78,4 +78,64 @@ describe('<RequirementQueue />', () => {
     await userEvent.click(screen.getByRole('button', { name: /Improve sync failure UX/i }))
     expect(onSelectRequirement).toHaveBeenCalledWith('r1')
   })
+
+  it('does not show Archive button when onArchiveRequirement is not provided', () => {
+    render(
+      <RequirementQueue
+        requirements={[makeRequirement({ id: 'r1', status: 'draft' })]}
+        selectedRequirementId={null}
+        onSelectRequirement={() => {}}
+        planningLoadError={null}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument()
+  })
+
+  it('shows Archive button for draft and planned requirements when onArchiveRequirement is provided', () => {
+    render(
+      <RequirementQueue
+        requirements={[
+          makeRequirement({ id: 'r1', title: 'Draft req', status: 'draft' }),
+          makeRequirement({ id: 'r2', title: 'Planned req', status: 'planned' }),
+          makeRequirement({ id: 'r3', title: 'Archived req', status: 'archived' }),
+        ]}
+        selectedRequirementId={null}
+        onSelectRequirement={() => {}}
+        planningLoadError={null}
+        onArchiveRequirement={vi.fn()}
+      />,
+    )
+    const archiveButtons = screen.getAllByRole('button', { name: 'Archive' })
+    expect(archiveButtons).toHaveLength(2)
+  })
+
+  it('does not show Archive button for already-archived requirements', () => {
+    render(
+      <RequirementQueue
+        requirements={[makeRequirement({ id: 'r1', status: 'archived' })]}
+        selectedRequirementId={null}
+        onSelectRequirement={() => {}}
+        planningLoadError={null}
+        onArchiveRequirement={vi.fn()}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument()
+  })
+
+  it('calls onArchiveRequirement with the requirement id without triggering onSelectRequirement', async () => {
+    const onArchive = vi.fn()
+    const onSelect = vi.fn()
+    render(
+      <RequirementQueue
+        requirements={[makeRequirement({ id: 'r1', status: 'draft' })]}
+        selectedRequirementId={null}
+        onSelectRequirement={onSelect}
+        planningLoadError={null}
+        onArchiveRequirement={onArchive}
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Archive' }))
+    expect(onArchive).toHaveBeenCalledWith('r1')
+    expect(onSelect).not.toHaveBeenCalled()
+  })
 })
