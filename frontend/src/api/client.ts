@@ -260,6 +260,26 @@ export async function getPlanningRun(id: string) {
   return request<PlanningRun>(`/planning-runs/${encodeURIComponent(id)}`);
 }
 
+export interface AppliedLineageEntry {
+  lineage_id: string;
+  project_id: string;
+  task_id: string;
+  task_title: string;
+  task_status: string;
+  requirement_id?: string;
+  requirement_title?: string;
+  planning_run_id?: string;
+  planning_run_status?: string;
+  backlog_candidate_id?: string;
+  backlog_candidate_title?: string;
+  lineage_kind: string;
+  created_at: string;
+}
+
+export async function listProjectTaskLineage(projectId: string) {
+  return request<AppliedLineageEntry[]>(`/projects/${encodeURIComponent(projectId)}/task-lineage`);
+}
+
 export async function cancelPlanningRun(id: string) {
   return request<PlanningRun>(`/planning-runs/${encodeURIComponent(id)}/cancel`, {
     method: 'POST',

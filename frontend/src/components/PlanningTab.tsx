@@ -6,6 +6,7 @@ import { RequirementQueue } from '../pages/ProjectDetail/planning/RequirementQue
 import { PlanningLauncher } from '../pages/ProjectDetail/planning/PlanningLauncher'
 import { PlanningRunList } from '../pages/ProjectDetail/planning/PlanningRunList'
 import { CandidateReviewPanel } from '../pages/ProjectDetail/planning/CandidateReviewPanel'
+import { AppliedLineage } from '../pages/ProjectDetail/planning/AppliedLineage'
 import { usePlanningWorkspaceData } from '../pages/ProjectDetail/planning/hooks/usePlanningWorkspaceData'
 
 const APPLIED_TASK_SOURCE = 'agent:planning-orchestrator'
@@ -62,6 +63,16 @@ export function PlanningTab({
     onSuccess,
     onRequirementsChange,
   })
+
+  // Derive a reload signal from the fields of every task that actually
+  // affect the lineage lane (id + status + updated_at). tasks.length
+  // alone would miss status/title edits — e.g. an operator marking an
+  // applied task "done" would leave the lane showing "in progress"
+  // until the next page refresh. This signal changes on any mutation
+  // that matters for the lane's rendering.
+  const lineageReloadSignal = tasks
+    .map(t => `${t.id}:${t.status}:${t.updated_at}`)
+    .join('|')
 
   const requirementsAwaitingPlanning = requirements.filter(r => r.status === 'draft').length
   const candidatesAwaitingReview = ws.planningCandidates.filter(
@@ -200,6 +211,16 @@ export function PlanningTab({
               onResetCandidateForm={ws.onResetCandidateForm}
               onViewDocumentById={onViewDocumentById}
               onViewDriftSignal={onViewDriftSignal}
+            />
+
+            <AppliedLineage
+              projectId={projectId}
+              reloadSignal={lineageReloadSignal}
+              onJumpToRequirement={(requirementId) => {
+                ws.onSelectRequirement(requirementId)
+                jumpToRequirements()
+              }}
+              onJumpToTasks={onNavigateToTasks}
             />
           </div>
         ) : (

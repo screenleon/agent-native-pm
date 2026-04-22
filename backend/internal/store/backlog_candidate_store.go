@@ -550,6 +550,84 @@ func scanTaskLineage(row rowScanner) (*models.TaskLineage, error) {
 	return &lineage, nil
 }
 
+// ListAppliedLineageByProject returns denormalised applied-candidate
+// lineage rows for a project, joined with requirement / planning_run /
+// backlog_candidate / task titles. The Planning Workspace
+// applied-lineage lane consumes this to render the
+// requirement → run → candidate → task chain without N extra API calls.
+//
+// FK semantics from migration 009 determine the join types:
+//   - task_lineage.task_id: ON DELETE CASCADE (lineage row dies with the
+//     task, so INNER JOIN would normally be safe) — we still use LEFT JOIN
+//     + COALESCE defensively so a future FK change or a stray NULL never
+//     makes a lineage row disappear silently from the lane.
+//   - requirement_id / planning_run_id / backlog_candidate_id:
+//     ON DELETE SET NULL — the lineage row survives with NULL refs, so
+//     LEFT JOIN + COALESCE is required to keep it visible with graceful
+//     fallbacks.
+//
+// Only entries with lineage_kind = 'applied_candidate' are returned —
+// manual / merged kinds are out of scope for the planning lane.
+// Results are ordered by created_at DESC, id DESC.
+func (s *BacklogCandidateStore) ListAppliedLineageByProject(projectID string) ([]models.AppliedLineageEntry, error) {
+	const query = `
+		SELECT
+			tl.id,
+			tl.project_id,
+			tl.task_id,
+			COALESCE(t.title, ''),
+			COALESCE(t.status, ''),
+			COALESCE(tl.requirement_id, ''),
+			COALESCE(r.title, ''),
+			COALESCE(tl.planning_run_id, ''),
+			COALESCE(pr.status, ''),
+			COALESCE(tl.backlog_candidate_id, ''),
+			COALESCE(bc.title, ''),
+			tl.lineage_kind,
+			tl.created_at
+		FROM task_lineage tl
+		LEFT JOIN tasks t ON t.id = tl.task_id
+		LEFT JOIN requirements r ON r.id = tl.requirement_id
+		LEFT JOIN planning_runs pr ON pr.id = tl.planning_run_id
+		LEFT JOIN backlog_candidates bc ON bc.id = tl.backlog_candidate_id
+		WHERE tl.project_id = $1
+		  AND tl.lineage_kind = $2
+		ORDER BY tl.created_at DESC, tl.id DESC
+	`
+	rows, err := s.db.Query(query, projectID, models.TaskLineageKindAppliedCandidate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]models.AppliedLineageEntry, 0)
+	for rows.Next() {
+		var e models.AppliedLineageEntry
+		if err := rows.Scan(
+			&e.LineageID,
+			&e.ProjectID,
+			&e.TaskID,
+			&e.TaskTitle,
+			&e.TaskStatus,
+			&e.RequirementID,
+			&e.RequirementTitle,
+			&e.PlanningRunID,
+			&e.PlanningRunStatus,
+			&e.BacklogCandidateID,
+			&e.BacklogCandidateTitle,
+			&e.LineageKind,
+			&e.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func getTaskLineageByCandidateID(tx *sql.Tx, candidateID string) (*models.TaskLineage, error) {
 	return scanTaskLineage(
 		tx.QueryRow(`
