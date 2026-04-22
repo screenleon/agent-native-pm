@@ -157,6 +157,35 @@ func (h *PlanningRunHandler) ProviderOptions(w http.ResponseWriter, r *http.Requ
 	writeSuccess(w, http.StatusOK, decorated, nil)
 }
 
+// ListAppliedLineage GET /api/projects/:id/task-lineage
+// Returns denormalised task_lineage entries (lineage_kind='applied_candidate')
+// for the project, each joined with the task / requirement / planning_run /
+// backlog_candidate titles. Powers the Planning Workspace applied-lineage
+// lane (S4) without forcing the client to make N extra API calls per row.
+func (h *PlanningRunHandler) ListAppliedLineage(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "id")
+	project, err := h.projectStore.GetByID(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to verify project")
+		return
+	}
+	if project == nil {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if !requestAllowsProject(r, project.ID) {
+		writeError(w, http.StatusForbidden, "api key not allowed for this project")
+		return
+	}
+
+	entries, err := h.candidateStore.ListAppliedLineageByProject(project.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list task lineage")
+		return
+	}
+	writeSuccess(w, http.StatusOK, entries, nil)
+}
+
 func (h *PlanningRunHandler) resolvePlanner(r *http.Request) planning.DraftPlanner {
 	if h.plannerFactory == nil {
 		return h.planner

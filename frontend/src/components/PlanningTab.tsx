@@ -6,6 +6,7 @@ import { RequirementQueue } from '../pages/ProjectDetail/planning/RequirementQue
 import { PlanningLauncher } from '../pages/ProjectDetail/planning/PlanningLauncher'
 import { PlanningRunList } from '../pages/ProjectDetail/planning/PlanningRunList'
 import { CandidateReviewPanel } from '../pages/ProjectDetail/planning/CandidateReviewPanel'
+import { AppliedLineage } from '../pages/ProjectDetail/planning/AppliedLineage'
 import { usePlanningWorkspaceData } from '../pages/ProjectDetail/planning/hooks/usePlanningWorkspaceData'
 
 const APPLIED_TASK_SOURCE = 'agent:planning-orchestrator'
@@ -62,6 +63,12 @@ export function PlanningTab({
     onSuccess,
     onRequirementsChange,
   })
+
+  // Use tasks.length as a reload signal for AppliedLineage: any task list
+  // change (new task from candidate apply, status update, deletion) forces
+  // the lane to refetch. The server endpoint is cheap (single joined query)
+  // so extra fetches on unrelated task changes are acceptable.
+  const lineageReloadSignal = tasks.length
 
   const requirementsAwaitingPlanning = requirements.filter(r => r.status === 'draft').length
   const candidatesAwaitingReview = ws.planningCandidates.filter(
@@ -200,6 +207,16 @@ export function PlanningTab({
               onResetCandidateForm={ws.onResetCandidateForm}
               onViewDocumentById={onViewDocumentById}
               onViewDriftSignal={onViewDriftSignal}
+            />
+
+            <AppliedLineage
+              projectId={projectId}
+              reloadSignal={lineageReloadSignal}
+              onJumpToRequirement={(requirementId) => {
+                ws.onSelectRequirement(requirementId)
+                jumpToRequirements()
+              }}
+              onJumpToTasks={onNavigateToTasks}
             />
           </div>
         ) : (

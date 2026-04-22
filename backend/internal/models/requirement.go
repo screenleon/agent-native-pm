@@ -302,3 +302,24 @@ type ApplyBacklogCandidateResponse struct {
 	Lineage        TaskLineage      `json:"lineage"`
 	AlreadyApplied bool             `json:"already_applied"`
 }
+
+// AppliedLineageEntry denormalises task_lineage rows with the headings the
+// Planning Workspace applied-lineage lane needs to render the
+// requirement → run → candidate → task chain. Populated by
+// BacklogCandidateStore.ListAppliedLineageByProject and exposed via
+// GET /api/projects/:id/task-lineage.
+type AppliedLineageEntry struct {
+	LineageID            string    `json:"lineage_id"`
+	ProjectID            string    `json:"project_id"`
+	TaskID               string    `json:"task_id"`
+	TaskTitle            string    `json:"task_title"`
+	TaskStatus           string    `json:"task_status"`
+	RequirementID        string    `json:"requirement_id,omitempty"`
+	RequirementTitle     string    `json:"requirement_title,omitempty"`
+	PlanningRunID        string    `json:"planning_run_id,omitempty"`
+	PlanningRunStatus    string    `json:"planning_run_status,omitempty"`
+	BacklogCandidateID   string    `json:"backlog_candidate_id,omitempty"`
+	BacklogCandidateTitle string   `json:"backlog_candidate_title,omitempty"`
+	LineageKind          string    `json:"lineage_kind"`
+	CreatedAt            time.Time `json:"created_at"`
+}
