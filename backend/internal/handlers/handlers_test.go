@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/screenleon/agent-native-pm/internal/database"
 	"github.com/screenleon/agent-native-pm/internal/handlers"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/router"
@@ -32,8 +31,8 @@ func setupTestServer(t *testing.T) http.Handler {
 
 	ps := store.NewProjectStore(db)
 	rs := store.NewRequirementStore(db)
-	prs := store.NewPlanningRunStore(db, database.NewDialect("postgres://test"))
-	bcs := store.NewBacklogCandidateStore(db)
+	prs := store.NewPlanningRunStore(db, testutil.TestDialect())
+	bcs := store.NewBacklogCandidateStore(db, testutil.TestDialect())
 	ts := store.NewTaskStore(db)
 	ds := store.NewDocumentStore(db)
 	srs := store.NewSyncRunStore(db)
@@ -892,8 +891,8 @@ func TestPlanningRunValidationAndConflict(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	ps := store.NewProjectStore(db)
 	rs := store.NewRequirementStore(db)
-	prs := store.NewPlanningRunStore(db, database.NewDialect("postgres://test"))
-	bcs := store.NewBacklogCandidateStore(db)
+	prs := store.NewPlanningRunStore(db, testutil.TestDialect())
+	bcs := store.NewBacklogCandidateStore(db, testutil.TestDialect())
 	ts := store.NewTaskStore(db)
 	ds := store.NewDocumentStore(db)
 	srs := store.NewSyncRunStore(db)

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/screenleon/agent-native-pm/internal/database"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/testutil"
 )
@@ -23,7 +22,7 @@ func setupPlanningRunStore(t *testing.T) (*PlanningRunStore, *RequirementStore, 
 	db := testutil.OpenTestDB(t)
 	projectStore := NewProjectStore(db)
 	requirementStore := NewRequirementStore(db)
-	planningRunStore := NewPlanningRunStore(db, database.NewDialect("postgres://test"))
+	planningRunStore := NewPlanningRunStore(db, testutil.TestDialect())
 
 	project, err := projectStore.Create(models.CreateProjectRequest{Name: "Planning Run Project"})
 	if err != nil {
@@ -191,9 +190,9 @@ func TestPlanningRunStoreLocalConnectorLifecycle(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	projectStore := NewProjectStore(db)
 	requirementStore := NewRequirementStore(db)
-	planningRunStore := NewPlanningRunStore(db, database.NewDialect("postgres://test"))
+	planningRunStore := NewPlanningRunStore(db, testutil.TestDialect())
 	userStore := NewUserStore(db)
-	connectorStore := NewLocalConnectorStore(db, database.NewDialect("postgres://test"))
+	connectorStore := NewLocalConnectorStore(db, testutil.TestDialect())
 
 	project, err := projectStore.Create(models.CreateProjectRequest{Name: "Connector Planning Project"})
 	if err != nil {

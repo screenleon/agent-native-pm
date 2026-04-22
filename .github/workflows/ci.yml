@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governance:
+    name: Governance lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run lint-governance
+        run: make lint-governance
+
+  frontend:
+    name: Frontend (vitest + eslint + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Tests
+        run: npm test
+      - name: Build
+        run: npm run build
+
+  backend-sqlite:
+    name: Backend (SQLite driver)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: go vet
+        run: go vet ./...
+        working-directory: backend
+      - name: Tests against SQLite
+        run: bash scripts/test-with-sqlite.sh
+
+  backend-postgres:
+    name: Backend (PostgreSQL driver)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: anpm
+          POSTGRES_PASSWORD: anpm
+          POSTGRES_DB: anpm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U anpm -d anpm"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TEST_DATABASE_URL: postgres://anpm:anpm@localhost:5432/anpm?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Wait for PostgreSQL to be ready
+        run: |
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5432 -U anpm >/dev/null 2>&1; then
+              echo "postgres ready"; exit 0
+            fi
+            sleep 1
+          done
+          echo "postgres never became ready"; exit 1
+      - name: Tests against PostgreSQL
+        run: go test ./... -count=1
+        working-directory: backend

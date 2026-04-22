@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -71,11 +72,21 @@ func (s *AgentRunStore) CreateOrGetByIdempotency(projectID string, req models.Cr
 }
 
 func isAgentRunIdempotencyConstraintError(err error) bool {
-	var pqErr *pq.Error
-	if !errors.As(err, &pqErr) {
+	if err == nil {
 		return false
 	}
-	return string(pqErr.Code) == "23505" && pqErr.Constraint == agentRunIdempotencyConstraint
+	// Postgres path: pq.Error with SQLState 23505 + exact constraint name.
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return string(pqErr.Code) == "23505" && pqErr.Constraint == agentRunIdempotencyConstraint
+	}
+	// SQLite path: modernc.org/sqlite surfaces the column name inside the
+	// error text (e.g. "UNIQUE constraint failed: agent_runs.idempotency_key").
+	// The column has a UNIQUE index so collisions here map to the same
+	// semantic as the Postgres constraint.
+	msg := err.Error()
+	return strings.Contains(msg, "UNIQUE constraint failed") &&
+		strings.Contains(msg, "agent_runs.idempotency_key")
 }
 
 func (s *AgentRunStore) Update(id string, req models.UpdateAgentRunRequest) (*models.AgentRun, error) {

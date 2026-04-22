@@ -3,7 +3,6 @@ package store
 import (
 	"testing"
 
-	"github.com/screenleon/agent-native-pm/internal/database"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/testutil"
 )
@@ -21,7 +20,7 @@ func TestLocalConnectorStorePairHeartbeatAndRevoke(t *testing.T) {
 		t.Fatalf("create user: %v", err)
 	}
 
-	connectorStore := NewLocalConnectorStore(db, database.NewDialect("postgres://test"))
+	connectorStore := NewLocalConnectorStore(db, testutil.TestDialect())
 	pairing, err := connectorStore.CreatePairingSession(user.ID, models.CreateLocalConnectorPairingSessionRequest{Label: "My Laptop"})
 	if err != nil {
 		t.Fatalf("create pairing session: %v", err)
