@@ -197,6 +197,19 @@ describe('<CandidateReviewPanel />', () => {
     expect(screen.queryByRole('button', { name: /Open document preview/i })).not.toBeInTheDocument()
   })
 
+  it('shows "Suggested Backlog" header for regular planning runs', () => {
+    renderPanel({ selectedRun: makeRun() })
+    expect(screen.getByRole('heading', { name: /Suggested Backlog/i })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /Suggested Focus Areas/i })).not.toBeInTheDocument()
+  })
+
+  it('shows "Suggested Focus Areas" header when adapter_type is whatsnext', () => {
+    const whatsnextRun = { ...makeRun(), adapter_type: 'whatsnext' } as unknown as import('../../../types').PlanningRun
+    renderPanel({ selectedRun: whatsnextRun })
+    expect(screen.getByRole('heading', { name: /Suggested Focus Areas/i })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /Suggested Backlog/i })).not.toBeInTheDocument()
+  })
+
   it('fires onViewDriftSignal with the drift signal id when the drift evidence row is clicked', async () => {
     const onViewDriftSignal = vi.fn()
     const candidateWithDrift = makeCandidate({
