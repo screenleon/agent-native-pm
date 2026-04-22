@@ -18,6 +18,45 @@ export interface CandidateReviewForm {
   status: BacklogCandidate['status']
 }
 
+/**
+ * Shared inline-link affordance used by document + drift evidence rows.
+ * Centralised here because both evidence kinds need the same look and feel
+ * (underlined link-coloured text, left-aligned, button-element semantics
+ * for keyboard + screen-reader activation) and the inline styles were
+ * duplicated across both call sites before this extraction.
+ *
+ * The `ariaLabel` is required so blank headings cannot render a screen-
+ * reader-invisible link — callers must always supply a descriptive label.
+ */
+interface EvidenceLinkProps {
+  label: string
+  ariaLabel: string
+  onClick: () => void
+}
+
+function EvidenceLink({ label, ariaLabel, onClick }: EvidenceLinkProps) {
+  return (
+    <button
+      type="button"
+      className="evidence-link"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      style={{
+        alignSelf: 'start',
+        padding: 0,
+        background: 'none',
+        border: 'none',
+        color: 'var(--link, #60a5fa)',
+        textDecoration: 'underline',
+        cursor: 'pointer',
+        textAlign: 'left',
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
 interface CandidateReviewPanelProps {
   selectedRun: PlanningRun | null
   candidates: BacklogCandidate[]
@@ -49,6 +88,19 @@ interface CandidateReviewPanelProps {
   onPersistReview: (nextStatus?: 'draft' | 'approved' | 'rejected') => void
   onApplyCandidate: () => void
   onResetCandidateForm: () => void
+
+  /**
+   * Optional evidence-link callbacks. When provided, the matching
+   * evidence row becomes a clickable affordance:
+   *   - onViewDocumentById → opens the existing document-preview modal
+   *     (wired upstream in ProjectDetail.handleViewDoc).
+   *   - onViewDriftSignal → navigates to the Drift tab. Preselecting the
+   *     signal inside Drift is a post-Phase-2 enhancement.
+   * When undefined, the rows render as plain text (no regression for
+   * callers that have not opted in yet).
+   */
+  onViewDocumentById?: (documentId: string) => void
+  onViewDriftSignal?: (driftSignalId: string) => void
 }
 
 /**
@@ -80,6 +132,8 @@ export function CandidateReviewPanel({
   onPersistReview,
   onApplyCandidate,
   onResetCandidateForm,
+  onViewDocumentById,
+  onViewDriftSignal,
 }: CandidateReviewPanelProps) {
   const providerLabel = makeProviderLabeler(providerOptions)
   const modelLabel = makeModelLabeler(providerOptions)
@@ -288,14 +342,29 @@ export function CandidateReviewPanel({
                         <div>
                           <strong style={{ display: 'block', marginBottom: '0.35rem' }}>Documents</strong>
                           <div style={{ display: 'grid', gap: '0.5rem' }}>
-                            {selectedCandidate.evidence_detail.documents.map(document => (
-                              <div key={document.document_id || `${document.title}-${document.file_path}`} className="planning-run-meta" style={{ display: 'grid', gap: '0.2rem' }}>
-                                <span>{document.title || document.file_path}</span>
-                                <span>{document.doc_type || 'general'}{document.is_stale ? ` • stale ${document.staleness_days}d` : ''}</span>
-                                {document.matched_keywords.length > 0 && <span>Matched keywords: {document.matched_keywords.join(', ')}</span>}
-                                {document.contribution_reasons.map((reason, idx) => <span key={`${reason}-${idx}`}>{reason}</span>)}
-                              </div>
-                            ))}
+                            {selectedCandidate.evidence_detail.documents.map(document => {
+                              // Fallback chain guarantees the row is never rendered blank:
+                              // title → file_path → "Document <id>" → "(untitled document)".
+                              const fallbackId = document.document_id ? `Document ${document.document_id}` : '(untitled document)'
+                              const heading = document.title || document.file_path || fallbackId
+                              const canOpen = Boolean(onViewDocumentById && document.document_id)
+                              return (
+                                <div key={document.document_id || `${document.title}-${document.file_path}`} className="planning-run-meta" style={{ display: 'grid', gap: '0.2rem' }}>
+                                  {canOpen ? (
+                                    <EvidenceLink
+                                      label={heading}
+                                      ariaLabel={`Open document preview for ${heading}`}
+                                      onClick={() => onViewDocumentById!(document.document_id!)}
+                                    />
+                                  ) : (
+                                    <span>{heading}</span>
+                                  )}
+                                  <span>{document.doc_type || 'general'}{document.is_stale ? ` • stale ${document.staleness_days}d` : ''}</span>
+                                  {document.matched_keywords.length > 0 && <span>Matched keywords: {document.matched_keywords.join(', ')}</span>}
+                                  {document.contribution_reasons.map((reason, idx) => <span key={`${reason}-${idx}`}>{reason}</span>)}
+                                </div>
+                              )
+                            })}
                           </div>
                         </div>
                       )}
@@ -304,13 +373,28 @@ export function CandidateReviewPanel({
                         <div>
                           <strong style={{ display: 'block', marginBottom: '0.35rem' }}>Drift signals</strong>
                           <div style={{ display: 'grid', gap: '0.5rem' }}>
-                            {selectedCandidate.evidence_detail.drift_signals.map(signal => (
-                              <div key={signal.drift_signal_id} className="planning-run-meta" style={{ display: 'grid', gap: '0.2rem' }}>
-                                <span>{signal.document_title || signal.trigger_detail || signal.trigger_type}</span>
-                                <span>Severity {signal.severity} • {signal.trigger_type}</span>
-                                {signal.contribution_reasons.map((reason, idx) => <span key={`${reason}-${idx}`}>{reason}</span>)}
-                              </div>
-                            ))}
+                            {selectedCandidate.evidence_detail.drift_signals.map(signal => {
+                              // Fallback chain: document_title → trigger_detail →
+                              // trigger_type → "Drift signal <id>". The signal always
+                              // has an id, so the row can never render empty.
+                              const heading = signal.document_title || signal.trigger_detail || signal.trigger_type || `Drift signal ${signal.drift_signal_id}`
+                              const canOpen = Boolean(onViewDriftSignal)
+                              return (
+                                <div key={signal.drift_signal_id} className="planning-run-meta" style={{ display: 'grid', gap: '0.2rem' }}>
+                                  {canOpen ? (
+                                    <EvidenceLink
+                                      label={heading}
+                                      ariaLabel={`Jump to drift signal ${heading}`}
+                                      onClick={() => onViewDriftSignal!(signal.drift_signal_id)}
+                                    />
+                                  ) : (
+                                    <span>{heading}</span>
+                                  )}
+                                  <span>Severity {signal.severity} • {signal.trigger_type}</span>
+                                  {signal.contribution_reasons.map((reason, idx) => <span key={`${reason}-${idx}`}>{reason}</span>)}
+                                </div>
+                              )
+                            })}
                           </div>
                         </div>
                       )}

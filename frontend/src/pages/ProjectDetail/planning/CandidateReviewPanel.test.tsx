@@ -67,7 +67,7 @@ function makeCandidate(overrides: Partial<BacklogCandidate> = {}): BacklogCandid
         evidence_bonus: 0,
         duplicate_penalty: 0,
         final_priority_score: 0,
-        final_confidence: 0,
+        final_confidence: 0, confidence_seed: 0,
       },
     },
     duplicate_titles: [],
@@ -131,5 +131,100 @@ describe('<CandidateReviewPanel />', () => {
   it('disables Apply to Tasks until canApplySelectedCandidate is true', () => {
     renderPanel({ canApplySelectedCandidate: false })
     expect(screen.getByRole('button', { name: /Apply To Tasks/i })).toBeDisabled()
+  })
+
+  it('renders document evidence as a clickable link when onViewDocumentById is provided and the document has an id', async () => {
+    const onViewDocumentById = vi.fn()
+    const candidateWithDoc = makeCandidate({
+      evidence_detail: {
+        summary: [],
+        documents: [{
+          document_id: 'doc-42',
+          title: 'API surface',
+          file_path: 'docs/api-surface.md',
+          doc_type: 'api',
+          is_stale: false,
+          staleness_days: 0,
+          matched_keywords: [],
+          contribution_reasons: [],
+        }],
+        drift_signals: [],
+        sync_run: null,
+        agent_runs: [],
+        duplicates: [],
+        score_breakdown: {
+          impact: 0, urgency: 0, dependency_unlock: 0, risk_reduction: 0,
+          effort: 0, evidence_bonus: 0, duplicate_penalty: 0,
+          final_priority_score: 0, final_confidence: 0, confidence_seed: 0,
+        },
+      },
+    } as Partial<BacklogCandidate>)
+    renderPanel({ candidates: [candidateWithDoc], selectedCandidate: candidateWithDoc, onViewDocumentById })
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const link = screen.getByRole('button', { name: /Open document preview for API surface/i })
+    await userEvent.click(link)
+    expect(onViewDocumentById).toHaveBeenCalledWith('doc-42')
+  })
+
+  it('renders document evidence as plain text when onViewDocumentById is not provided', () => {
+    const candidateWithDoc = makeCandidate({
+      evidence_detail: {
+        summary: [],
+        documents: [{
+          document_id: 'doc-42',
+          title: 'API surface',
+          file_path: 'docs/api-surface.md',
+          doc_type: 'api',
+          is_stale: false,
+          staleness_days: 0,
+          matched_keywords: [],
+          contribution_reasons: [],
+        }],
+        drift_signals: [],
+        sync_run: null,
+        agent_runs: [],
+        duplicates: [],
+        score_breakdown: {
+          impact: 0, urgency: 0, dependency_unlock: 0, risk_reduction: 0,
+          effort: 0, evidence_bonus: 0, duplicate_penalty: 0,
+          final_priority_score: 0, final_confidence: 0, confidence_seed: 0,
+        },
+      },
+    } as Partial<BacklogCandidate>)
+    renderPanel({ candidates: [candidateWithDoc], selectedCandidate: candidateWithDoc })
+    // API surface title is present, but not inside a link-shaped button
+    expect(screen.getByText('API surface')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Open document preview/i })).not.toBeInTheDocument()
+  })
+
+  it('fires onViewDriftSignal with the drift signal id when the drift evidence row is clicked', async () => {
+    const onViewDriftSignal = vi.fn()
+    const candidateWithDrift = makeCandidate({
+      evidence_detail: {
+        summary: [],
+        documents: [],
+        drift_signals: [{
+          drift_signal_id: 'ds-7',
+          document_id: 'doc-42',
+          document_title: 'API surface',
+          trigger_detail: 'Files changed: api.go (M)',
+          trigger_type: 'code_change',
+          severity: 2,
+          contribution_reasons: [],
+        }],
+        sync_run: null,
+        agent_runs: [],
+        duplicates: [],
+        score_breakdown: {
+          impact: 0, urgency: 0, dependency_unlock: 0, risk_reduction: 0,
+          effort: 0, evidence_bonus: 0, duplicate_penalty: 0,
+          final_priority_score: 0, final_confidence: 0, confidence_seed: 0,
+        },
+      },
+    } as Partial<BacklogCandidate>)
+    renderPanel({ candidates: [candidateWithDrift], selectedCandidate: candidateWithDrift, onViewDriftSignal })
+    const { default: userEvent } = await import('@testing-library/user-event')
+    await userEvent.click(screen.getByRole('button', { name: /Jump to drift signal API surface/i }))
+    expect(onViewDriftSignal).toHaveBeenCalledWith('ds-7')
   })
 })

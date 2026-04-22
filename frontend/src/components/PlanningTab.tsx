@@ -22,6 +22,13 @@ interface PlanningTabProps {
   onRequirementsChange: (requirements: Requirement[]) => void
   onNavigateToTasks: () => void
   onNavigateToDrift: () => void
+  /**
+   * S3 evidence-link wiring. Pass the existing handleViewDoc-by-id and
+   * setTab('drift') closures from ProjectDetail so candidate evidence
+   * rows can open the document-preview modal or jump to the Drift tab.
+   */
+  onViewDocumentById?: (documentId: string) => void
+  onViewDriftSignal?: (driftSignalId: string) => void
 }
 
 /**
@@ -43,6 +50,8 @@ export function PlanningTab({
   onRequirementsChange,
   onNavigateToTasks,
   onNavigateToDrift,
+  onViewDocumentById,
+  onViewDriftSignal,
 }: PlanningTabProps) {
   const ws = usePlanningWorkspaceData({
     projectId,
@@ -189,6 +198,8 @@ export function PlanningTab({
               onPersistReview={ws.onPersistCandidateReview}
               onApplyCandidate={ws.onApplyCandidate}
               onResetCandidateForm={ws.onResetCandidateForm}
+              onViewDocumentById={onViewDocumentById}
+              onViewDriftSignal={onViewDriftSignal}
             />
           </div>
         ) : (
