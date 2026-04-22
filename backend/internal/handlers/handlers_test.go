@@ -658,6 +658,72 @@ func TestRequirementCreateValidation(t *testing.T) {
 	}
 }
 
+func TestRequirementUpdateStatus(t *testing.T) {
+	srv := setupTestServer(t)
+
+	projectReq := httptest.NewRequest("POST", "/api/projects", strings.NewReader(`{"name":"Update Status Project"}`))
+	projectResp := httptest.NewRecorder()
+	srv.ServeHTTP(projectResp, projectReq)
+	if projectResp.Code != http.StatusCreated {
+		t.Fatalf("create project: expected 201, got %d: %s", projectResp.Code, projectResp.Body.String())
+	}
+	var projectEnv models.Envelope
+	json.NewDecoder(projectResp.Body).Decode(&projectEnv)
+	projectID := projectEnv.Data.(map[string]interface{})["id"].(string)
+
+	reqCreate := httptest.NewRequest("POST", "/api/projects/"+projectID+"/requirements", strings.NewReader(`{"title":"Archive me"}`))
+	reqCreate.Header.Set("Content-Type", "application/json")
+	wCreate := httptest.NewRecorder()
+	srv.ServeHTTP(wCreate, reqCreate)
+	if wCreate.Code != http.StatusCreated {
+		t.Fatalf("create requirement: expected 201, got %d: %s", wCreate.Code, wCreate.Body.String())
+	}
+	var createEnv models.Envelope
+	json.NewDecoder(wCreate.Body).Decode(&createEnv)
+	requirementID := createEnv.Data.(map[string]interface{})["id"].(string)
+
+	// 200: valid status transition draft → archived
+	patchReq := httptest.NewRequest("PATCH", "/api/requirements/"+requirementID, strings.NewReader(`{"status":"archived"}`))
+	patchReq.Header.Set("Content-Type", "application/json")
+	patchResp := httptest.NewRecorder()
+	srv.ServeHTTP(patchResp, patchReq)
+	if patchResp.Code != http.StatusOK {
+		t.Fatalf("patch requirement: expected 200, got %d: %s", patchResp.Code, patchResp.Body.String())
+	}
+	var patchEnv models.Envelope
+	json.NewDecoder(patchResp.Body).Decode(&patchEnv)
+	if patchEnv.Data.(map[string]interface{})["status"] != "archived" {
+		t.Fatalf("expected archived status in response, got %v", patchEnv.Data.(map[string]interface{})["status"])
+	}
+
+	// 400: invalid status value
+	badStatusReq := httptest.NewRequest("PATCH", "/api/requirements/"+requirementID, strings.NewReader(`{"status":"invalid"}`))
+	badStatusReq.Header.Set("Content-Type", "application/json")
+	badStatusResp := httptest.NewRecorder()
+	srv.ServeHTTP(badStatusResp, badStatusReq)
+	if badStatusResp.Code != http.StatusBadRequest {
+		t.Fatalf("patch invalid status: expected 400, got %d: %s", badStatusResp.Code, badStatusResp.Body.String())
+	}
+
+	// 400: missing status field
+	missingFieldReq := httptest.NewRequest("PATCH", "/api/requirements/"+requirementID, strings.NewReader(`{}`))
+	missingFieldReq.Header.Set("Content-Type", "application/json")
+	missingFieldResp := httptest.NewRecorder()
+	srv.ServeHTTP(missingFieldResp, missingFieldReq)
+	if missingFieldResp.Code != http.StatusBadRequest {
+		t.Fatalf("patch missing status: expected 400, got %d: %s", missingFieldResp.Code, missingFieldResp.Body.String())
+	}
+
+	// 404: unknown requirement id
+	notFoundReq := httptest.NewRequest("PATCH", "/api/requirements/non-existent-id", strings.NewReader(`{"status":"archived"}`))
+	notFoundReq.Header.Set("Content-Type", "application/json")
+	notFoundResp := httptest.NewRecorder()
+	srv.ServeHTTP(notFoundResp, notFoundReq)
+	if notFoundResp.Code != http.StatusNotFound {
+		t.Fatalf("patch non-existent requirement: expected 404, got %d: %s", notFoundResp.Code, notFoundResp.Body.String())
+	}
+}
+
 func TestRequirementListIsProjectScopedAndDefaultsSource(t *testing.T) {
 	srv := setupTestServer(t)
 

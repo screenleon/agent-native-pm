@@ -142,5 +142,9 @@ func (h *RequirementHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update requirement")
 		return
 	}
+	if updated == nil {
+		writeError(w, http.StatusNotFound, "requirement not found")
+		return
+	}
 	writeSuccess(w, http.StatusOK, updated, nil)
 }

@@ -223,7 +223,9 @@ func (s *DriftSignalStore) BulkResolveByProject(projectID, resolvedBy string) (i
 	return int(affected), err
 }
 
-// ResolveOpenByDocumentID resolves all open drift signals for a specific document and returns the count resolved.
+// ResolveOpenByDocumentID resolves all open drift signals for a document.
+// Project-scope enforcement is the caller's responsibility; this method trusts
+// that the documentID has already been verified to belong to the caller's project.
 func (s *DriftSignalStore) ResolveOpenByDocumentID(documentID, resolvedBy string) (int, error) {
 	now := time.Now().UTC()
 	result, err := s.db.Exec(`

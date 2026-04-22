@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -87,11 +88,9 @@ func (h *DocumentRefreshHandler) RefreshSummary(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if apiKey := middleware.APIKeyFromContext(r.Context()); apiKey != nil {
-		if apiKey.ProjectID != nil && *apiKey.ProjectID != doc.ProjectID {
-			writeError(w, http.StatusForbidden, "api key not allowed for this project")
-			return
-		}
+	if !requestAllowsProject(r, doc.ProjectID) {
+		writeError(w, http.StatusForbidden, "api key not allowed for this project")
+		return
 	}
 
 	if err := h.docStore.RefreshSummary(id); err != nil {
@@ -103,8 +102,14 @@ func (h *DocumentRefreshHandler) RefreshSummary(w http.ResponseWriter, r *http.R
 	if u := middleware.UserFromContext(r.Context()); u != nil {
 		caller = u.ID
 	}
-	_, _ = h.driftStore.ResolveOpenByDocumentID(id, caller)
+	if _, err := h.driftStore.ResolveOpenByDocumentID(id, caller); err != nil {
+		log.Printf("refresh-summary: drift resolve for doc %s: %v", id, err)
+	}
 
-	updated, _ := h.docStore.GetByID(id)
+	updated, err := h.docStore.GetByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to fetch updated document")
+		return
+	}
 	writeSuccess(w, http.StatusOK, updated, nil)
 }
