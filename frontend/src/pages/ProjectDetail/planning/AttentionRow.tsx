@@ -39,7 +39,11 @@ function AttentionTile({ label, count, tone, disabled, onClick }: TileProps) {
         gap: '0.55rem',
         padding: '0.55rem 0.85rem',
         background: 'var(--bg)',
-        border: `1px solid ${applyAttention ? 'var(--danger, #ef4444)' : 'var(--border)'}`,
+        border: '1px solid var(--border)',
+        // Attention tone shows as a left-edge accent only, keeping the
+        // surrounding border neutral so the tile still reads as part of
+        // the row rather than a full-width error state.
+        borderLeft: applyAttention ? '3px solid var(--danger, #ef4444)' : '1px solid var(--border)',
         borderRadius: '0.55rem',
         cursor: (disabled ?? count === 0) ? 'default' : 'pointer',
         opacity: (disabled ?? count === 0) ? 0.6 : 1,

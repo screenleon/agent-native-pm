@@ -62,14 +62,18 @@ export function PlanningTab({
     t => t.source === APPLIED_TASK_SOURCE && (t.status === 'todo' || t.status === 'in_progress'),
   ).length
 
-  function jumpToRequirements() {
-    const el = document.querySelector('.requirement-list') as HTMLElement | null
+  function scrollToSelector(selector: string) {
+    const el = document.querySelector(selector) as HTMLElement | null
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
-  function jumpToCandidates() {
-    const el = document.querySelector('.planning-candidate-panel') as HTMLElement | null
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  function focusSelector(selector: string) {
+    const el = document.querySelector(selector) as HTMLElement | null
+    if (el) el.focus()
   }
+  const jumpToRequirements = () => scrollToSelector('.requirement-list')
+  const jumpToCandidates = () => scrollToSelector('.planning-candidate-panel')
+  const jumpToWorkspace = () => scrollToSelector('.planning-workspace-card')
+  const jumpToIntake = () => focusSelector('.planning-foundation-grid input')
 
   return (
     <div className="planning-shell">
@@ -89,18 +93,9 @@ export function PlanningTab({
         selectedRequirement={ws.selectedRequirement}
         selectedPlanningRun={ws.selectedPlanningRun}
         candidateCount={ws.planningCandidates.length}
-        onJumpToIntake={() => {
-          const el = document.querySelector('.planning-foundation-grid input') as HTMLInputElement | null
-          if (el) el.focus()
-        }}
-        onJumpToWorkspace={() => {
-          const el = document.querySelector('.planning-workspace-card')
-          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        }}
-        onJumpToCandidates={() => {
-          const el = document.querySelector('.planning-candidate-panel')
-          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        }}
+        onJumpToIntake={jumpToIntake}
+        onJumpToWorkspace={jumpToWorkspace}
+        onJumpToCandidates={jumpToCandidates}
       />
 
       <div className="planning-foundation-grid">
