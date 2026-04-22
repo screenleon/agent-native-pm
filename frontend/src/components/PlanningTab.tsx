@@ -1,5 +1,6 @@
 import type { Requirement, Task } from '../types'
 import { PlanningStepper } from './PlanningStepper'
+import { AttentionRow } from '../pages/ProjectDetail/planning/AttentionRow'
 import { RequirementIntake } from '../pages/ProjectDetail/planning/RequirementIntake'
 import { RequirementQueue } from '../pages/ProjectDetail/planning/RequirementQueue'
 import { PlanningLauncher } from '../pages/ProjectDetail/planning/PlanningLauncher'
@@ -7,15 +8,20 @@ import { PlanningRunList } from '../pages/ProjectDetail/planning/PlanningRunList
 import { CandidateReviewPanel } from '../pages/ProjectDetail/planning/CandidateReviewPanel'
 import { usePlanningWorkspaceData } from '../pages/ProjectDetail/planning/hooks/usePlanningWorkspaceData'
 
+const APPLIED_TASK_SOURCE = 'agent:planning-orchestrator'
+
 interface PlanningTabProps {
   projectId: string
   requirements: Requirement[]
   tasks: Task[]
+  openDriftCount: number
   planningLoadError: string | null
   onReload: () => Promise<void>
   onError: (msg: string) => void
   onSuccess: (msg: string) => void
   onRequirementsChange: (requirements: Requirement[]) => void
+  onNavigateToTasks: () => void
+  onNavigateToDrift: () => void
 }
 
 /**
@@ -29,11 +35,14 @@ export function PlanningTab({
   projectId,
   requirements,
   tasks,
+  openDriftCount,
   planningLoadError,
   onReload,
   onError,
   onSuccess,
   onRequirementsChange,
+  onNavigateToTasks,
+  onNavigateToDrift,
 }: PlanningTabProps) {
   const ws = usePlanningWorkspaceData({
     projectId,
@@ -45,8 +54,36 @@ export function PlanningTab({
     onRequirementsChange,
   })
 
+  const requirementsAwaitingPlanning = requirements.filter(r => r.status === 'draft').length
+  const candidatesAwaitingReview = ws.planningCandidates.filter(
+    c => c.status === 'draft' || c.status === 'approved',
+  ).length
+  const appliedOpenTasks = tasks.filter(
+    t => t.source === APPLIED_TASK_SOURCE && (t.status === 'todo' || t.status === 'in_progress'),
+  ).length
+
+  function jumpToRequirements() {
+    const el = document.querySelector('.requirement-list') as HTMLElement | null
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  function jumpToCandidates() {
+    const el = document.querySelector('.planning-candidate-panel') as HTMLElement | null
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   return (
     <div className="planning-shell">
+      <AttentionRow
+        requirementsAwaitingPlanning={requirementsAwaitingPlanning}
+        candidatesAwaitingReview={candidatesAwaitingReview}
+        appliedOpenTasks={appliedOpenTasks}
+        openDriftCount={openDriftCount}
+        onJumpToRequirements={jumpToRequirements}
+        onJumpToCandidates={jumpToCandidates}
+        onJumpToTasks={onNavigateToTasks}
+        onJumpToDrift={onNavigateToDrift}
+      />
+
       <PlanningStepper
         requirementCount={requirements.length}
         selectedRequirement={ws.selectedRequirement}
