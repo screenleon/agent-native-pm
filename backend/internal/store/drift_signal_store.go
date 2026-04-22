@@ -223,6 +223,21 @@ func (s *DriftSignalStore) BulkResolveByProject(projectID, resolvedBy string) (i
 	return int(affected), err
 }
 
+// ResolveOpenByDocumentID resolves all open drift signals for a specific document and returns the count resolved.
+func (s *DriftSignalStore) ResolveOpenByDocumentID(documentID, resolvedBy string) (int, error) {
+	now := time.Now().UTC()
+	result, err := s.db.Exec(`
+		UPDATE drift_signals
+		SET status='resolved', resolved_by=$1, resolved_at=$2
+		WHERE document_id=$3 AND status='open'
+	`, resolvedBy, now, documentID)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	return int(affected), err
+}
+
 // ListOpenDocumentIDsByProject returns a set of document IDs that currently have open drift signals.
 func (s *DriftSignalStore) ListOpenDocumentIDsByProject(projectID string) (map[string]bool, error) {
 	rows, err := s.db.Query(`SELECT DISTINCT document_id FROM drift_signals WHERE project_id=$1 AND status='open'`, projectID)

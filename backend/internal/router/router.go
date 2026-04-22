@@ -162,7 +162,7 @@ func New(deps Deps) http.Handler {
 				r.Delete("/repo-mappings/{id}", deps.ProjectRepoMappingHandler.Delete)
 			}
 			if deps.DocumentRefreshHandler != nil {
-				r.With(middleware.RequireAPIKey).Post("/documents/{id}/refresh-summary", deps.DocumentRefreshHandler.RefreshSummary)
+				r.Post("/documents/{id}/refresh-summary", deps.DocumentRefreshHandler.RefreshSummary)
 			}
 
 			// Summary

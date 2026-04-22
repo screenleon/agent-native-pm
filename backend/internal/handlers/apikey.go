@@ -65,11 +65,12 @@ func (h *APIKeyHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 
 // DocumentRefreshHandler handles Phase 3 document summary refresh.
 type DocumentRefreshHandler struct {
-	docStore *store.DocumentStore
+	docStore   *store.DocumentStore
+	driftStore *store.DriftSignalStore
 }
 
-func NewDocumentRefreshHandler(docStore *store.DocumentStore) *DocumentRefreshHandler {
-	return &DocumentRefreshHandler{docStore: docStore}
+func NewDocumentRefreshHandler(docStore *store.DocumentStore, driftStore *store.DriftSignalStore) *DocumentRefreshHandler {
+	return &DocumentRefreshHandler{docStore: docStore, driftStore: driftStore}
 }
 
 // RefreshSummary POST /api/documents/{id}/refresh-summary
@@ -86,20 +87,23 @@ func (h *DocumentRefreshHandler) RefreshSummary(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	apiKey := middleware.APIKeyFromContext(r.Context())
-	if apiKey == nil {
-		writeError(w, http.StatusUnauthorized, "api key required")
-		return
-	}
-	if apiKey.ProjectID != nil && *apiKey.ProjectID != doc.ProjectID {
-		writeError(w, http.StatusForbidden, "api key not allowed for this project")
-		return
+	if apiKey := middleware.APIKeyFromContext(r.Context()); apiKey != nil {
+		if apiKey.ProjectID != nil && *apiKey.ProjectID != doc.ProjectID {
+			writeError(w, http.StatusForbidden, "api key not allowed for this project")
+			return
+		}
 	}
 
 	if err := h.docStore.RefreshSummary(id); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to refresh document summary")
 		return
 	}
+
+	caller := "api_key"
+	if u := middleware.UserFromContext(r.Context()); u != nil {
+		caller = u.ID
+	}
+	_, _ = h.driftStore.ResolveOpenByDocumentID(id, caller)
 
 	updated, _ := h.docStore.GetByID(id)
 	writeSuccess(w, http.StatusOK, updated, nil)
