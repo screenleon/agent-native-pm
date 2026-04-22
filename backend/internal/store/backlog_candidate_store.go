@@ -577,14 +577,30 @@ func normalizeCandidateTitle(title string) string {
 }
 
 // lockCandidateApplyKey serialises "apply candidate" attempts that target
-// the same (project, normalised title) tuple. On PostgreSQL this uses a
-// transaction-scoped advisory lock (pg_advisory_xact_lock with hashtext keys);
-// on SQLite the call is a no-op because the engine already serialises
-// writers via its single-writer model — two concurrent apply calls on SQLite
-// block on BEGIN IMMEDIATE / the busy timeout rather than racing.
+// the same (project, normalised title) tuple. The caller then performs a
+// read-check (findOpenTaskByNormalizedTitle) followed by an insert, and that
+// read-before-write pattern is only safe if the transaction already holds a
+// write-level lock when the read happens.
+//
+// PostgreSQL: transaction-scoped advisory lock keyed on hashtext(projectID,
+// normalizedTitle). Two transactions collide only when the tuple actually
+// conflicts; unrelated candidates never block each other.
+//
+// SQLite: sql.DB.Begin starts a DEFERRED transaction, which only upgrades to
+// a write lock on the first write statement. That means two concurrent
+// Begin/read/insert sequences could both pass the duplicate-title read
+// before either writer promotes. We force the upgrade here with a no-op
+// UPDATE: SQLite parses and locks for the UPDATE even though WHERE 1=0
+// touches no rows, so the transaction becomes the single writer before the
+// caller reads. The busy_timeout (5s) set in configureSQLite then causes a
+// competing Begin/UPDATE to wait rather than race. This is coarser than the
+// Postgres keyed-lock behaviour (it serialises ALL apply-candidate
+// transactions, not just those that target the same title), but that is
+// acceptable because SQLite writes already serialise engine-wide.
 func (s *BacklogCandidateStore) lockCandidateApplyKey(tx *sql.Tx, projectID, normalizedTitle string) error {
 	if s.dialect.IsSQLite() {
-		return nil
+		_, err := tx.Exec(`UPDATE tasks SET updated_at = updated_at WHERE 1 = 0`)
+		return err
 	}
 	_, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, projectID, normalizedTitle)
 	return err

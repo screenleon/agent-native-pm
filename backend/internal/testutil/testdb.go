@@ -2,11 +2,16 @@
 // PostgreSQL (server-mode) and SQLite (local-mode) based on the
 // TEST_DATABASE_URL environment variable.
 //
-// Rule of thumb:
+// Dispatch rules:
 //
-//   - TEST_DATABASE_URL="sqlite://..."    → opens a disposable SQLite DB.
-//   - TEST_DATABASE_URL unset / "postgres..." → opens an isolated schema on
-//     the configured PostgreSQL instance (temp-container friendly).
+//   - TEST_DATABASE_URL="sqlite" (sentinel) or any "sqlite://..." DSN →
+//     per-test disposable SQLite file under t.TempDir(). The DSN path itself
+//     is ignored for test isolation: every test gets its own file regardless
+//     of the URL, so accidental TEST_DATABASE_URL="sqlite:///shared.db" does
+//     NOT create cross-test contamination. Use the "sqlite" sentinel in CI
+//     and scripts.
+//   - TEST_DATABASE_URL unset or any other value → isolated schema on a
+//     reachable PostgreSQL instance (temp-container friendly).
 //
 // All tests should call testutil.OpenTestDB(t) and let this package pick the
 // driver. The 2026-04-22 Dual-runtime-mode decision requires parity: new
@@ -38,11 +43,14 @@ func TestDialect() database.Dialect {
 	return database.NewDialect("postgres://placeholder")
 }
 
-// OpenTestDB returns a freshly migrated test database. It dispatches between
-// SQLite and PostgreSQL based on TEST_DATABASE_URL:
+// OpenTestDB returns a freshly migrated test database. It dispatches on
+// TEST_DATABASE_URL (falling back to DATABASE_URL):
 //
-//   - "sqlite://:memory:" or "sqlite://<path>" → disposable SQLite file under t.TempDir().
-//   - any other value (or empty) → isolated PostgreSQL schema.
+//   - "sqlite" sentinel or any "sqlite://..." DSN → disposable SQLite file at
+//     t.TempDir()/test.db. The DSN path is intentionally not honoured so
+//     every test gets an isolated database regardless of environment shape.
+//   - any other value (or empty) → isolated PostgreSQL schema via
+//     openTestPostgresDB.
 //
 // The returned *sql.DB is closed automatically via t.Cleanup.
 func OpenTestDB(t *testing.T) *sql.DB {
