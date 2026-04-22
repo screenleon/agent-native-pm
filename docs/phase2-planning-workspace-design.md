@@ -267,20 +267,18 @@ Every slice PR MUST:
 5. Not touch backend schema unless explicitly called out (S4 may add one
    endpoint; the others must not).
 
-## 9. Open questions / decisions needed before S1
+## 9. Resolved decisions
 
-- **Q1**: Should the `Workspace` tab become the default tab index on
-  `ProjectDetail`, replacing "Overview"? Current default is Overview.
-  **Proposal**: yes — the Workspace is where action happens; Overview is
-  read-only. Decide before S5.
-- **Q2**: Do we add an ADR now ("Planning Workspace is the per-project
-  primary surface") or wait until S5?
-  **Proposal**: add it at the end of S5 when the shape is concrete.
-- **Q3**: Evidence links in S3 — do we open documents in a modal (existing
-  preview pattern) or deep-link to the Documents tab with the doc
-  preselected?
-  **Proposal**: modal first (less state plumbing); promote to deep-link if
-  operators ask for it.
+Resolved 2026-04-22 by user approval on PR #4.
+
+- **D1 (was Q1)**: Workspace becomes the per-project default tab,
+  replacing Overview. Overview remains accessible and keeps its tab index;
+  only the landing position changes. Applied in S5.
+- **D2 (was Q2)**: No ADR now. A single DECISIONS entry is added at the
+  end of S5 that ratifies the shipped shape. Avoids paper-only decisions.
+- **D3 (was Q3)**: Evidence links in S3 open documents in a modal using
+  the existing preview pattern. Deep-linking to the Documents tab is a
+  post-Phase-2 enhancement if operators request it.
 
 ## 10. Out of scope references
 
