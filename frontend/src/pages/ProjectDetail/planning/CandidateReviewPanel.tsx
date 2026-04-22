@@ -138,13 +138,19 @@ export function CandidateReviewPanel({
   const providerLabel = makeProviderLabeler(providerOptions)
   const modelLabel = makeModelLabeler(providerOptions)
 
+  const isWhatsnextRun = selectedRun?.adapter_type === 'whatsnext'
+
   return (
     <div className="planning-candidate-panel">
       <div className="planning-stage-header">
         <div>
-          <h3 style={{ marginBottom: '0.25rem' }}>Suggested Backlog</h3>
+          <h3 style={{ marginBottom: '0.25rem' }}>
+            {isWhatsnextRun ? 'Suggested Focus Areas' : 'Suggested Backlog'}
+          </h3>
           <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.88rem' }}>
-            Review ranked backlog suggestions, inspect why each item was proposed, then approve and apply the ones worth materializing into tasks.
+            {isWhatsnextRun
+              ? 'Prioritised list of the most urgent open work across tasks, drift signals, and stale docs. Approve items worth scheduling and apply them as tasks.'
+              : 'Review ranked backlog suggestions, inspect why each item was proposed, then approve and apply the ones worth materializing into tasks.'}
           </p>
           {selectedRun && (
             <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>

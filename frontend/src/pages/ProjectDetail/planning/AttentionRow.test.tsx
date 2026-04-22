@@ -53,4 +53,33 @@ describe('<AttentionRow />', () => {
     await userEvent.click(screen.getByRole('button', { name: /Applied tasks still open: 1/i }))
     expect(onJumpToTasks).toHaveBeenCalledTimes(1)
   })
+
+  it('does not render the What\'s Next button when onRunWhatsnext is not provided', () => {
+    renderRow()
+    expect(screen.queryByRole('button', { name: /What's Next/i })).not.toBeInTheDocument()
+  })
+
+  it('renders the What\'s Next button when onRunWhatsnext is provided', () => {
+    renderRow({ onRunWhatsnext: vi.fn(), whatsnextReady: true })
+    expect(screen.getByRole('button', { name: /Run What's Next/i })).toBeInTheDocument()
+  })
+
+  it('disables the What\'s Next button when whatsnextReady is false', () => {
+    renderRow({ onRunWhatsnext: vi.fn(), whatsnextReady: false })
+    expect(screen.getByRole('button', { name: /Run What's Next/i })).toBeDisabled()
+  })
+
+  it('shows Analysing… and disables when runningWhatsnext is true', () => {
+    renderRow({ onRunWhatsnext: vi.fn(), whatsnextReady: true, runningWhatsnext: true })
+    const btn = screen.getByRole('button', { name: /Run What's Next/i })
+    expect(btn).toHaveTextContent('Analysing…')
+    expect(btn).toBeDisabled()
+  })
+
+  it('fires onRunWhatsnext when the button is clicked', async () => {
+    const onRunWhatsnext = vi.fn()
+    renderRow({ onRunWhatsnext, whatsnextReady: true })
+    await userEvent.click(screen.getByRole('button', { name: /Run What's Next/i }))
+    expect(onRunWhatsnext).toHaveBeenCalledTimes(1)
+  })
 })

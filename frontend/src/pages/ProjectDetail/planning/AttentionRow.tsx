@@ -7,6 +7,10 @@ interface AttentionRowProps {
   onJumpToCandidates: () => void
   onJumpToTasks: () => void
   onJumpToDrift: () => void
+  // What's Next action — optional so existing callers without a connector don't break
+  onRunWhatsnext?: () => void
+  runningWhatsnext?: boolean
+  whatsnextReady?: boolean
 }
 
 interface TileProps {
@@ -40,9 +44,6 @@ function AttentionTile({ label, count, tone, disabled, onClick }: TileProps) {
         padding: '0.55rem 0.85rem',
         background: 'var(--bg)',
         border: '1px solid var(--border)',
-        // Attention tone shows as a left-edge accent only, keeping the
-        // surrounding border neutral so the tile still reads as part of
-        // the row rather than a full-width error state.
         borderLeft: applyAttention ? '3px solid var(--danger, #ef4444)' : '1px solid var(--border)',
         borderRadius: '0.55rem',
         cursor: (disabled ?? count === 0) ? 'default' : 'pointer',
@@ -64,8 +65,8 @@ function AttentionTile({ label, count, tone, disabled, onClick }: TileProps) {
  * four counts with click-through so the operator can answer the "what's
  * blocked on me right now?" question without scanning every tab.
  *
- * All counts are derived from project state already loaded by
- * ProjectDetail / PlanningTab. S2 intentionally adds no new API call.
+ * The optional What's Next button gives a one-click path to a full project
+ * health analysis without requiring a pre-selected requirement.
  */
 export function AttentionRow({
   requirementsAwaitingPlanning,
@@ -76,6 +77,9 @@ export function AttentionRow({
   onJumpToCandidates,
   onJumpToTasks,
   onJumpToDrift,
+  onRunWhatsnext,
+  runningWhatsnext = false,
+  whatsnextReady = false,
 }: AttentionRowProps) {
   return (
     <div
@@ -83,36 +87,64 @@ export function AttentionRow({
       role="region"
       aria-label="Planning attention row"
       style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        display: 'flex',
         gap: '0.55rem',
+        alignItems: 'stretch',
+        flexWrap: 'wrap',
         marginBottom: '1rem',
       }}
     >
-      <AttentionTile
-        label="Requirements awaiting planning"
-        count={requirementsAwaitingPlanning}
-        tone="attention"
-        onClick={onJumpToRequirements}
-      />
-      <AttentionTile
-        label="Candidates awaiting review"
-        count={candidatesAwaitingReview}
-        tone="attention"
-        onClick={onJumpToCandidates}
-      />
-      <AttentionTile
-        label="Applied tasks still open"
-        count={appliedOpenTasks}
-        tone="info"
-        onClick={onJumpToTasks}
-      />
-      <AttentionTile
-        label="Open drift signals"
-        count={openDriftCount}
-        tone="attention"
-        onClick={onJumpToDrift}
-      />
+      <div style={{
+        flex: 1,
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+        gap: '0.55rem',
+        minWidth: 0,
+      }}>
+        <AttentionTile
+          label="Requirements awaiting planning"
+          count={requirementsAwaitingPlanning}
+          tone="attention"
+          onClick={onJumpToRequirements}
+        />
+        <AttentionTile
+          label="Candidates awaiting review"
+          count={candidatesAwaitingReview}
+          tone="attention"
+          onClick={onJumpToCandidates}
+        />
+        <AttentionTile
+          label="Applied tasks still open"
+          count={appliedOpenTasks}
+          tone="info"
+          onClick={onJumpToTasks}
+        />
+        <AttentionTile
+          label="Open drift signals"
+          count={openDriftCount}
+          tone="attention"
+          onClick={onJumpToDrift}
+        />
+      </div>
+
+      {onRunWhatsnext && (
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={onRunWhatsnext}
+          disabled={runningWhatsnext || !whatsnextReady}
+          aria-label="Run What's Next project health analysis"
+          title={whatsnextReady ? "Analyse the full project state and surface the most urgent work" : "Configure a planning provider or connect a local connector to enable this"}
+          style={{
+            alignSelf: 'stretch',
+            padding: '0.55rem 1rem',
+            whiteSpace: 'nowrap',
+            fontSize: '0.875rem',
+          }}
+        >
+          {runningWhatsnext ? 'Analysing…' : "What's Next"}
+        </button>
+      )}
     </div>
   )
 }

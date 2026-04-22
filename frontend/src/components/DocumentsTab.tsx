@@ -13,6 +13,7 @@ interface DocumentsTabProps {
   onViewDoc: (doc: Document) => void
   onManageLinks: (doc: Document) => void
   onDeleteDoc: (docId: string) => Promise<void>
+  onMarkUpdated: (docId: string) => Promise<void>
 }
 
 export function DocumentsTab({
@@ -26,9 +27,11 @@ export function DocumentsTab({
   onViewDoc,
   onManageLinks,
   onDeleteDoc,
+  onMarkUpdated,
 }: DocumentsTabProps) {
   const [showDocForm, setShowDocForm] = useState(false)
   const [docForm, setDocForm] = useState({ title: '', file_path: '', doc_type: 'general' as Document['doc_type'], source: 'human' })
+  const [markingUpdated, setMarkingUpdated] = useState<Record<string, boolean>>({})
 
   async function handleCreateDoc(e: React.FormEvent) {
     e.preventDefault()
@@ -40,6 +43,15 @@ export function DocumentsTab({
       onReload()
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Failed to create document')
+    }
+  }
+
+  async function handleMarkUpdated(docId: string) {
+    setMarkingUpdated(prev => ({ ...prev, [docId]: true }))
+    try {
+      await onMarkUpdated(docId)
+    } finally {
+      setMarkingUpdated(prev => ({ ...prev, [docId]: false }))
     }
   }
 
@@ -135,6 +147,15 @@ export function DocumentsTab({
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                       <button className="btn btn-ghost btn-sm" onClick={() => onViewDoc(doc)} disabled={!doc.file_path}>View</button>
                       <button className="btn btn-ghost btn-sm" onClick={() => onManageLinks(doc)}>Links</button>
+                      {doc.is_stale && (
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => handleMarkUpdated(doc.id)}
+                          disabled={markingUpdated[doc.id]}
+                        >
+                          {markingUpdated[doc.id] ? 'Updating…' : 'Mark as Updated'}
+                        </button>
+                      )}
                       <button className="btn btn-ghost btn-sm" onClick={() => onDeleteDoc(doc.id)} style={{ color: 'var(--danger)' }}>Delete</button>
                     </div>
                   </td>

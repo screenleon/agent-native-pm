@@ -10,6 +10,7 @@ import type {
 } from '../../../../types'
 import {
   createRequirement,
+  updateRequirement,
   getPlanningProviderOptions,
   listPlanningRuns,
   createPlanningRun,
@@ -81,6 +82,7 @@ export function usePlanningWorkspaceData({
   const [candidateForm, setCandidateForm] = useState<CandidateReviewForm>({ title: '', description: '', status: 'draft' })
   const [candidateFormSourceId, setCandidateFormSourceId] = useState<string | null>(null)
   const [showRequirementIntake, setShowRequirementIntake] = useState(false)
+  const [archivingRequirementId, setArchivingRequirementId] = useState<string | null>(null)
   const [runningWhatsnext, setRunningWhatsnext] = useState(false)
   const [cancellingPlanningRunId, setCancellingPlanningRunId] = useState<string | null>(null)
   const [planningRunFlash, setPlanningRunFlash] = useState<{ runId: string; kind: 'success' | 'error'; message: string } | null>(null)
@@ -126,7 +128,8 @@ export function usePlanningWorkspaceData({
       return
     }
     if (!selectedRequirementId || !requirements.some(r => r.id === selectedRequirementId)) {
-      setSelectedRequirementId(requirements[0].id)
+      const first = requirements.find(r => r.status !== 'archived')
+      setSelectedRequirementId(first?.id ?? null)
     }
   }, [requirements, selectedRequirementId])
 
@@ -437,6 +440,21 @@ export function usePlanningWorkspaceData({
     }
   }
 
+  async function handleArchiveRequirement(id: string) {
+    if (archivingRequirementId) return
+    setArchivingRequirementId(id)
+    try {
+      const response = await updateRequirement(id, { status: 'archived' })
+      onRequirementsChange(requirements.map(r => r.id === id ? response.data : r))
+      if (selectedRequirementId === id) setSelectedRequirementId(null)
+      onSuccess('Requirement archived.')
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to archive requirement')
+    } finally {
+      setArchivingRequirementId(null)
+    }
+  }
+
   async function handleCreatePlanningRun() {
     if (!selectedRequirement || !planningRunReady) return
     try {
@@ -491,7 +509,7 @@ export function usePlanningWorkspaceData({
     setRunningWhatsnext(true)
     try {
       const WHATSNEXT_TITLE = "What's next"
-      let req = requirements.find(r => r.title.toLowerCase().trim() === WHATSNEXT_TITLE.toLowerCase())
+      let req = requirements.find(r => r.title.toLowerCase().trim() === WHATSNEXT_TITLE.toLowerCase() && r.status !== 'archived')
       if (!req) {
         const res = await createRequirement(projectId, {
           title: WHATSNEXT_TITLE,
@@ -510,7 +528,9 @@ export function usePlanningWorkspaceData({
       })
       setPlanningRuns(prev => [runRes.data, ...prev.filter(r => r.id !== runRes.data.id)])
       setSelectedPlanningRunId(runRes.data.id)
-      onSuccess("What's Next analysis queued. Your connector will surface the top priorities across the project.")
+      onSuccess(planningSelectedExecutionMode === 'local_connector'
+        ? "What's Next analysis queued. Your connector will surface the top priorities across the project."
+        : "What's Next analysis started. Results will appear in the candidate panel when complete.")
       await loadPlanningRuns(req.id)
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to start What's Next analysis")
@@ -651,6 +671,8 @@ export function usePlanningWorkspaceData({
     onToggleRequirementIntake: () => setShowRequirementIntake(prev => !prev),
     onResetRequirementForm: () => setRequirementForm({ title: '', summary: '', description: '', source: 'human' }),
     onCreateRequirement: handleCreateRequirement,
+    onArchiveRequirement: handleArchiveRequirement,
+    archivingRequirementId,
     // run flash
     planningRunFlash,
     onDismissRunFlash: () => setPlanningRunFlash(null),

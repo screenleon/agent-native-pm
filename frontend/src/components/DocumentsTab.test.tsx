@@ -30,6 +30,7 @@ const baseProps = {
   onViewDoc: vi.fn(),
   onManageLinks: vi.fn(),
   onDeleteDoc: vi.fn().mockResolvedValue(undefined),
+  onMarkUpdated: vi.fn().mockResolvedValue(undefined),
 }
 
 describe('<DocumentsTab />', () => {
@@ -48,5 +49,23 @@ describe('<DocumentsTab />', () => {
   it('disables the View action when a document has no file_path', () => {
     render(<DocumentsTab {...baseProps} documents={[makeDoc({ file_path: '' })]} />)
     expect(screen.getByRole('button', { name: /^View$/i })).toBeDisabled()
+  })
+
+  it('shows Mark as Updated only for stale documents', () => {
+    render(<DocumentsTab {...baseProps} documents={[
+      makeDoc({ id: 'd1', is_stale: true }),
+      makeDoc({ id: 'd2', is_stale: false }),
+    ]} />)
+    expect(screen.getByRole('button', { name: /Mark as Updated/i })).toBeInTheDocument()
+    // Only one button — the non-stale doc must not render it
+    expect(screen.getAllByRole('button', { name: /Mark as Updated/i })).toHaveLength(1)
+  })
+
+  it('calls onMarkUpdated with the document id when clicked', async () => {
+    const onMarkUpdated = vi.fn().mockResolvedValue(undefined)
+    const { default: userEvent } = await import('@testing-library/user-event')
+    render(<DocumentsTab {...baseProps} documents={[makeDoc({ id: 'd1', is_stale: true })]} onMarkUpdated={onMarkUpdated} />)
+    await userEvent.click(screen.getByRole('button', { name: /Mark as Updated/i }))
+    expect(onMarkUpdated).toHaveBeenCalledWith('d1')
   })
 })

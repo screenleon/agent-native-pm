@@ -102,3 +102,23 @@ func (s *RequirementStore) Create(projectID string, req models.CreateRequirement
 
 	return s.GetByID(id)
 }
+
+// UpdateStatus sets a requirement's status and updates updated_at.
+func (s *RequirementStore) UpdateStatus(id, status string) (*models.Requirement, error) {
+	now := time.Now().UTC()
+	_, err := s.db.Exec(`UPDATE requirements SET status=$1, updated_at=$2 WHERE id=$3`, status, now, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetByID(id)
+}
+
+// PromoteToPlannedIfDraft transitions draft → planned; no-op if already planned/archived.
+func (s *RequirementStore) PromoteToPlannedIfDraft(id string) error {
+	now := time.Now().UTC()
+	_, err := s.db.Exec(`
+		UPDATE requirements SET status='planned', updated_at=$1
+		WHERE id=$2 AND status='draft'
+	`, now, id)
+	return err
+}

@@ -104,3 +104,47 @@ func (h *RequirementHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	writeSuccess(w, http.StatusCreated, requirement, nil)
 }
+
+func (h *RequirementHandler) Update(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	requirement, err := h.store.GetByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get requirement")
+		return
+	}
+	if requirement == nil {
+		writeError(w, http.StatusNotFound, "requirement not found")
+		return
+	}
+	if !requestAllowsProject(r, requirement.ProjectID) {
+		writeError(w, http.StatusForbidden, "api key not allowed for this project")
+		return
+	}
+
+	var req struct {
+		Status *string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Status == nil {
+		writeError(w, http.StatusBadRequest, "status is required")
+		return
+	}
+	if !models.ValidRequirementStatuses[*req.Status] {
+		writeError(w, http.StatusBadRequest, "invalid status")
+		return
+	}
+
+	updated, err := h.store.UpdateStatus(id, *req.Status)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update requirement")
+		return
+	}
+	if updated == nil {
+		writeError(w, http.StatusNotFound, "requirement not found")
+		return
+	}
+	writeSuccess(w, http.StatusOK, updated, nil)
+}

@@ -82,7 +82,7 @@ func setupScopedAPIServer(t *testing.T) scopedAPIFixture {
 		ProjectRepoMappingHandler: handlers.NewProjectRepoMappingHandler(repoMappingStore, projectStore),
 		AgentRunHandler:           handlers.NewAgentRunHandler(agentRunStore, projectStore),
 		APIKeyHandler:             handlers.NewAPIKeyHandler(apiKeyStore),
-		DocumentRefreshHandler:    handlers.NewDocumentRefreshHandler(documentStore),
+		DocumentRefreshHandler:    handlers.NewDocumentRefreshHandler(documentStore, driftSignalStore),
 		AuthMiddleware:            middleware.SessionAuth(sessionStore),
 		APIKeyMiddleware:          middleware.APIKeyAuth(apiKeyStore),
 	})

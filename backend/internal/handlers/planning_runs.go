@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 
@@ -421,6 +422,12 @@ func (h *PlanningRunHandler) ApplyBacklogCandidate(w http.ResponseWriter, r *htt
 			writeError(w, http.StatusInternalServerError, "failed to apply backlog candidate")
 		}
 		return
+	}
+
+	if !result.AlreadyApplied && result.Candidate.RequirementID != "" {
+		if err := h.requirementStore.PromoteToPlannedIfDraft(result.Candidate.RequirementID); err != nil {
+			log.Printf("apply-candidate: promote requirement %s: %v", result.Candidate.RequirementID, err)
+		}
 	}
 
 	status := http.StatusCreated

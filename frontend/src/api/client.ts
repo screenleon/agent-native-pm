@@ -230,6 +230,13 @@ export async function createRequirement(projectId: string, data: CreateRequireme
   });
 }
 
+export async function updateRequirement(id: string, data: { status: string }) {
+  return request<Requirement>(`/requirements/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
 export async function getPlanningProviderOptions(projectId: string) {
   return request<PlanningProviderOptions>(`/projects/${encodeURIComponent(projectId)}/planning-provider-options`);
 }

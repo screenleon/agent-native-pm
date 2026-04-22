@@ -106,6 +106,9 @@ export function PlanningTab({
         onJumpToCandidates={jumpToCandidates}
         onJumpToTasks={onNavigateToTasks}
         onJumpToDrift={onNavigateToDrift}
+        onRunWhatsnext={ws.onRunWhatsnext}
+        runningWhatsnext={ws.runningWhatsnext}
+        whatsnextReady={ws.planningRunReady}
       />
 
       <PlanningStepper
@@ -135,6 +138,8 @@ export function PlanningTab({
           selectedRequirementId={ws.selectedRequirementId}
           onSelectRequirement={ws.onSelectRequirement}
           planningLoadError={planningLoadError}
+          onArchiveRequirement={ws.onArchiveRequirement}
+          archivingRequirementId={ws.archivingRequirementId}
         />
       </div>
 
@@ -231,9 +236,27 @@ export function PlanningTab({
             />
           </div>
         ) : (
-          <div className="empty-state" style={{ padding: '2rem 1rem' }}>
-            <h3>No requirement selected</h3>
-            <p>Create or select a requirement to anchor the planning run flow.</p>
+          <div style={{ padding: '1.5rem 0.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'flex-start' }}>
+            <div>
+              <h4 style={{ margin: '0 0 0.35rem' }}>Start here</h4>
+              <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+                Select a requirement above to plan a specific feature, or run a full project health check to surface the most urgent open work across tasks, drift signals, and stale docs.
+              </p>
+            </div>
+            {ws.planningRunReady ? (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={ws.onRunWhatsnext}
+                disabled={ws.runningWhatsnext}
+              >
+                {ws.runningWhatsnext ? 'Starting analysis…' : "Run What's Next — full project health check"}
+              </button>
+            ) : (
+              <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                Configure a planning provider in Model Settings or connect a local connector to enable health-check runs.
+              </p>
+            )}
           </div>
         )}
       </div>

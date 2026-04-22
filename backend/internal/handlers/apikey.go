@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -65,11 +66,12 @@ func (h *APIKeyHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 
 // DocumentRefreshHandler handles Phase 3 document summary refresh.
 type DocumentRefreshHandler struct {
-	docStore *store.DocumentStore
+	docStore   *store.DocumentStore
+	driftStore *store.DriftSignalStore
 }
 
-func NewDocumentRefreshHandler(docStore *store.DocumentStore) *DocumentRefreshHandler {
-	return &DocumentRefreshHandler{docStore: docStore}
+func NewDocumentRefreshHandler(docStore *store.DocumentStore, driftStore *store.DriftSignalStore) *DocumentRefreshHandler {
+	return &DocumentRefreshHandler{docStore: docStore, driftStore: driftStore}
 }
 
 // RefreshSummary POST /api/documents/{id}/refresh-summary
@@ -86,12 +88,7 @@ func (h *DocumentRefreshHandler) RefreshSummary(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	apiKey := middleware.APIKeyFromContext(r.Context())
-	if apiKey == nil {
-		writeError(w, http.StatusUnauthorized, "api key required")
-		return
-	}
-	if apiKey.ProjectID != nil && *apiKey.ProjectID != doc.ProjectID {
+	if !requestAllowsProject(r, doc.ProjectID) {
 		writeError(w, http.StatusForbidden, "api key not allowed for this project")
 		return
 	}
@@ -101,6 +98,18 @@ func (h *DocumentRefreshHandler) RefreshSummary(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	updated, _ := h.docStore.GetByID(id)
+	caller := "api_key"
+	if u := middleware.UserFromContext(r.Context()); u != nil {
+		caller = u.ID
+	}
+	if _, err := h.driftStore.ResolveOpenByDocumentID(id, caller); err != nil {
+		log.Printf("refresh-summary: drift resolve for doc %s: %v", id, err)
+	}
+
+	updated, err := h.docStore.GetByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to fetch updated document")
+		return
+	}
 	writeSuccess(w, http.StatusOK, updated, nil)
 }

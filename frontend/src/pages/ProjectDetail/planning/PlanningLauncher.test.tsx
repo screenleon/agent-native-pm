@@ -91,4 +91,62 @@ describe('<PlanningLauncher />', () => {
     await userEvent.click(screen.getByRole('button', { name: /Start Planning Run/i }))
     expect(onStartRun).toHaveBeenCalledTimes(1)
   })
+
+  it('shows the What\'s Next button when local connector is online', () => {
+    const providerOptions = {
+      providers: [],
+      default_selection: null,
+      available_execution_modes: ['server_provider', 'local_connector'],
+      paired_connector_available: true,
+      active_connector_label: 'My Machine',
+      credential_mode: 'shared',
+      allow_model_override: false,
+      can_run: true,
+      unavailable_reason: '',
+      resolved_binding_source: 'shared',
+      resolved_binding_label: '',
+    } as unknown as PlanningProviderOptions
+    renderLauncher({ providerOptions, executionMode: 'local_connector', runReady: true })
+    expect(screen.getByRole('button', { name: /Run What's Next/i })).toBeInTheDocument()
+  })
+
+  it('fires onRunWhatsnext when the What\'s Next button is clicked', async () => {
+    const onRunWhatsnext = vi.fn()
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const providerOptions = {
+      providers: [],
+      default_selection: null,
+      available_execution_modes: ['server_provider', 'local_connector'],
+      paired_connector_available: true,
+      active_connector_label: 'My Machine',
+      credential_mode: 'shared',
+      allow_model_override: false,
+      can_run: true,
+      unavailable_reason: '',
+      resolved_binding_source: 'shared',
+      resolved_binding_label: '',
+    } as unknown as PlanningProviderOptions
+    renderLauncher({ providerOptions, executionMode: 'local_connector', runReady: true, onRunWhatsnext })
+    await userEvent.click(screen.getByRole('button', { name: /Run What's Next/i }))
+    expect(onRunWhatsnext).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows "Starting…" and disables What\'s Next when runningWhatsnext is true', () => {
+    const providerOptions = {
+      providers: [],
+      default_selection: null,
+      available_execution_modes: ['server_provider', 'local_connector'],
+      paired_connector_available: true,
+      active_connector_label: 'My Machine',
+      credential_mode: 'shared',
+      allow_model_override: false,
+      can_run: true,
+      unavailable_reason: '',
+      resolved_binding_source: 'shared',
+      resolved_binding_label: '',
+    } as unknown as PlanningProviderOptions
+    renderLauncher({ providerOptions, executionMode: 'local_connector', runReady: true, runningWhatsnext: true })
+    const btn = screen.getByRole('button', { name: /Starting/i })
+    expect(btn).toBeDisabled()
+  })
 })

@@ -23,6 +23,7 @@ import {
   listProjectRepoMappings,
   updateProjectRepoMapping,
   listDocuments,
+  refreshDocumentSummary,
 } from '../api/client'
 import { syncRunGuidance, type SyncGuidance } from '../utils/syncGuidance'
 import { SyncStatusPanel } from '../components/SyncStatusPanel'
@@ -402,6 +403,15 @@ function ProjectDetail() {
     }
   }
 
+  async function handleMarkDocUpdated(docId: string) {
+    try {
+      await refreshDocumentSummary(docId)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to mark document as updated')
+    }
+  }
+
   function healthClass(score: number) {
     if (score >= 0.7) return 'health-good'
     if (score >= 0.4) return 'health-ok'
@@ -631,6 +641,7 @@ function ProjectDetail() {
               onViewDoc={handleViewDoc}
               onManageLinks={openLinksManager}
               onDeleteDoc={handleDeleteDoc}
+              onMarkUpdated={handleMarkDocUpdated}
             />
           )}
 
