@@ -423,6 +423,10 @@ func (h *PlanningRunHandler) ApplyBacklogCandidate(w http.ResponseWriter, r *htt
 		return
 	}
 
+	if !result.AlreadyApplied && result.Candidate.RequirementID != "" {
+		_ = h.requirementStore.PromoteToPlannedIfDraft(result.Candidate.RequirementID)
+	}
+
 	status := http.StatusCreated
 	if result.AlreadyApplied {
 		status = http.StatusOK

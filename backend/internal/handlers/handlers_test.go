@@ -1152,6 +1152,20 @@ func TestBacklogCandidateApplyCreatesTaskAndReplaysIdempotently(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 task after apply, got %d", len(tasks))
 	}
+
+	// Applying a candidate must promote the parent requirement draft→planned.
+	reqGetReq := httptest.NewRequest("GET", "/api/requirements/"+requirementID, nil)
+	reqGetResp := httptest.NewRecorder()
+	srv.ServeHTTP(reqGetResp, reqGetReq)
+	if reqGetResp.Code != http.StatusOK {
+		t.Fatalf("get requirement after apply: expected 200, got %d: %s", reqGetResp.Code, reqGetResp.Body.String())
+	}
+	var reqGetEnvelope models.Envelope
+	json.NewDecoder(reqGetResp.Body).Decode(&reqGetEnvelope)
+	reqData := reqGetEnvelope.Data.(map[string]interface{})
+	if reqData["status"] != "planned" {
+		t.Fatalf("expected requirement status planned after apply, got %v", reqData["status"])
+	}
 }
 
 func TestDocumentPreviewResolvesSecondaryRepoMappingByAlias(t *testing.T) {

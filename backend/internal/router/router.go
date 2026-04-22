@@ -119,6 +119,7 @@ func New(deps Deps) http.Handler {
 				r.Get("/projects/{id}/requirements", deps.RequirementHandler.ListByProject)
 				r.Post("/projects/{id}/requirements", deps.RequirementHandler.Create)
 				r.Get("/requirements/{id}", deps.RequirementHandler.Get)
+				r.Patch("/requirements/{id}", deps.RequirementHandler.Update)
 			}
 			if deps.PlanningRunHandler != nil {
 				r.Get("/projects/{id}/planning-provider-options", deps.PlanningRunHandler.ProviderOptions)
