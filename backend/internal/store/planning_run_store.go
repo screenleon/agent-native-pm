@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"github.com/screenleon/agent-native-pm/internal/database"
 	"github.com/screenleon/agent-native-pm/internal/models"
 )
 
@@ -19,11 +20,12 @@ var ErrPlanningRunLeaseUnavailable = errors.New("planning run lease is not avail
 const activePlanningRunConstraint = "idx_planning_runs_requirement_active"
 
 type PlanningRunStore struct {
-	db *sql.DB
+	db      *sql.DB
+	dialect database.Dialect
 }
 
-func NewPlanningRunStore(db *sql.DB) *PlanningRunStore {
-	return &PlanningRunStore{db: db}
+func NewPlanningRunStore(db *sql.DB, dialect database.Dialect) *PlanningRunStore {
+	return &PlanningRunStore{db: db, dialect: dialect}
 }
 
 func (s *PlanningRunStore) Create(projectID, requirementID, requestedByUserID string, request models.CreatePlanningRunRequest, selection models.PlanningProviderSelection) (*models.PlanningRun, error) {
@@ -207,7 +209,10 @@ func (s *PlanningRunStore) LeaseNextLocalConnectorRun(userID, connectorID, conne
 		return nil, err
 	}
 
-	row := s.db.QueryRow(`
+	// FOR UPDATE SKIP LOCKED is PostgreSQL row-level locking for distributed workers.
+	// SQLite serialises writes at the engine level, so the clause is both unsupported
+	// and unnecessary there.
+	claimCTE := `
 		WITH next_run AS (
 			SELECT id
 			FROM planning_runs
@@ -218,7 +223,21 @@ func (s *PlanningRunStore) LeaseNextLocalConnectorRun(userID, connectorID, conne
 			ORDER BY created_at ASC, id ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
-		)
+		)`
+	if s.dialect.IsSQLite() {
+		claimCTE = `
+		WITH next_run AS (
+			SELECT id
+			FROM planning_runs
+			WHERE requested_by_user_id = $1
+			  AND execution_mode = $2
+			  AND dispatch_status IN ($3, $4)
+			  AND status = $5
+			ORDER BY created_at ASC, id ASC
+			LIMIT 1
+		)`
+	}
+	row := s.db.QueryRow(claimCTE+`
 		UPDATE planning_runs
 		SET status = $6,
 		    dispatch_status = $7,
@@ -257,7 +276,7 @@ func (s *PlanningRunStore) GetLeasedLocalConnectorRun(id, connectorID string) (*
 		  AND dispatch_status = $4
 		  AND status = $5
 		  AND lease_expires_at IS NOT NULL
-		  AND lease_expires_at > NOW()
+		  AND lease_expires_at > CURRENT_TIMESTAMP
 	`, id, strings.TrimSpace(connectorID), models.PlanningExecutionModeLocalConnector, models.PlanningDispatchStatusLeased, models.PlanningRunStatusRunning)
 	return scanOnePlanningRun(row)
 }
@@ -487,15 +506,31 @@ func scanPlanningRun(scanner planningRunScanner) (*models.PlanningRun, error) {
 // All counts include runs from any execution mode (local connector or server provider).
 func (s *PlanningRunStore) RunStatsByUser(userID string) (models.ConnectorRunStats, error) {
 	var stats models.ConnectorRunStats
-	err := s.db.QueryRow(`
+	var query string
+	if s.dialect.IsSQLite() {
+		// SQLite date arithmetic uses datetime() modifiers; INTERVAL is PostgreSQL-only.
+		// FILTER on aggregates is supported since SQLite 3.30.0.
+		query = `
+		SELECT
+			COUNT(*) FILTER (WHERE created_at >= datetime('now', '-1 day'))   AS today,
+			COUNT(*) FILTER (WHERE created_at >= datetime('now', '-7 days'))  AS week,
+			COUNT(*) FILTER (WHERE created_at >= datetime('now', '-30 days')) AS month,
+			COUNT(*)                                                           AS total
+		FROM planning_runs
+		WHERE requested_by_user_id = $1`
+	} else {
+		query = `
 		SELECT
 			COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '1 day')   AS today,
 			COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days')  AS week,
 			COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days') AS month,
 			COUNT(*)                                                          AS total
 		FROM planning_runs
-		WHERE requested_by_user_id = $1
-	`, strings.TrimSpace(userID)).Scan(&stats.RunsToday, &stats.RunsWeek, &stats.RunsMonth, &stats.RunsTotal)
+		WHERE requested_by_user_id = $1`
+	}
+	err := s.db.QueryRow(query, strings.TrimSpace(userID)).Scan(
+		&stats.RunsToday, &stats.RunsWeek, &stats.RunsMonth, &stats.RunsTotal,
+	)
 	return stats, err
 }
 

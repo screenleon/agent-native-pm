@@ -2,7 +2,51 @@
 
 Active architectural and behavioral decisions for Agent Native PM.
 
-When this file exceeds 50 entries or 30 KB, archive older entries to `DECISIONS_ARCHIVE.md`.
+When this file exceeds 50 entries or 30 KB, archive older entries to `DECISIONS_ARCHIVE.md`. The most recent archival pass was on 2026-04-22.
+
+## 2026-04-22: ProjectDetail.tsx split shipped; UI test coverage outstanding [agent:application-implementer]
+
+- **Context**: Earlier the same day the Tier-3 decision block (2026-04-22 entry T3.C) deferred splitting `ProjectDetail.tsx` out of the v1 PR, citing the risk of landing a 3000+ line restructure without UI tests. The working tree on `main` now contains the split: `ProjectDetail.tsx` went from ~3206 lines to 737 lines and delegates to eight new components (`ProjectOverviewTab`, `TasksTab`, `DocumentsTab`, `DriftTab`, `AgentsTab`, `PlanningTab`, `SettingsTab`, `SyncStatusPanel`) plus `utils/formatters.ts`. The imports are already wired in `ProjectDetail.tsx` lines 28–35. However the original T3.C blocker — zero UI tests — is still unresolved: `find frontend/src -name '*.test.*' -o -name '*.spec.*'` returns nothing.
+- **Decision**: Ratify the split as-is. Treat UI smoke coverage as a must-do follow-up rather than a retroactive rollback: bootstrap `vitest` + `@testing-library/react` + `jsdom` in this PR, land at least one smoke test per new tab/panel component within the next merge window, and block any further behavior change to these components until their smoke test exists. `utils/formatters.ts` gets pure unit tests as part of the same bootstrap.
+- **Alternatives considered**: (1) Revert the split and redo it in a testable way — rejected; the split as shipped is structurally correct and reverting would destroy working code for process reasons alone. (2) Require full behavioral test parity before merging any further change — rejected as over-reach; one render-smoke test per component is the realistic bar that pays back T3.C's stated concern without stalling product work.
+- **Constraints introduced**: New product work on these eight components requires at least one smoke test covering the new code path in the same PR. `frontend/src/**` now needs to type-check with `vitest/globals` available; this is handled via `tsconfig.json` types or explicit `import { describe, it, expect } from 'vitest'` (project chooses explicit imports to keep tsconfig lean).
+- **Supersedes**: T3.C clause in 2026-04-22 "Provider.Generate takes context.Context; OpenAI egress consumes wire.PlanningContextV1; SSE deferred; UI split deferred" (the UI-split-deferred half).
+
+## 2026-04-22: Adopt in-process SSE broker for notifications and planning run state [agent:backend-architect]
+
+- **Context**: The same-day Tier-3 decision block (T3.D) explicitly deferred SSE/WebSocket transport, keeping 20s polling plus `visibilitychange` plus the `anpm:refresh-notifications` window event. The working tree already contains a new `backend/internal/events/broker.go` (per-user `sync.RWMutex`-guarded pub/sub with buffered 8-slot channels and silent slow-consumer drop), `handlers/notifications.go` has a `GET /api/notifications/stream` SSE endpoint using `text/event-stream` + `http.Flusher`, and `backend/cmd/server/main.go` wires `notificationBroker := events.NewBroker()` into `notificationStore.SetBroker(...)` and `notificationHandler.WithBroker(notificationBroker, sessionStore)`.
+- **Decision**: Adopt SSE as the primary push transport for notifications and planning-run state changes. Keep 20s polling + `visibilitychange` + `anpm:refresh-notifications` as a fallback path (clients without EventSource, proxies that break long-lived connections, or disabled JS). EventSource cannot set custom auth headers, so the stream endpoint accepts a session token via `?token=` query param and must validate it against `SessionStore`.
+- **Alternatives considered**: (1) WebSockets — rejected; full-duplex is unnecessary for notifications, and SSE is strictly simpler (plain HTTP, auto-reconnect, text framing). (2) Long polling — rejected; SSE gives better latency for the same operational complexity. (3) External broker (Redis pub/sub, NATS) — rejected for v1 because the deployment target is single-process; switching is a horizontal-scale trigger, not a day-one requirement.
+- **Constraints introduced**: The `events.Broker` is per-process and in-memory. Any future horizontal scaling of the server MUST either pin a user's SSE connections to one instance via sticky sessions or replace the broker with a distributed pub/sub. Slow-consumer events are dropped silently — this is acceptable for UI freshness signals but MUST NOT be used for state that is authoritative only via the stream. The `?token=` query param path is strictly limited to the SSE endpoint; other routes continue to require header auth. The `anpm:refresh-notifications` event name remains stable for fallback consumers.
+- **Supersedes**: T3.D clause in 2026-04-22 "Provider.Generate takes context.Context; OpenAI egress consumes wire.PlanningContextV1; SSE deferred; UI split deferred" (the SSE-deferred half).
+
+## 2026-04-22: Dual-runtime mode — local (SQLite) and server (PostgreSQL) [agent:backend-architect]
+
+- **Context**: The 2026-04-14 "Move backend runtime to PostgreSQL now" decision superseded the earlier "SQLite as Phase 1" decision, making PostgreSQL the runtime default. The working tree re-introduces SQLite through `backend/internal/config/workspace.go` and `config.go`: when `DATABASE_URL` is unset and a git repo is detected, `config.Load()` sets `LocalMode=true`, points `DatabaseURL` at `sqlite://$REPO_ROOT/.anpm/data.db`, derives a stable port in `[3100, 3999]` from the repo absolute path, and the server auto-provisions the single local project on startup. Server-mode Docker deployments still run PostgreSQL via `DATABASE_URL`.
+- **Decision**: Formally recognise two runtime modes that share one schema and one SQL layer:
+  - **Local mode** — activated when `DATABASE_URL` is empty and a `.git` parent is found. Uses SQLite at `$REPO_ROOT/.anpm/data.db`, auto-provisions the single project, runs with `InjectLocalAdmin` middleware (no login), picks a deterministic port. Invoked via `anpm serve` / `make serve` / `scripts/serve.sh`.
+  - **Server mode** — activated when `DATABASE_URL` is set. Uses PostgreSQL, full auth, multi-user, multi-project. Invoked via Docker Compose or the standalone `server` binary with explicit environment.
+- The pre-existing API-004 rule ("use `database/sql` with a driver that supports both SQLite and PostgreSQL") changes from *migration hedge* to *hard requirement*.
+- **Alternatives considered**: (1) Keep PostgreSQL as the only runtime and ship Docker-Compose-only local dev — rejected; `anpm serve` in any git repo is a materially better personal-use onboarding than "install Docker, edit compose file, mount repo." (2) Make local mode use an embedded PostgreSQL (e.g. `embedded-postgres`) — rejected; SQLite's zero-dependency footprint is the entire point of local mode. (3) Keep local-mode SQLite but forbid schema-parity with server mode (e.g. two separate DAOs) — rejected; doubles maintenance cost and defeats the migration story.
+- **Constraints introduced**: Every new migration MUST apply cleanly under both SQLite (`modernc.org/sqlite`) and PostgreSQL. PostgreSQL-specific syntax (`$N` placeholders, `JSONB`, GIN indexes, `tsvector` full-text search) either needs a SQLite-side equivalent (e.g. text column + LIKE-based search in local mode) or must be feature-gated behind a mode check. Tests must run against both drivers — the existing `scripts/test-with-postgres.sh` remains; a parallel `go test` path without the PostgreSQL dependency is required. Local mode's auth-bypass (`InjectLocalAdmin`) MUST NEVER activate when `LocalMode=false`; the guard in `main.go` is load-bearing. Local mode responses MUST NOT leak the local-mode flag to the public API surface beyond `/api/meta`, which is designed for CLI/status clients.
+- **Supersedes**: Partial supersession of "2026-04-14 Move backend runtime to PostgreSQL now" — PostgreSQL remains the *server-mode* default; it is no longer the absolute default across all invocations.
+
+## 2026-04-22: Single-binary distribution with embedded frontend as primary install path [agent:backend-architect]
+
+- **Context**: README and ARCHITECTURE treat `docker compose up --build` as the canonical install path. The working tree adds `.goreleaser.yml` (builds `server` and `anpm` binaries for linux/darwin/windows × amd64/arm64, runs `npm ci && npm run build && cp frontend/dist backend/internal/frontend/dist` in a pre-build hook), `backend/internal/frontend/frontend.go` + `dist/` (Go-embed of the built SPA), `backend/cmd/anpm/main.go` (CLI with `serve` / `status` / `version` subcommands that delegates to `scripts/serve.sh` when present, else execs the sibling `server` binary directly), and `scripts/serve.sh` (auto-rebuilds backend/frontend when sources are newer than artifacts and then starts the server).
+- **Decision**: Adopt the single-binary-plus-embedded-frontend path distributed by goreleaser as the primary install path for personal / single-operator use: `go install` or `curl | sh` one binary, run `anpm serve` inside any git repo, get a working UI on a deterministic localhost port. Docker Compose is retained as the deployment path for multi-user, multi-project server-mode installs.
+- **Alternatives considered**: (1) Docker-only distribution — rejected; a single static binary removes a full runtime dependency for the majority target (personal PM on a dev laptop). (2) Separate frontend hosting (static-file CDN / separate npm package) — rejected; embedding keeps "one binary, no CORS, no proxy" UX. (3) Ship `anpm` but not `server` and have `anpm` always embed the server — rejected; production server-mode operators prefer running the `server` binary under systemd / a container without the `anpm` CLI wrapper.
+- **Constraints introduced**: The goreleaser pre-build hook MUST run to completion before any Go build step; a release without `backend/internal/frontend/dist/` populated produces a binary that serves an empty UI. Version stamping via `-ldflags "-X main.Version=..."` applies to both `anpm` and `server`. `anpm serve`, `anpm status`, and `make serve` MUST share the same `config.LocalMode` detection and port-derivation logic — divergence produces "status says stopped but server is running" bugs. The embedded frontend path in `backend/internal/frontend/frontend.go` is part of the public install contract: do not rename or relocate without a migration note.
+
+## 2026-04-21: Four UI progressive-disclosure improvements [agent:application-implementer]
+
+- **Context**: `SyncStatusPanel` always rendered as a full card regardless of whether attention was needed. The Settings tab rendered outside the rail layout, visually misaligned. The Planning intake form was always visible even when requirements already existed. The Drift Document Preview always rendered inline, adding noise to the detail panel.
+- **Decision**:
+  - (1) `SyncStatusPanel` is now collapsible. It auto-expands when action is needed (`!hasRepoSource || !latestSyncRun || latestSyncRun.status === 'failed' || canApplyDetectedBranchAndRerun`) and otherwise renders as a compact bar with a status badge, relative time, error hint, drift badge, Sync Now button, and a Details button. The expanded view retains all original content plus a Collapse button.
+  - (2) The Settings tab content (Repo Mappings card) was relocated from above the rail layout to inside the rail content area, after the Agents tab block. It now renders correctly within the rail flow.
+  - (3) The Planning Requirement Intake form uses sequential disclosure when requirements already exist: the form is hidden behind a `+ New Requirement` button (`showRequirementIntake` state, default false when requirements exist). After a successful create the form auto-collapses. When no requirements exist the form remains fully visible.
+  - (4) The Drift detail Document Preview section now shows a toggle button (`Show Document Preview` / `Hide Preview`) instead of always rendering the `<pre>` block. The preview collapses automatically when the user selects a different drift signal.
+- **Constraints introduced**: `showDriftPreview` and `showRequirementIntake` are local state in `ProjectDetail.tsx`; no state was lifted to parent/child components. `SyncStatusPanel` initializes `expanded` via a `useState` initializer function (runs once on mount, not reactively). If the conditions that would auto-expand change after mount (e.g., sync fails while the panel is already collapsed), the panel does not auto-re-expand — the user must click Details. This is intentional; re-expansion on state change would be disruptive.
 
 ## 2026-04-22: Provider.Generate takes context.Context; OpenAI egress consumes wire.PlanningContextV1; SSE deferred; UI split deferred [agent:backend-architect]
 
@@ -90,92 +134,12 @@ When this file exceeds 50 entries or 30 KB, archive older entries to `DECISIONS_
 - **Supersedes**: This decision supersedes the earlier "Use SQLite as Phase 1 data store" decision for active runtime defaults.
 - **Constraints introduced**: Docker runtime requires a PostgreSQL service and `DATABASE_URL`. Data reset/re-seeding is required when moving existing local SQLite state.
 
-## 2026-04-14: Modular monolith architecture
-
-- **Context**: Microservices would add operational complexity (multiple containers, service discovery, inter-service communication) without proportional benefit for a small-team tool.
-- **Decision**: Single Go binary with internal module boundaries. Background jobs run as embedded goroutines.
-- **Alternatives considered**: Separate API and worker containers — rejected for Phase 1 to minimize resource usage.
-- **Constraints introduced**: Module boundaries must be enforced through Go package structure. No circular imports between top-level modules.
-
-## 2026-04-14: Static frontend (React + Vite)
-
-- **Context**: Next.js SSR adds a Node.js runtime in production, consuming memory for server-side rendering that this project does not need.
-- **Decision**: Use React + Vite to produce a static SPA. Serve from the Go binary or a lightweight file server.
-- **Alternatives considered**: Next.js — rejected due to runtime memory overhead. HTMX — rejected because the team is more productive with React and the dashboard requires rich client-side interactivity.
-- **Constraints introduced**: No server-side rendering. All dynamic data comes from the JSON API.
-
-## 2026-04-14: Drift detection as a core feature
-
-- **Context**: The primary value proposition is knowing when documentation is out of sync with code, not just tracking tasks.
-- **Decision**: Drift detection is a first-class module, not an afterthought. Every code change should be compared against the document registry.
-- **Alternatives considered**: Manual doc update reminders — rejected because the whole point is automation.
-- **Constraints introduced**: The `documents` table must track last-updated timestamps. The `drift` module must be able to correlate file paths from git changes to registered documents.
-
-## 2026-04-14: Agent API uses the same HTTP endpoints as the frontend
-
-- **Context**: Maintaining separate API surfaces for humans and agents doubles the contract surface and increases drift risk.
-- **Decision**: Agents and the frontend use the same REST API. Agents authenticate via `X-API-Key` header; the frontend uses session cookies.
-- **Alternatives considered**: Separate `/agent/` API namespace — rejected to avoid duplication.
-- **Constraints introduced**: All API endpoints must return structured JSON. No HTML-rendering endpoints in the API router.
-
-## 2026-04-14: Go Chi router for HTTP routing
-
-- **Context**: Project manifest listed Chi/Echo as TBD for the HTTP framework.
-- **Decision**: Use `go-chi/chi/v5` for HTTP routing.
-- **Alternatives considered**: Echo — rejected because Chi is closer to the standard library (`net/http` compatible handlers) and has lower overhead.
-- **Constraints introduced**: All handlers use `http.HandlerFunc` signature patterning for compatibility.
-
-## 2026-04-14: Pure-Go SQLite driver (modernc.org/sqlite)
-
-- **Context**: Need a SQLite driver for Go. `mattn/go-sqlite3` requires CGO and a C compiler.
-- **Decision**: Use `modernc.org/sqlite` (pure Go, no CGO required).
-- **Alternatives considered**: `mattn/go-sqlite3` — rejected because it complicates cross-compilation and Docker builds.
-- **Constraints introduced**: CGO disabled in build (`CGO_ENABLED=0`). Some SQLite extensions may not be available.
-
-## 2026-04-14: Unified auth context via middleware chain
-
-- **Context**: Phase 4 introduces session auth for humans and Phase 3 introduces API key auth for agents; handlers need a single way to read caller identity.
-- **Decision**: Apply session middleware first, API key middleware second, and store authenticated principal in request context under the shared `user` key.
-- **Alternatives considered**: Separate route trees for human vs agent auth — rejected because it duplicates route wiring and increases drift risk.
-- **Constraints introduced**: Protected API routes must rely on context identity (`RequireAuth`, `RequireAdmin`) rather than endpoint-specific credential parsing.
-
-## 2026-04-14: Optional route registration for phased handlers
-
-- **Context**: Existing Phase 1 handler tests construct router dependencies without Phase 2-4 handlers.
-- **Decision**: Register Phase 2-4 routes conditionally when corresponding handlers are non-nil.
-- **Alternatives considered**: Force tests to instantiate every new handler — rejected because it couples Phase 1 tests to unrelated subsystems.
-- **Constraints introduced**: Router must guard route registration for optional handlers to avoid nil dereference during startup and tests.
-
 ## 2026-04-14: Scrum-first backlog-before-implementation workflow
 
 - **Context**: Implementation often started before clear backlog capture and prioritization, causing requirement backfill after coding.
 - **Decision**: Enforce a Scrum-first execution order: discover, triage, check decisions, capture backlog, prioritize backlog, then implement.
 - **Alternatives considered**: Implementation-first with post-hoc planning — rejected due to rework and unclear priorities.
 - **Constraints introduced**: Tasks are not considered implementation-ready until backlog items and acceptance criteria are explicitly recorded.
-- **Source**: [agent:documentation-architect]
-
-## 2026-04-14: In-app document preview for registered project docs
-
-- **Context**: Users need to inspect document content directly while managing tasks and drift, without leaving the PM system.
-- **Decision**: Add `GET /api/documents/:id/content` and UI document preview modal in project detail.
-- **Alternatives considered**: External editor-only workflow — rejected because it breaks PM flow context.
-- **Constraints introduced**: `file_path` must remain repo-relative and content access must be constrained to the project repo root.
-- **Source**: [agent:application-implementer]
-
-## 2026-04-15: Managed repo cache for Docker-based sync
-
-- **Context**: Docker Compose deployments previously required manual host volume mounts for every repository that needed git scanning, which blocked practical automation and forced operators to expose host paths into the app container.
-- **Decision**: Add optional `repo_url` to projects and support managed clone/fetch behavior into a container-owned repo cache under `REPO_ROOT` (default `/app/data/repos`). Keep `repo_path` as a manual override and backward-compatible fallback.
-- **Alternatives considered**: Continue requiring per-repo host mounts — rejected because it prevents self-service automation and increases host-path exposure.
-- **Constraints introduced**: Managed clone mode currently relies on git-accessible remote URLs and does not provide first-class secret management for private repos. Private/manual cases may continue using direct `repo_path`.
-- **Source**: [agent:application-implementer]
-
-## 2026-04-15: Mirror-based multi-repo mappings for local-first sync
-
-- **Context**: Managed clone mode does not reflect unpushed local working tree changes, and some projects need multiple repositories mounted into the app container at the same time.
-- **Decision**: Add `project_repo_mappings` as a first-class project attachment model. Projects can bind one primary repo and multiple secondary mirror repos mounted read-only under `/mirrors/*`. Sync scans every mapped repo, and secondary repo paths are surfaced with alias prefixes such as `shared/pkg/helper.go`.
-- **Alternatives considered**: Keep only `repo_url` managed clones — rejected because they hide local changes. Keep only a single `repo_path` — rejected because projects may span multiple repos.
-- **Constraints introduced**: Non-primary mappings must use stable aliases. Documents and document links that target secondary repos must store alias-prefixed paths. `repo_url` managed clone mode remains as a fallback, but mirror mappings are the preferred Docker/local workflow.
 - **Source**: [agent:documentation-architect]
 
 ## 2026-04-17: Apply approved planning output at candidate scope

@@ -55,7 +55,7 @@ func OpenTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("open test db: %v", err)
 	}
 
-	if err := database.RunMigrations(db); err != nil {
+	if err := database.RunMigrations(db, false); err != nil {
 		_ = db.Close()
 		_, _ = adminDB.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName))
 		_ = adminDB.Close()

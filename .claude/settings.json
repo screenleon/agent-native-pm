@@ -3,7 +3,18 @@
     "allow": [
       "Bash(npm run *)",
       "Bash(docker compose *)",
-      "Bash(sudo rm *)"
+      "Bash(sudo rm *)",
+      "Bash(rm -f .anpm/data.db)",
+      "Bash(go build *)",
+      "Bash(timeout 8 ./backend/bin/server)",
+      "Bash(timeout 8 ./bin/server)",
+      "Bash(timeout 6 ./bin/server)",
+      "Bash(./bin/server)",
+      "Bash(curl -s http://127.0.0.1:3980/api/health)",
+      "Bash(python3 -m json.tool echo \"=== anpm status ===\")",
+      "Bash(./bin/anpm status *)",
+      "Bash(./bin/anpm version *)",
+      "Bash(wait)"
     ]
   }
 }

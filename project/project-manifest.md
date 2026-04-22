@@ -47,10 +47,6 @@
 - No ui-image-implementer role — this project does not use screenshot-driven UI workflow
 - The template's `skills/` directory is not used — skill behaviors are executed natively
 
-## Override annotations
-
-- Overrides: Template skills system → native tool capabilities (no skill files loaded)
-
 ## Override registry
 
 | Base Rule ID | Project Rule ID | Reason | Status |

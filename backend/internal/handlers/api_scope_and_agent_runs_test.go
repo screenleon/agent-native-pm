@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/screenleon/agent-native-pm/internal/database"
 	"github.com/screenleon/agent-native-pm/internal/handlers"
 	"github.com/screenleon/agent-native-pm/internal/middleware"
 	"github.com/screenleon/agent-native-pm/internal/models"
@@ -36,7 +37,7 @@ func setupScopedAPIServer(t *testing.T) scopedAPIFixture {
 
 	projectStore := store.NewProjectStore(db)
 	requirementStore := store.NewRequirementStore(db)
-	planningRunStore := store.NewPlanningRunStore(db)
+	planningRunStore := store.NewPlanningRunStore(db, database.NewDialect("postgres://test"))
 	backlogCandidateStore := store.NewBacklogCandidateStore(db)
 	taskStore := store.NewTaskStore(db)
 	documentStore := store.NewDocumentStore(db)

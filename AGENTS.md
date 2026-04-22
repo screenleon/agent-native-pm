@@ -54,5 +54,20 @@ Precedence: Project Context > Domain Rules > Global Rules.
 - `docs/data-model.md` — canonical data model
 - `docs/api-surface.md` — canonical API contract
 - `DECISIONS.md` — active architectural constraints
+- `rules/global/core.md`, `rules/global/security-baseline.md`, `rules/global/prompt-injection.md` — cross-project guardrails
+- `rules/domain/*.md` — domain-specific rules (backend-api, frontend-components, documentation-sync)
+- `project/project-manifest.md` — repo-local constraints and override registry
 - `prompt-budget.yml` — execution mode, enabled roles, token budget
 - `.claude/agents/` and `.github/copilot-instructions.md` — tool-specific implementations that must stay aligned with the source-of-truth docs above
+
+## Governance checks
+
+These scripts keep the rules, docs, and prompt budget aligned:
+
+- `make lint-rules` — layered rule structure, rule-ID uniqueness, stability/supersession integrity
+- `make lint-docs` — prompt-budget wording / doc consistency
+- `make validate-prompt-budget` — schema of `prompt-budget.yml`
+- `make budget-report` — estimated token cost per layer against the targets in `prompt-budget.yml`
+- `make decisions-conflict-check TEXT="proposed decision..."` — overlap check against `DECISIONS.md` before planning
+
+`make lint-governance` runs lint-rules + lint-docs + validate-prompt-budget together.

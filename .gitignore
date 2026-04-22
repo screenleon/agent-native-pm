@@ -4,9 +4,15 @@
 *.dll
 *.so
 *.dylib
+# Canonical build outputs live in /bin/ (see Makefile); anything else
+# under /backend/ that looks like a binary is an accidental `go build`
+# from the wrong working directory.
 /backend/agent-native-pm
 /backend/server
-/bin/server
+/backend/anpm
+/backend/bin/
+/bin/
+
 
 # Go
 /vendor/
@@ -61,3 +67,10 @@ prompt-budget.local.yml
 # Test coverage
 coverage.out
 coverage.html
+
+# anpm local data
+.anpm/
+
+# Embedded frontend assets (populated by serve.sh / Makefile before go build)
+/backend/internal/frontend/dist/*
+!/backend/internal/frontend/dist/.gitkeep
