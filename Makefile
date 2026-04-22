@@ -71,6 +71,7 @@ dev:
 
 clean:
 	rm -rf bin/ backend/data/ frontend/dist/ frontend/node_modules/
+	rm -rf backend/bin/ backend/anpm backend/server
 
 # ── Docker ───────────────────────────────────────────────────────────────────
 

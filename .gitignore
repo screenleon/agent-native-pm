@@ -4,12 +4,15 @@
 *.dll
 *.so
 *.dylib
+# Canonical build outputs live in /bin/ (see Makefile); anything else
+# under /backend/ that looks like a binary is an accidental `go build`
+# from the wrong working directory.
 /backend/agent-native-pm
 /backend/server
 /backend/anpm
 /backend/bin/
-/bin/server
-/bin/anpm
+/bin/
+
 
 # Go
 /vendor/
