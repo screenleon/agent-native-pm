@@ -183,6 +183,8 @@ With v1.post shipped, the next architectural focus is the **Planning Workspace U
 
 That Planning Workspace must remain draft-first, traceable, and human-approved before creating tasks. Structural rule from the 2026-04-22 Tier-3 decision: new product additions to `ProjectDetail` MUST land as siblings under `frontend/src/pages/ProjectDetail/` rather than appending to the existing function.
 
+The concrete scope, slice plan, and acceptance criteria for this work are in `docs/phase2-planning-workspace-design.md`. No Phase 2 code lands until that design is approved.
+
 Deferred work not on the near-term path: subscription CLI bridge (needs client-side architecture design), SSE-broker horizontal scaling (triggers only on multi-instance deployment), further `DECISIONS.md` archival (remaining entries are still load-bearing).
 
 Source: `[agent:documentation-architect]`, `[agent:backend-architect]`
