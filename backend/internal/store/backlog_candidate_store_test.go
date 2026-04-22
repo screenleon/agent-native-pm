@@ -5,7 +5,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/screenleon/agent-native-pm/internal/database"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/testutil"
 )
@@ -16,8 +15,8 @@ func setupBacklogCandidateStore(t *testing.T) (*BacklogCandidateStore, *models.R
 	db := testutil.OpenTestDB(t)
 	projectStore := NewProjectStore(db)
 	requirementStore := NewRequirementStore(db)
-	planningRunStore := NewPlanningRunStore(db, database.NewDialect("postgres://test"))
-	candidateStore := NewBacklogCandidateStore(db)
+	planningRunStore := NewPlanningRunStore(db, testutil.TestDialect())
+	candidateStore := NewBacklogCandidateStore(db, testutil.TestDialect())
 
 	project, err := projectStore.Create(models.CreateProjectRequest{Name: "Candidate Project"})
 	if err != nil {

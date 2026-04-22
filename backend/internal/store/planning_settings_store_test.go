@@ -102,7 +102,7 @@ func TestPlanningSettingsStoreGetNormalizesMissingDefaultModel(t *testing.T) {
 			api_key_ciphertext = $6,
 			api_key_configured = $7,
 			updated_by = $8,
-			updated_at = NOW()
+			updated_at = CURRENT_TIMESTAMP
 		WHERE id = $1
 	`, models.PlanningSettingsSingletonID, models.PlanningProviderOpenAICompatible, "", "https://example.com/v1", `["kimi-k2","qwen3-coder"]`, "", false, "admin")
 	if err != nil {

@@ -53,7 +53,7 @@ func main() {
 
 	// Phase 2 stores
 	planningRunStore := store.NewPlanningRunStore(db, dialect)
-	backlogCandidateStore := store.NewBacklogCandidateStore(db)
+	backlogCandidateStore := store.NewBacklogCandidateStore(db, dialect)
 	syncRunStore := store.NewSyncRunStore(db)
 	agentRunStore := store.NewAgentRunStore(db)
 	driftSignalStore := store.NewDriftSignalStore(db)

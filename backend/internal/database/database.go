@@ -46,6 +46,39 @@ func (d Dialect) SkipLocked() string {
 	return " SKIP LOCKED"
 }
 
+// ForUpdate returns the "FOR UPDATE" clause for row-level locking, or an
+// empty string on SQLite. SQLite serialises writes via its single-writer
+// model, so explicit row locks are both unsupported syntax and unnecessary.
+//
+// Callers typically use it as: query + " " + dialect.ForUpdate()
+func (d Dialect) ForUpdate() string {
+	if d.sqlite {
+		return ""
+	}
+	return "FOR UPDATE"
+}
+
+// IsUniqueViolation reports whether err is a unique-constraint failure. The
+// detection is driver-specific: PostgreSQL returns pq.Error with SQLState
+// 23505, modernc.org/sqlite surfaces a text-formatted constraint error that
+// starts with "constraint failed: UNIQUE constraint failed:". Callers that
+// need constraint-name granularity should still inspect pq.Error.Constraint
+// on the Postgres path and fall back to column-name substring matching on
+// the SQLite path.
+func IsUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "UNIQUE constraint failed") {
+		return true
+	}
+	// Postgres: SQLSTATE 23505 appears in the formatted error text when the
+	// caller doesn't import pq. The more robust Postgres path uses
+	// pq.Error.Code — callers that need constraint identity still do so.
+	return strings.Contains(msg, "SQLSTATE 23505")
+}
+
 // IntervalDays returns a SQL expression subtracting N days from a timestamp.
 //
 //	pg:     col > NOW() - INTERVAL '7 day'

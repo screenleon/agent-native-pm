@@ -67,11 +67,22 @@ func (s *PlanningRunStore) Create(projectID, requirementID, requestedByUserID st
 }
 
 func isActivePlanningRunConstraintError(err error) bool {
-	var pqErr *pq.Error
-	if !errors.As(err, &pqErr) {
+	if err == nil {
 		return false
 	}
-	return string(pqErr.Code) == "23505" && pqErr.Constraint == activePlanningRunConstraint
+	// Postgres: pq.Error with SQLState 23505 + constraint name.
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return string(pqErr.Code) == "23505" && pqErr.Constraint == activePlanningRunConstraint
+	}
+	// SQLite: partial unique index `idx_planning_runs_requirement_active` on
+	// planning_runs(requirement_id) WHERE status IN ('queued','running').
+	// modernc.org/sqlite surfaces the column name, not the index name.
+	// The table has no other unique constraint on requirement_id, so a
+	// substring match is safe.
+	msg := err.Error()
+	return strings.Contains(msg, "UNIQUE constraint failed") &&
+		strings.Contains(msg, "planning_runs.requirement_id")
 }
 
 func (s *PlanningRunStore) MarkRunning(id string) error {

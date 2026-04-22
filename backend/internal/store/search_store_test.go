@@ -3,7 +3,6 @@ package store
 import (
 	"testing"
 
-	"github.com/screenleon/agent-native-pm/internal/database"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/testutil"
 )
@@ -16,7 +15,7 @@ func setupSearchStore(t *testing.T) (*SearchStore, string) {
 	projectStore := NewProjectStore(db)
 	taskStore := NewTaskStore(db)
 	documentStore := NewDocumentStore(db)
-	searchStore := NewSearchStore(db, database.NewDialect("postgres://test"))
+	searchStore := NewSearchStore(db, testutil.TestDialect())
 
 	project, err := projectStore.Create(models.CreateProjectRequest{Name: "Search Project"})
 	if err != nil {

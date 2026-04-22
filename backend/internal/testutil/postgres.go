@@ -15,7 +15,10 @@ import (
 
 const defaultTestDatabaseURL = "postgres://anpm:anpm@localhost:5432/anpm?sslmode=disable"
 
-func OpenTestDB(t *testing.T) *sql.DB {
+// openTestPostgresDB opens an isolated schema on a running PostgreSQL
+// instance and runs migrations against it. Callers should go through
+// OpenTestDB in testdb.go so the driver is picked automatically.
+func openTestPostgresDB(t *testing.T) *sql.DB {
 	t.Helper()
 
 	baseDSN := os.Getenv("TEST_DATABASE_URL")

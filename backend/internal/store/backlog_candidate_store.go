@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/screenleon/agent-native-pm/internal/database"
 	"github.com/screenleon/agent-native-pm/internal/models"
 )
 
@@ -34,11 +35,12 @@ func (e *BacklogCandidateTaskConflictError) Error() string {
 }
 
 type BacklogCandidateStore struct {
-	db *sql.DB
+	db      *sql.DB
+	dialect database.Dialect
 }
 
-func NewBacklogCandidateStore(db *sql.DB) *BacklogCandidateStore {
-	return &BacklogCandidateStore{db: db}
+func NewBacklogCandidateStore(db *sql.DB, dialect database.Dialect) *BacklogCandidateStore {
+	return &BacklogCandidateStore{db: db, dialect: dialect}
 }
 
 func (s *BacklogCandidateStore) CreateDraftsForPlanningRun(requirement *models.Requirement, planningRunID string, drafts []models.BacklogCandidateDraft) ([]models.BacklogCandidate, error) {
@@ -286,7 +288,7 @@ func (s *BacklogCandidateStore) ApplyToTask(id string) (*models.ApplyBacklogCand
 		return nil, ErrBacklogCandidateBlankTitle
 	}
 
-	if err := lockCandidateApplyKey(tx, candidate.ProjectID, normalizedTitle); err != nil {
+	if err := s.lockCandidateApplyKey(tx, candidate.ProjectID, normalizedTitle); err != nil {
 		return nil, err
 	}
 
@@ -363,14 +365,13 @@ func (s *BacklogCandidateStore) ApplyToTask(id string) (*models.ApplyBacklogCand
 	}, nil
 }
 func (s *BacklogCandidateStore) getByIDForUpdate(tx *sql.Tx, id string) (*models.BacklogCandidate, error) {
-	return scanBacklogCandidate(
-		tx.QueryRow(`
-			SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, created_at, updated_at
-			FROM backlog_candidates
-			WHERE id = $1
-			FOR UPDATE
-		`, id),
-	)
+	// FOR UPDATE is Postgres row-level locking; SQLite's single-writer model
+	// already serialises writes so the clause must be omitted.
+	query := `
+		SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, created_at, updated_at
+		FROM backlog_candidates
+		WHERE id = $1 ` + s.dialect.ForUpdate()
+	return scanBacklogCandidate(tx.QueryRow(query, id))
 }
 
 type rowScanner interface {
@@ -575,7 +576,16 @@ func normalizeCandidateTitle(title string) string {
 	return strings.ToLower(strings.TrimSpace(title))
 }
 
-func lockCandidateApplyKey(tx *sql.Tx, projectID, normalizedTitle string) error {
+// lockCandidateApplyKey serialises "apply candidate" attempts that target
+// the same (project, normalised title) tuple. On PostgreSQL this uses a
+// transaction-scoped advisory lock (pg_advisory_xact_lock with hashtext keys);
+// on SQLite the call is a no-op because the engine already serialises
+// writers via its single-writer model — two concurrent apply calls on SQLite
+// block on BEGIN IMMEDIATE / the busy timeout rather than racing.
+func (s *BacklogCandidateStore) lockCandidateApplyKey(tx *sql.Tx, projectID, normalizedTitle string) error {
+	if s.dialect.IsSQLite() {
+		return nil
+	}
 	_, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, projectID, normalizedTitle)
 	return err
 }
@@ -587,7 +597,7 @@ func findOpenTaskByNormalizedTitle(tx *sql.Tx, projectID, normalizedTitle string
 			FROM tasks
 			WHERE project_id = $1
 			  AND status IN ('todo', 'in_progress')
-			  AND LOWER(BTRIM(title)) = $2
+			  AND LOWER(TRIM(title)) = $2
 			ORDER BY created_at DESC, id DESC
 			LIMIT 1
 		`, projectID, normalizedTitle),
