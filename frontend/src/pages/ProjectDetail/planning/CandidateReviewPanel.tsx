@@ -247,8 +247,8 @@ export function CandidateReviewPanel({
                   <div className="planning-duplicate-note" style={{ marginTop: '1rem' }}>
                     <strong>Why this was suggested</strong>
                     <div className="planning-run-meta" style={{ display: 'grid', gap: '0.35rem' }}>
-                      {selectedCandidate.evidence.map(item => (
-                        <span key={item}>{item}</span>
+                      {selectedCandidate.evidence.map((item, idx) => (
+                        <span key={`${item}-${idx}`}>{item}</span>
                       ))}
                     </div>
                   </div>
@@ -277,8 +277,8 @@ export function CandidateReviewPanel({
                         <div>
                           <strong style={{ display: 'block', marginBottom: '0.35rem' }}>Evidence summary</strong>
                           <div className="planning-run-meta" style={{ display: 'grid', gap: '0.35rem' }}>
-                            {selectedCandidate.evidence_detail.summary.map(item => (
-                              <span key={item}>{item}</span>
+                            {selectedCandidate.evidence_detail.summary.map((item, idx) => (
+                              <span key={`${item}-${idx}`}>{item}</span>
                             ))}
                           </div>
                         </div>
@@ -293,7 +293,7 @@ export function CandidateReviewPanel({
                                 <span>{document.title || document.file_path}</span>
                                 <span>{document.doc_type || 'general'}{document.is_stale ? ` • stale ${document.staleness_days}d` : ''}</span>
                                 {document.matched_keywords.length > 0 && <span>Matched keywords: {document.matched_keywords.join(', ')}</span>}
-                                {document.contribution_reasons.map(reason => <span key={reason}>{reason}</span>)}
+                                {document.contribution_reasons.map((reason, idx) => <span key={`${reason}-${idx}`}>{reason}</span>)}
                               </div>
                             ))}
                           </div>
@@ -308,7 +308,7 @@ export function CandidateReviewPanel({
                               <div key={signal.drift_signal_id} className="planning-run-meta" style={{ display: 'grid', gap: '0.2rem' }}>
                                 <span>{signal.document_title || signal.trigger_detail || signal.trigger_type}</span>
                                 <span>Severity {signal.severity} • {signal.trigger_type}</span>
-                                {signal.contribution_reasons.map(reason => <span key={reason}>{reason}</span>)}
+                                {signal.contribution_reasons.map((reason, idx) => <span key={`${reason}-${idx}`}>{reason}</span>)}
                               </div>
                             ))}
                           </div>
@@ -322,7 +322,7 @@ export function CandidateReviewPanel({
                             <span>Status {selectedCandidate.evidence_detail.sync_run.status}</span>
                             <span>{selectedCandidate.evidence_detail.sync_run.commits_scanned} commits • {selectedCandidate.evidence_detail.sync_run.files_changed} files</span>
                             {selectedCandidate.evidence_detail.sync_run.error_message && <span>{selectedCandidate.evidence_detail.sync_run.error_message}</span>}
-                            {selectedCandidate.evidence_detail.sync_run.contribution_reasons.map(reason => <span key={reason}>{reason}</span>)}
+                            {selectedCandidate.evidence_detail.sync_run.contribution_reasons.map((reason, idx) => <span key={`${reason}-${idx}`}>{reason}</span>)}
                           </div>
                         </div>
                       )}
@@ -336,7 +336,7 @@ export function CandidateReviewPanel({
                                 <span>{agentRun.agent_name || 'agent'} • {agentRun.action_type} • {agentRun.status}</span>
                                 {agentRun.summary && <span>{agentRun.summary}</span>}
                                 {agentRun.error_message && <span>{agentRun.error_message}</span>}
-                                {agentRun.contribution_reasons.map(reason => <span key={reason}>{reason}</span>)}
+                                {agentRun.contribution_reasons.map((reason, idx) => <span key={`${reason}-${idx}`}>{reason}</span>)}
                               </div>
                             ))}
                           </div>
@@ -350,7 +350,7 @@ export function CandidateReviewPanel({
                             {selectedCandidate.evidence_detail.duplicates.map(duplicate => (
                               <div key={duplicate.title} className="planning-run-meta" style={{ display: 'grid', gap: '0.2rem' }}>
                                 <span>{duplicate.title}</span>
-                                {duplicate.contribution_reasons.map(reason => <span key={reason}>{reason}</span>)}
+                                {duplicate.contribution_reasons.map((reason, idx) => <span key={`${reason}-${idx}`}>{reason}</span>)}
                               </div>
                             ))}
                           </div>
@@ -364,8 +364,8 @@ export function CandidateReviewPanel({
                   <div className="planning-duplicate-note">
                     <strong>Possible duplicate open work</strong>
                     <div className="planning-run-meta">
-                      {candidateDuplicateTitles.map(title => (
-                        <span key={title}>{title}</span>
+                      {candidateDuplicateTitles.map((title, idx) => (
+                        <span key={`${title}-${idx}`}>{title}</span>
                       ))}
                     </div>
                   </div>

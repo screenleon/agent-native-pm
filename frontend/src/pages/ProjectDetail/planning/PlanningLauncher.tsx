@@ -160,8 +160,8 @@ export function PlanningLauncher({
                   </div>
 
                   <div style={{ marginTop: '0.75rem', display: 'grid', gap: '0.5rem' }}>
-                    <label style={{ display: 'grid', gap: '0.3rem' }}>
-                      <span style={{ fontSize: '0.88rem' }}>Adapter for requirement-based run</span>
+                    <fieldset style={{ display: 'grid', gap: '0.3rem', border: 'none', padding: 0, margin: 0 }}>
+                      <legend style={{ fontSize: '0.88rem', padding: 0 }}>Adapter for requirement-based run</legend>
                       <div style={{ display: 'flex', gap: '1rem' }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.88rem' }}>
                           <input type="radio" name="localAdapterType" value="backlog" checked={localAdapterType === 'backlog'} onChange={() => onLocalAdapterTypeChange('backlog')} disabled={creatingRun} />
@@ -175,7 +175,7 @@ export function PlanningLauncher({
                       <small style={{ color: 'var(--text-muted)' }}>
                         {localAdapterType === 'whatsnext' ? 'Analyzes project state scoped to the selected requirement.' : 'Decomposes the selected requirement into ranked backlog candidates.'}
                       </small>
-                    </label>
+                    </fieldset>
                     <label style={{ display: 'grid', gap: '0.3rem' }}>
                       <span style={{ fontSize: '0.88rem' }}>Model override <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(optional)</span></span>
                       <input
