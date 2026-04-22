@@ -419,3 +419,87 @@ func TestBacklogCandidateStoreApplyToTaskIsIdempotentUnderConcurrency(t *testing
 		t.Fatalf("expected exactly 1 lineage row after concurrent apply, got %d", lineageCount)
 	}
 }
+
+// TestBacklogCandidateStoreListAppliedLineageByProject covers the new
+// endpoint query: filtering to lineage_kind='applied_candidate', ordering
+// by created_at DESC, and the LEFT JOIN + COALESCE fallback when joined
+// requirement / run / candidate rows are deleted (SET NULL on FK).
+func TestBacklogCandidateStoreListAppliedLineageByProject(t *testing.T) {
+	store, requirement, run := setupBacklogCandidateStore(t)
+
+	created, err := store.CreateDraftsForPlanningRun(requirement, run.ID, sampleCandidateDrafts(requirement))
+	if err != nil {
+		t.Fatalf("create draft candidates: %v", err)
+	}
+	approved := models.BacklogCandidateStatusApproved
+	candidate := created[0]
+	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &approved}); err != nil {
+		t.Fatalf("approve candidate: %v", err)
+	}
+	applyResult, err := store.ApplyToTask(candidate.ID)
+	if err != nil {
+		t.Fatalf("apply candidate: %v", err)
+	}
+
+	entries, err := store.ListAppliedLineageByProject(requirement.ProjectID)
+	if err != nil {
+		t.Fatalf("list applied lineage: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 applied lineage entry, got %d", len(entries))
+	}
+	entry := entries[0]
+	if entry.LineageID != applyResult.Lineage.ID {
+		t.Fatalf("expected lineage id %s, got %s", applyResult.Lineage.ID, entry.LineageID)
+	}
+	if entry.TaskTitle != applyResult.Task.Title {
+		t.Fatalf("expected task title %q, got %q", applyResult.Task.Title, entry.TaskTitle)
+	}
+	if entry.RequirementID != requirement.ID || entry.RequirementTitle != requirement.Title {
+		t.Fatalf("expected requirement %s/%q, got %s/%q", requirement.ID, requirement.Title, entry.RequirementID, entry.RequirementTitle)
+	}
+	if entry.PlanningRunID != run.ID || entry.PlanningRunStatus == "" {
+		t.Fatalf("expected run %s with non-empty status, got %s/%q", run.ID, entry.PlanningRunID, entry.PlanningRunStatus)
+	}
+	if entry.BacklogCandidateID != candidate.ID || entry.BacklogCandidateTitle != applyResult.Candidate.Title {
+		t.Fatalf("expected candidate %s/%q, got %s/%q", candidate.ID, applyResult.Candidate.Title, entry.BacklogCandidateID, entry.BacklogCandidateTitle)
+	}
+	if entry.LineageKind != models.TaskLineageKindAppliedCandidate {
+		t.Fatalf("expected lineage_kind %q, got %q", models.TaskLineageKindAppliedCandidate, entry.LineageKind)
+	}
+
+	// Deleting the requirement should keep the lineage row visible with
+	// empty requirement fields (FK is ON DELETE SET NULL).
+	if _, err := store.db.Exec(`DELETE FROM requirements WHERE id = $1`, requirement.ID); err != nil {
+		t.Fatalf("delete requirement: %v", err)
+	}
+	entries, err = store.ListAppliedLineageByProject(applyResult.Task.ProjectID)
+	if err != nil {
+		t.Fatalf("list applied lineage after requirement delete: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected lineage row to survive requirement delete, got %d entries", len(entries))
+	}
+	if entries[0].RequirementID != "" || entries[0].RequirementTitle != "" {
+		t.Fatalf("expected empty requirement fallback, got %q/%q", entries[0].RequirementID, entries[0].RequirementTitle)
+	}
+	if entries[0].TaskTitle != applyResult.Task.Title {
+		t.Fatalf("expected task title to still render, got %q", entries[0].TaskTitle)
+	}
+
+	// Manual-kind lineage rows (not applied_candidate) must be filtered out.
+	manualLineageID := "manual-" + applyResult.Task.ID
+	if _, err := store.db.Exec(
+		`INSERT INTO task_lineage (id, project_id, task_id, lineage_kind, created_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
+		manualLineageID, applyResult.Task.ProjectID, applyResult.Task.ID, models.TaskLineageKindManualRequirement,
+	); err != nil {
+		t.Fatalf("insert manual lineage row: %v", err)
+	}
+	entries, err = store.ListAppliedLineageByProject(applyResult.Task.ProjectID)
+	if err != nil {
+		t.Fatalf("list applied lineage after manual insert: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected manual lineage to be filtered out, got %d entries", len(entries))
+	}
+}

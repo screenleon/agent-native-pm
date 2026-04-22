@@ -64,11 +64,15 @@ export function PlanningTab({
     onRequirementsChange,
   })
 
-  // Use tasks.length as a reload signal for AppliedLineage: any task list
-  // change (new task from candidate apply, status update, deletion) forces
-  // the lane to refetch. The server endpoint is cheap (single joined query)
-  // so extra fetches on unrelated task changes are acceptable.
-  const lineageReloadSignal = tasks.length
+  // Derive a reload signal from the fields of every task that actually
+  // affect the lineage lane (id + status + updated_at). tasks.length
+  // alone would miss status/title edits — e.g. an operator marking an
+  // applied task "done" would leave the lane showing "in progress"
+  // until the next page refresh. This signal changes on any mutation
+  // that matters for the lane's rendering.
+  const lineageReloadSignal = tasks
+    .map(t => `${t.id}:${t.status}:${t.updated_at}`)
+    .join('|')
 
   const requirementsAwaitingPlanning = requirements.filter(r => r.status === 'draft').length
   const candidatesAwaitingReview = ws.planningCandidates.filter(

@@ -556,6 +556,16 @@ func scanTaskLineage(row rowScanner) (*models.TaskLineage, error) {
 // applied-lineage lane consumes this to render the
 // requirement → run → candidate → task chain without N extra API calls.
 //
+// FK semantics from migration 009 determine the join types:
+//   - task_lineage.task_id: ON DELETE CASCADE (lineage row dies with the
+//     task, so INNER JOIN would normally be safe) — we still use LEFT JOIN
+//     + COALESCE defensively so a future FK change or a stray NULL never
+//     makes a lineage row disappear silently from the lane.
+//   - requirement_id / planning_run_id / backlog_candidate_id:
+//     ON DELETE SET NULL — the lineage row survives with NULL refs, so
+//     LEFT JOIN + COALESCE is required to keep it visible with graceful
+//     fallbacks.
+//
 // Only entries with lineage_kind = 'applied_candidate' are returned —
 // manual / merged kinds are out of scope for the planning lane.
 // Results are ordered by created_at DESC, id DESC.
@@ -565,8 +575,8 @@ func (s *BacklogCandidateStore) ListAppliedLineageByProject(projectID string) ([
 			tl.id,
 			tl.project_id,
 			tl.task_id,
-			t.title,
-			t.status,
+			COALESCE(t.title, ''),
+			COALESCE(t.status, ''),
 			COALESCE(tl.requirement_id, ''),
 			COALESCE(r.title, ''),
 			COALESCE(tl.planning_run_id, ''),
@@ -576,7 +586,7 @@ func (s *BacklogCandidateStore) ListAppliedLineageByProject(projectID string) ([
 			tl.lineage_kind,
 			tl.created_at
 		FROM task_lineage tl
-		INNER JOIN tasks t ON t.id = tl.task_id
+		LEFT JOIN tasks t ON t.id = tl.task_id
 		LEFT JOIN requirements r ON r.id = tl.requirement_id
 		LEFT JOIN planning_runs pr ON pr.id = tl.planning_run_id
 		LEFT JOIN backlog_candidates bc ON bc.id = tl.backlog_candidate_id

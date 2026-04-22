@@ -389,3 +389,43 @@ func TestRequirementPlanningScopeBlocksOtherProject(t *testing.T) {
 		t.Fatalf("expected 403 for mismatched backlog candidate apply project scope, got %d: %s", resp.Code, resp.Body.String())
 	}
 }
+
+// TestProjectTaskLineageScope covers the new
+// GET /api/projects/:id/task-lineage endpoint added by S4:
+//   - returns 200 + envelope for the owning project
+//   - returns 403 when a project-scoped API key targets a different project
+//   - returns 200 with empty list on a project that has no applied candidates
+func TestProjectTaskLineageScope(t *testing.T) {
+	fx := setupScopedAPIServer(t)
+
+	// Empty case: project B has no applied candidates yet.
+	emptyResp := doJSONRequest(t, fx.srv, http.MethodGet, "/api/projects/"+fx.projectBID+"/task-lineage", nil, fx.globalAPIKey)
+	if emptyResp.Code != http.StatusOK {
+		t.Fatalf("empty lineage list: expected 200, got %d: %s", emptyResp.Code, emptyResp.Body.String())
+	}
+	var emptyPayload map[string]any
+	if err := json.NewDecoder(emptyResp.Body).Decode(&emptyPayload); err != nil {
+		t.Fatalf("decode empty lineage: %v", err)
+	}
+	if emptyEntries, ok := emptyPayload["data"].([]any); !ok || len(emptyEntries) != 0 {
+		t.Fatalf("expected empty data array, got %v", emptyPayload["data"])
+	}
+
+	// Project-A-scoped key cannot read project B's lineage.
+	forbiddenResp := doJSONRequest(t, fx.srv, http.MethodGet, "/api/projects/"+fx.projectBID+"/task-lineage", nil, fx.projectAAPIKey)
+	if forbiddenResp.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for mismatched lineage list project scope, got %d: %s", forbiddenResp.Code, forbiddenResp.Body.String())
+	}
+
+	// Project-A-scoped key CAN read project A's own lineage (empty but permitted).
+	projectAResp := doJSONRequest(t, fx.srv, http.MethodGet, "/api/projects/"+fx.projectAID+"/task-lineage", nil, fx.projectAAPIKey)
+	if projectAResp.Code != http.StatusOK {
+		t.Fatalf("project-A-scoped lineage list: expected 200, got %d: %s", projectAResp.Code, projectAResp.Body.String())
+	}
+
+	// Missing project id returns 404.
+	missingResp := doJSONRequest(t, fx.srv, http.MethodGet, "/api/projects/does-not-exist/task-lineage", nil, fx.globalAPIKey)
+	if missingResp.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown project, got %d: %s", missingResp.Code, missingResp.Body.String())
+	}
+}

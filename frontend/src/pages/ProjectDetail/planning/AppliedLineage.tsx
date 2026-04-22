@@ -6,11 +6,13 @@ import { formatRelativeTime } from '../../../utils/formatters'
 interface AppliedLineageProps {
   projectId: string
   /**
-   * Bump this counter to force a refetch — the parent bumps it after a
-   * candidate-apply flow finishes so new lineage rows appear without a
-   * manual reload.
+   * Any change to this value triggers a refetch. Callers derive it from
+   * whatever upstream state signals "lineage might be stale" — e.g. a
+   * composite string over every task's id + status + updated_at, a
+   * monotonic counter bumped after apply-candidate, etc. The component
+   * only requires that a change in value means "reload me".
    */
-  reloadSignal: number
+  reloadSignal: string | number
   onJumpToRequirement: (requirementId: string) => void
   onJumpToTasks: () => void
 }
