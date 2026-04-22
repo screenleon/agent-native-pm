@@ -569,7 +569,11 @@ function ProjectDetail() {
               onNavigateToDrift={() => setTab('drift')}
               onViewDocumentById={(documentId) => {
                 const doc = documents.find(d => d.id === documentId)
-                if (doc) handleViewDoc(doc)
+                if (doc) {
+                  handleViewDoc(doc)
+                  return
+                }
+                setError(`Unable to open document: "${documentId}" is no longer registered in this project.`)
               }}
               onViewDriftSignal={() => setTab('drift')}
             />

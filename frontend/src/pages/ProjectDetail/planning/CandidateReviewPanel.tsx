@@ -18,6 +18,45 @@ export interface CandidateReviewForm {
   status: BacklogCandidate['status']
 }
 
+/**
+ * Shared inline-link affordance used by document + drift evidence rows.
+ * Centralised here because both evidence kinds need the same look and feel
+ * (underlined link-coloured text, left-aligned, button-element semantics
+ * for keyboard + screen-reader activation) and the inline styles were
+ * duplicated across both call sites before this extraction.
+ *
+ * The `ariaLabel` is required so blank headings cannot render a screen-
+ * reader-invisible link — callers must always supply a descriptive label.
+ */
+interface EvidenceLinkProps {
+  label: string
+  ariaLabel: string
+  onClick: () => void
+}
+
+function EvidenceLink({ label, ariaLabel, onClick }: EvidenceLinkProps) {
+  return (
+    <button
+      type="button"
+      className="evidence-link"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      style={{
+        alignSelf: 'start',
+        padding: 0,
+        background: 'none',
+        border: 'none',
+        color: 'var(--link, #60a5fa)',
+        textDecoration: 'underline',
+        cursor: 'pointer',
+        textAlign: 'left',
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
 interface CandidateReviewPanelProps {
   selectedRun: PlanningRun | null
   candidates: BacklogCandidate[]
@@ -304,20 +343,19 @@ export function CandidateReviewPanel({
                           <strong style={{ display: 'block', marginBottom: '0.35rem' }}>Documents</strong>
                           <div style={{ display: 'grid', gap: '0.5rem' }}>
                             {selectedCandidate.evidence_detail.documents.map(document => {
-                              const heading = document.title || document.file_path
+                              // Fallback chain guarantees the row is never rendered blank:
+                              // title → file_path → "Document <id>" → "(untitled document)".
+                              const fallbackId = document.document_id ? `Document ${document.document_id}` : '(untitled document)'
+                              const heading = document.title || document.file_path || fallbackId
                               const canOpen = Boolean(onViewDocumentById && document.document_id)
                               return (
                                 <div key={document.document_id || `${document.title}-${document.file_path}`} className="planning-run-meta" style={{ display: 'grid', gap: '0.2rem' }}>
                                   {canOpen ? (
-                                    <button
-                                      type="button"
-                                      className="btn btn-link"
+                                    <EvidenceLink
+                                      label={heading}
+                                      ariaLabel={`Open document preview for ${heading}`}
                                       onClick={() => onViewDocumentById!(document.document_id!)}
-                                      style={{ alignSelf: 'start', padding: 0, background: 'none', border: 'none', color: 'var(--link, #60a5fa)', textDecoration: 'underline', cursor: 'pointer', textAlign: 'left' }}
-                                      aria-label={`Open document preview for ${heading}`}
-                                    >
-                                      {heading}
-                                    </button>
+                                    />
                                   ) : (
                                     <span>{heading}</span>
                                   )}
@@ -336,20 +374,19 @@ export function CandidateReviewPanel({
                           <strong style={{ display: 'block', marginBottom: '0.35rem' }}>Drift signals</strong>
                           <div style={{ display: 'grid', gap: '0.5rem' }}>
                             {selectedCandidate.evidence_detail.drift_signals.map(signal => {
-                              const heading = signal.document_title || signal.trigger_detail || signal.trigger_type
+                              // Fallback chain: document_title → trigger_detail →
+                              // trigger_type → "Drift signal <id>". The signal always
+                              // has an id, so the row can never render empty.
+                              const heading = signal.document_title || signal.trigger_detail || signal.trigger_type || `Drift signal ${signal.drift_signal_id}`
                               const canOpen = Boolean(onViewDriftSignal)
                               return (
                                 <div key={signal.drift_signal_id} className="planning-run-meta" style={{ display: 'grid', gap: '0.2rem' }}>
                                   {canOpen ? (
-                                    <button
-                                      type="button"
-                                      className="btn btn-link"
+                                    <EvidenceLink
+                                      label={heading}
+                                      ariaLabel={`Jump to drift signal ${heading}`}
                                       onClick={() => onViewDriftSignal!(signal.drift_signal_id)}
-                                      style={{ alignSelf: 'start', padding: 0, background: 'none', border: 'none', color: 'var(--link, #60a5fa)', textDecoration: 'underline', cursor: 'pointer', textAlign: 'left' }}
-                                      aria-label={`Jump to drift signal ${heading}`}
-                                    >
-                                      {heading}
-                                    </button>
+                                    />
                                   ) : (
                                     <span>{heading}</span>
                                   )}
