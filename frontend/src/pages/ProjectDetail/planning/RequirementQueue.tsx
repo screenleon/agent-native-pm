@@ -8,6 +8,7 @@ interface RequirementQueueProps {
   onSelectRequirement: (id: string) => void
   planningLoadError: string | null
   onArchiveRequirement?: (id: string) => Promise<void>
+  archivingRequirementId?: string | null
 }
 
 /**
@@ -25,6 +26,7 @@ export function RequirementQueue({
   onSelectRequirement,
   planningLoadError,
   onArchiveRequirement,
+  archivingRequirementId,
 }: RequirementQueueProps) {
   const draftCount = requirements.filter(r => r.status === 'draft').length
   const plannedCount = requirements.filter(r => r.status === 'planned').length
@@ -83,6 +85,7 @@ export function RequirementQueue({
                   type="button"
                   className="btn btn-ghost btn-sm"
                   title="Archive this requirement"
+                  disabled={archivingRequirementId === requirement.id}
                   onClick={e => {
                     e.stopPropagation()
                     onArchiveRequirement(requirement.id)
@@ -94,10 +97,10 @@ export function RequirementQueue({
                     padding: '0.2rem 0.45rem',
                     fontSize: '0.75rem',
                     color: 'var(--text-muted)',
-                    opacity: 0.7,
+                    opacity: archivingRequirementId === requirement.id ? 0.4 : 0.7,
                   }}
                 >
-                  Archive
+                  {archivingRequirementId === requirement.id ? '…' : 'Archive'}
                 </button>
               )}
             </div>

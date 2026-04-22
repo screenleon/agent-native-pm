@@ -139,6 +139,7 @@ export function PlanningTab({
           onSelectRequirement={ws.onSelectRequirement}
           planningLoadError={planningLoadError}
           onArchiveRequirement={ws.onArchiveRequirement}
+          archivingRequirementId={ws.archivingRequirementId}
         />
       </div>
 
