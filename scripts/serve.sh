@@ -20,9 +20,18 @@ ok()   { printf '\033[0;32m[anpm]\033[0m %s\n' "$*"; }
 warn() { printf '\033[0;33m[anpm]\033[0m %s\n' "$*" >&2; }
 err()  { printf '\033[0;31m[anpm error]\033[0m %s\n' "$*" >&2; }
 
-newer_go_file() {
+EMBED_DST="$ANPM_HOME/backend/internal/frontend/dist"
+
+# backend_is_stale returns true (0) if $BIN is missing OR any input that gets
+# baked into it is newer than $BIN. Inputs are Go sources and the embedded
+# dist directory (backend/internal/frontend/dist/**, declared via //go:embed
+# in backend/internal/frontend/frontend.go). When either changes, go build
+# must re-run so the new bundle is compiled in.
+backend_is_stale() {
   [ ! -f "$BIN" ] && return 0
-  find "$ANPM_HOME/backend" -name '*.go' -newer "$BIN" -print -quit 2>/dev/null | grep -q .
+  find "$ANPM_HOME/backend" \
+    \( -name '*.go' -o -path "$EMBED_DST/*" \) \
+    -newer "$BIN" -print -quit 2>/dev/null | grep -q .
 }
 
 newer_frontend_file() {
@@ -50,18 +59,10 @@ if ! git -C "$(pwd)" rev-parse --git-dir >/dev/null 2>&1; then
   exit 1
 fi
 
-# ── build backend ─────────────────────────────────────────────────────────────
-
-if newer_go_file; then
-  log "building backend..."
-  mkdir -p "$ANPM_HOME/bin"
-  (cd "$ANPM_HOME/backend" && go build -o "$BIN" ./cmd/server)
-  ok "backend ready"
-fi
-
 # ── build frontend ────────────────────────────────────────────────────────────
-
-EMBED_DST="$ANPM_HOME/backend/internal/frontend/dist"
+# Frontend must run BEFORE the backend build because its output is embedded
+# into the Go binary via //go:embed. Staging updates the embed dir's mtime,
+# and backend_is_stale below will pick that up.
 
 if newer_frontend_file; then
   if ! command -v node >/dev/null 2>&1; then
@@ -74,16 +75,24 @@ if newer_frontend_file; then
 fi
 
 # Copy dist into the Go embed directory so it gets compiled into the binary.
-# The copy is skipped when the embed dir is already up-to-date (index.html
-# newer than the source index.html means nothing changed).
+# The copy is skipped when the embed dir is already up-to-date (embed
+# index.html is not older than the source index.html).
 if [ -f "$FRONTEND_DIST/index.html" ]; then
   if [ ! -f "$EMBED_DST/index.html" ] || [ "$FRONTEND_DIST/index.html" -nt "$EMBED_DST/index.html" ]; then
     log "staging frontend for embedding..."
     rm -rf "$EMBED_DST"
     cp -r "$FRONTEND_DIST" "$EMBED_DST"
-    # Always rebuild backend after updating embedded assets.
-    rm -f "$BIN"
   fi
+fi
+
+# ── build backend ─────────────────────────────────────────────────────────────
+# Runs AFTER frontend staging so any new dist content is baked into $BIN.
+
+if backend_is_stale; then
+  log "building backend..."
+  mkdir -p "$ANPM_HOME/bin"
+  (cd "$ANPM_HOME/backend" && go build -o "$BIN" ./cmd/server)
+  ok "backend ready"
 fi
 
 # ── start ─────────────────────────────────────────────────────────────────────
