@@ -85,6 +85,19 @@ export function usePlanningWorkspaceData({
   const [cancellingPlanningRunId, setCancellingPlanningRunId] = useState<string | null>(null)
   const [planningRunFlash, setPlanningRunFlash] = useState<{ runId: string; kind: 'success' | 'error'; message: string } | null>(null)
 
+  // pendingSelection holds the run + candidate pair the operator asked us
+  // to select *after* the async load chain catches up. The requirement tier
+  // is not part of the pending triple because handleSelectLineage sets
+  // selectedRequirementId synchronously — only runs and candidates need the
+  // pending-handoff because they load asynchronously from the requirement.
+  //
+  // Each field is cleared as soon as it has been applied, so subsequent
+  // organic user clicks aren't overridden by stale intent.
+  const [pendingSelection, setPendingSelection] = useState<{
+    runId?: string
+    candidateId?: string
+  }>({})
+
   const planningRunsRequestIdRef = useRef(0)
   const planningCandidatesRequestIdRef = useRef(0)
   const planningRunStatusRef = useRef<Map<string, { status: PlanningRun['status']; dispatch: PlanningRun['dispatch_status'] }>>(new Map())
@@ -154,10 +167,19 @@ export function usePlanningWorkspaceData({
       if (selectedPlanningRunId !== null) setSelectedPlanningRunId(null)
       return
     }
+    // Pending deep-link from the AppliedLineage lane takes precedence over
+    // "auto-select first run". If the target run is in the loaded list we
+    // apply it and clear the pending slot; otherwise fall back to the
+    // existing auto-select behaviour.
+    if (pendingSelection.runId && planningRuns.some(run => run.id === pendingSelection.runId)) {
+      setSelectedPlanningRunId(pendingSelection.runId)
+      setPendingSelection(prev => ({ ...prev, runId: undefined }))
+      return
+    }
     if (!selectedPlanningRunId || !planningRuns.some(run => run.id === selectedPlanningRunId)) {
       setSelectedPlanningRunId(planningRuns[0].id)
     }
-  }, [planningRuns, selectedPlanningRunId])
+  }, [planningRuns, selectedPlanningRunId, pendingSelection.runId])
 
   const loadPlanningCandidates = useCallback(async (planningRunId: string) => {
     const requestID = planningCandidatesRequestIdRef.current + 1
@@ -194,10 +216,18 @@ export function usePlanningWorkspaceData({
       if (selectedPlanningCandidateId !== null) setSelectedPlanningCandidateId(null)
       return
     }
+    // Same pending-selection rule for the candidate tier: apply the
+    // pending target if it's in the loaded list; otherwise auto-select
+    // the first candidate.
+    if (pendingSelection.candidateId && planningCandidates.some(c => c.id === pendingSelection.candidateId)) {
+      setSelectedPlanningCandidateId(pendingSelection.candidateId)
+      setPendingSelection(prev => ({ ...prev, candidateId: undefined }))
+      return
+    }
     if (!selectedPlanningCandidateId || !planningCandidates.some(c => c.id === selectedPlanningCandidateId)) {
       setSelectedPlanningCandidateId(planningCandidates[0].id)
     }
-  }, [planningCandidates, selectedPlanningCandidateId])
+  }, [planningCandidates, selectedPlanningCandidateId, pendingSelection.candidateId])
 
   useEffect(() => {
     if (!selectedRequirementId || !selectedPlanningRunId) return
@@ -337,6 +367,33 @@ export function usePlanningWorkspaceData({
     if (requirementId === selectedRequirementId) return
     if (!confirmDiscardCandidateEdits()) return
     setSelectedRequirementId(requirementId)
+  }
+
+  /**
+   * Cross-tier deep-link used by the AppliedLineage lane. Clicking a
+   * lineage row with (requirementId, runId, candidateId) asks the
+   * workspace to land on exactly that candidate after the three-step
+   * async load chain catches up:
+   *
+   *   select requirement → load runs → auto-select pending.runId →
+   *   load candidates → auto-select pending.candidateId.
+   *
+   * If the operator has unsaved candidate edits we confirm first, same
+   * as any other selection change. If runId / candidateId are omitted,
+   * only the requirement-level selection happens.
+   */
+  function handleSelectLineage(requirementId: string, runId?: string, candidateId?: string) {
+    if (!confirmDiscardCandidateEdits()) return
+    setPendingSelection({ runId, candidateId })
+    // Switching requirement triggers loadPlanningRuns via effect; the
+    // auto-select effects then consume runId / candidateId.
+    if (requirementId !== selectedRequirementId) {
+      setSelectedRequirementId(requirementId)
+    } else if (runId && planningRuns.some(run => run.id === runId)) {
+      // Same-requirement deep-link: runs are already loaded, trigger the
+      // selection directly so the run-id effect path applies on next tick.
+      setSelectedPlanningRunId(runId)
+    }
   }
 
   function handleSelectPlanningRun(runId: string) {
@@ -539,6 +596,7 @@ export function usePlanningWorkspaceData({
     selectedPlanningCandidate,
     selectedRequirementId,
     selectedPlanningRunId,
+    onSelectLineage: handleSelectLineage,
     selectedPlanningCandidateId,
     onSelectRequirement: handleSelectRequirement,
     onSelectPlanningRun: handleSelectPlanningRun,

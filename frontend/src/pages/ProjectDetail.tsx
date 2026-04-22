@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, useSearchParams, Link } from 'react-router-dom'
 import type { Project, Task, Document, ProjectDashboardSummary, SyncRun, AgentRun, DriftSignal, DocumentContent, DocumentLink, ProjectRepoMapping, MirrorRepoDiscovery, Requirement } from '../types'
 import {
   discoverMirrorRepos,
@@ -47,7 +47,30 @@ function ProjectDetail() {
   const [syncRuns, setSyncRuns] = useState<SyncRun[]>([])
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([])
   const [driftSignals, setDriftSignals] = useState<DriftSignal[]>([])
-  const [tab, setTab] = useState<Tab>('overview')
+  // Per Phase 2 S5 / design-decision D1: the Planning Workspace is the
+  // per-project default landing surface (the operator's "what needs my
+  // review?" surface). Overview remains at its tab index for read-only
+  // status browsing.
+  //
+  // The initial tab is seeded from `?tab=<slug>` (if the value matches a
+  // known Tab slug) so deep links like `/projects/:id?tab=overview`
+  // continue to resolve to the expected surface; otherwise the default
+  // is the Workspace. Clicks on the project rail keep the URL in sync
+  // via setTabAndSync so the browser back/forward buttons land on the
+  // correct tab.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const initialTab: Tab = (() => {
+    const raw = searchParams.get('tab') as Tab | null
+    const known: Tab[] = ['overview', 'planning', 'tasks', 'documents', 'drift', 'agents', 'settings']
+    return raw && known.includes(raw) ? raw : 'planning'
+  })()
+  const [tab, setTabState] = useState<Tab>(initialTab)
+  const setTab = (next: Tab) => {
+    setTabState(next)
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.set('tab', next)
+    setSearchParams(nextParams, { replace: true })
+  }
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -517,7 +540,7 @@ function ProjectDetail() {
             <span>Overview</span>
           </button>
           <button className={tab === 'planning' ? 'is-active' : ''} onClick={() => setTab('planning')}>
-            <span>Planning</span>
+            <span>Workspace</span>
             <span className="rail-count">{requirements.length}</span>
           </button>
           <button className={tab === 'tasks' ? 'is-active' : ''} onClick={() => setTab('tasks')}>

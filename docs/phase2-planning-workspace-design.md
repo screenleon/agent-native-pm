@@ -296,4 +296,4 @@ Items explicitly not part of Phase 2 (tracked elsewhere):
 | S2 — attention row | merged | PR #6 | ✓ |
 | S3 — evidence links | merged | PR #7 | ✓ |
 | S4 — applied lineage | merged | PR #8 | ✓ |
-| S5 — rename + polish | not started | — | — |
+| S5 — rename + polish | in review | PR #10 | — |

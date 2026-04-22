@@ -216,9 +216,16 @@ export function PlanningTab({
             <AppliedLineage
               projectId={projectId}
               reloadSignal={lineageReloadSignal}
-              onJumpToRequirement={(requirementId) => {
-                ws.onSelectRequirement(requirementId)
-                jumpToRequirements()
+              onSelectLineage={(requirementId, runId, candidateId) => {
+                ws.onSelectLineage(requirementId, runId, candidateId)
+                // Scroll priority: candidate > requirement. If the click
+                // carried a candidate id we want the review panel visible;
+                // otherwise the requirement queue is the correct landing.
+                if (candidateId) {
+                  jumpToCandidates()
+                } else {
+                  jumpToRequirements()
+                }
               }}
               onJumpToTasks={onNavigateToTasks}
             />

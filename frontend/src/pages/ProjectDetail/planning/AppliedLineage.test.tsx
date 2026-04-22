@@ -39,7 +39,7 @@ describe('<AppliedLineage />', () => {
       <AppliedLineage
         projectId="p1"
         reloadSignal={0}
-        onJumpToRequirement={vi.fn()}
+        onSelectLineage={vi.fn()}
         onJumpToTasks={vi.fn()}
       />,
     )
@@ -54,7 +54,7 @@ describe('<AppliedLineage />', () => {
       <AppliedLineage
         projectId="p1"
         reloadSignal={0}
-        onJumpToRequirement={vi.fn()}
+        onSelectLineage={vi.fn()}
         onJumpToTasks={vi.fn()}
       />,
     )
@@ -69,7 +69,7 @@ describe('<AppliedLineage />', () => {
       <AppliedLineage
         projectId="p1"
         reloadSignal={0}
-        onJumpToRequirement={vi.fn()}
+        onSelectLineage={vi.fn()}
         onJumpToTasks={vi.fn()}
       />,
     )
@@ -83,14 +83,14 @@ describe('<AppliedLineage />', () => {
     expect(screen.getByText(/1 traceable/i)).toBeInTheDocument()
   })
 
-  it('fires onJumpToRequirement with the requirement id when the requirement link is clicked', async () => {
+  it('fires onSelectLineage with the requirement id when the requirement link is clicked', async () => {
     mockListProjectTaskLineage.mockResolvedValue({ data: [sampleEntry()] })
-    const onJumpToRequirement = vi.fn()
+    const onSelectLineage = vi.fn()
     render(
       <AppliedLineage
         projectId="p1"
         reloadSignal={0}
-        onJumpToRequirement={onJumpToRequirement}
+        onSelectLineage={onSelectLineage}
         onJumpToTasks={vi.fn()}
       />,
     )
@@ -98,7 +98,43 @@ describe('<AppliedLineage />', () => {
       expect(screen.getByRole('button', { name: /Open requirement Improve sync failure UX/i })).toBeInTheDocument()
     })
     await userEvent.click(screen.getByRole('button', { name: /Open requirement Improve sync failure UX/i }))
-    expect(onJumpToRequirement).toHaveBeenCalledWith('req-1')
+    expect(onSelectLineage).toHaveBeenCalledWith('req-1')
+  })
+
+  it('fires onSelectLineage with (requirementId, runId) when the run-status link is clicked', async () => {
+    mockListProjectTaskLineage.mockResolvedValue({ data: [sampleEntry()] })
+    const onSelectLineage = vi.fn()
+    render(
+      <AppliedLineage
+        projectId="p1"
+        reloadSignal={0}
+        onSelectLineage={onSelectLineage}
+        onJumpToTasks={vi.fn()}
+      />,
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Open planning run run-1/i })).toBeInTheDocument()
+    })
+    await userEvent.click(screen.getByRole('button', { name: /Open planning run run-1/i }))
+    expect(onSelectLineage).toHaveBeenCalledWith('req-1', 'run-1')
+  })
+
+  it('fires onSelectLineage with (requirementId, runId, candidateId) when the candidate link is clicked', async () => {
+    mockListProjectTaskLineage.mockResolvedValue({ data: [sampleEntry()] })
+    const onSelectLineage = vi.fn()
+    render(
+      <AppliedLineage
+        projectId="p1"
+        reloadSignal={0}
+        onSelectLineage={onSelectLineage}
+        onJumpToTasks={vi.fn()}
+      />,
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Open candidate Persist recovery options/i })).toBeInTheDocument()
+    })
+    await userEvent.click(screen.getByRole('button', { name: /Open candidate Persist recovery options/i }))
+    expect(onSelectLineage).toHaveBeenCalledWith('req-1', 'run-1', 'c-1')
   })
 
   it('fires onJumpToTasks when the task link is clicked', async () => {
@@ -108,7 +144,7 @@ describe('<AppliedLineage />', () => {
       <AppliedLineage
         projectId="p1"
         reloadSignal={0}
-        onJumpToRequirement={vi.fn()}
+        onSelectLineage={vi.fn()}
         onJumpToTasks={onJumpToTasks}
       />,
     )
@@ -125,7 +161,7 @@ describe('<AppliedLineage />', () => {
       <AppliedLineage
         projectId="p1"
         reloadSignal={0}
-        onJumpToRequirement={vi.fn()}
+        onSelectLineage={vi.fn()}
         onJumpToTasks={vi.fn()}
       />,
     )
@@ -134,7 +170,7 @@ describe('<AppliedLineage />', () => {
       <AppliedLineage
         projectId="p1"
         reloadSignal={1}
-        onJumpToRequirement={vi.fn()}
+        onSelectLineage={vi.fn()}
         onJumpToTasks={vi.fn()}
       />,
     )
