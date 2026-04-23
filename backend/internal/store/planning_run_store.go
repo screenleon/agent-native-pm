@@ -493,6 +493,32 @@ func (s *PlanningRunStore) MarkDispatchWarning(id, warning string) error {
 	return err
 }
 
+// MarkErrorKind stores error_kind and the server-side remediation_hint in the
+// run's connector_cli_info envelope. Called by the submit-result handler when
+// the adapter reports a failure with a structured error kind (S5a). The
+// existing binding_snapshot and dispatch_warning are preserved.
+func (s *PlanningRunStore) MarkErrorKind(id, errorKind, remediationHint string) error {
+	if strings.TrimSpace(id) == "" {
+		return nil
+	}
+	var existingRaw sql.NullString
+	if err := s.db.QueryRow(`SELECT connector_cli_info FROM planning_runs WHERE id = $1`, id).Scan(&existingRaw); err != nil {
+		return err
+	}
+	envelope := models.PlanningRunCliInfo{}
+	if existingRaw.Valid && existingRaw.String != "" {
+		_ = json.Unmarshal([]byte(existingRaw.String), &envelope)
+	}
+	envelope.ErrorKind = strings.TrimSpace(errorKind)
+	envelope.RemediationHint = strings.TrimSpace(remediationHint)
+	merged, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`UPDATE planning_runs SET connector_cli_info = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, string(merged), id)
+	return err
+}
+
 func (s *PlanningRunStore) FailLocalConnectorRun(id, connectorID, errorMessage string) error {
 	now := time.Now().UTC()
 	message := strings.TrimSpace(errorMessage)

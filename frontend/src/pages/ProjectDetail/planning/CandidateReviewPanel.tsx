@@ -160,9 +160,15 @@ export function CandidateReviewPanel({
           {selectedRun && (
             <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
               {planningExecutionModeLabel(selectedRun.execution_mode)}. {planningDispatchStatusLabel(selectedRun.dispatch_status)}{selectedRun.connector_label ? ` on ${selectedRun.connector_label}` : ''}.
-              {selectedRun.connector_cli_info && (
-                <> CLI: <strong>{selectedRun.connector_cli_info.agent}</strong>{selectedRun.connector_cli_info.model ? <> / <strong>{selectedRun.connector_cli_info.model}</strong></> : null}{selectedRun.connector_cli_info.model_source ? ` (${selectedRun.connector_cli_info.model_source})` : ''}.</>
-              )}
+              {(() => {
+                const info = selectedRun.connector_cli_info
+                if (!info) return null
+                const inv = info.cli_invocation ?? (info.agent ? { agent: info.agent, model: info.model, model_source: info.model_source } : null)
+                if (!inv) return null
+                return (
+                  <> CLI: <strong>{inv.agent}</strong>{inv.model ? <> / <strong>{inv.model}</strong></> : null}{inv.model_source ? ` (${inv.model_source})` : ''}.</>
+                )
+              })()}
             </p>
           )}
         </div>
@@ -180,6 +186,18 @@ export function CandidateReviewPanel({
           <span>{runFlash.message}</span>
           <button type="button" className="btn btn-secondary btn-small" onClick={onDismissRunFlash}>Dismiss</button>
         </div>
+      )}
+
+      {selectedRun &&
+        selectedRun.dispatch_status === 'returned' &&
+        selectedRun.status === 'failed' &&
+        selectedRun.connector_cli_info?.error_kind &&
+        selectedRun.connector_cli_info.error_kind !== 'unknown' &&
+        selectedRun.connector_cli_info.remediation_hint && (
+          <div className="helper-note" style={{ marginTop: '1rem', borderLeft: '3px solid var(--warning)', paddingLeft: '0.75rem' }}>
+            <strong>Suggested next step:</strong>
+            <p style={{ margin: '0.25rem 0 0' }}>{selectedRun.connector_cli_info.remediation_hint}</p>
+          </div>
       )}
 
       {!selectedRun ? (

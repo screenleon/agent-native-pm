@@ -132,6 +132,7 @@ type LocalConnectorSubmitRunResultRequest struct {
 	ErrorMessage string                           `json:"error_message,omitempty"`
 	Candidates   []ConnectorBacklogCandidateDraft `json:"candidates,omitempty"`
 	CliInfo      *CliUsageInfo                    `json:"cli_info,omitempty"`
+	ErrorKind    string                           `json:"error_kind,omitempty"`
 }
 
 // ConnectorRunStats holds planning run counts across different time windows for a user.

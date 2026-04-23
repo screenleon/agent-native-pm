@@ -290,7 +290,22 @@ export interface PlanningRun {
   adapter_type?: string;
   model_override?: string;
   connector_cli_info?: {
-    agent: string;
+    cli_invocation?: {
+      agent: string;
+      model?: string;
+      model_source?: string;
+    };
+    binding_snapshot?: {
+      provider_id: string;
+      model_id?: string;
+      cli_command?: string;
+      label?: string;
+      is_primary: boolean;
+    };
+    dispatch_warning?: string;
+    error_kind?: string;
+    remediation_hint?: string;
+    agent?: string;
     model?: string;
     model_source?: string;
   };

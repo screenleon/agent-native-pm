@@ -8,7 +8,9 @@ package handlers_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -582,6 +584,241 @@ func TestPathBS2_T_S2_12_TwoBindingsTwoInvocations(t *testing.T) {
 // hand-validated; landing the fixture infrastructure is a follow-up.
 func TestPathBS2_T_S2_13_RollbackFixtures(t *testing.T) {
 	t.Skip("rollback fixture infrastructure not present; sibling .down.sql files ship per design §13")
+}
+
+// pathBS5aFixture extends pathBFixture with a LocalConnectorHandler wired
+// into the router so submit-result HTTP round-trips can be exercised.
+type pathBS5aFixture struct {
+	pathBFixture
+	connectorHandler *handlers.LocalConnectorHandler
+}
+
+func newPathBS5aFixture(t *testing.T) *pathBS5aFixture {
+	t.Helper()
+	base := newPathBFixture(t)
+
+	agentRuns := store.NewAgentRunStore(base.db)
+	connectorStore := base.localConnectorStore
+
+	connHandler := handlers.NewLocalConnectorHandler(
+		connectorStore,
+		base.planningRunStore,
+		base.requirementStore,
+		store.NewBacklogCandidateStore(base.db, testutil.TestDialect()),
+		agentRuns,
+	).WithNotificationStore(base.notificationStore)
+
+	projects := store.NewProjectStore(base.db)
+
+	planner := stubPlanner{}
+	planningRunHandler := handlers.NewPlanningRunHandler(
+		base.planningRunStore,
+		store.NewBacklogCandidateStore(base.db, testutil.TestDialect()),
+		projects,
+		base.requirementStore,
+		agentRuns,
+		planner,
+	).WithLocalConnectorStore(connectorStore).
+		WithAccountBindings(base.bindingStore).
+		WithNotifications(base.notificationStore).
+		WithPlannerFactory(func(userID string) planning.DraftPlanner { return planner })
+
+	srv := router.New(router.Deps{
+		PlanningRunHandler:    planningRunHandler,
+		LocalConnectorHandler: connHandler,
+		LocalModeMiddleware:   middleware.InjectLocalAdmin,
+		AuthMiddleware: func(next http.Handler) http.Handler {
+			return next
+		},
+	})
+
+	base.srv = srv
+	return &pathBS5aFixture{pathBFixture: *base, connectorHandler: connHandler}
+}
+
+// submitResult posts to /api/connector/planning-runs/:id/result with the
+// given connector token and body.
+func (fx *pathBS5aFixture) submitResult(t *testing.T, runID, tokenHash string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/connector/planning-runs/"+runID+"/result", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Connector-Token", tokenHash)
+	rec := httptest.NewRecorder()
+	fx.srv.ServeHTTP(rec, req)
+	return rec
+}
+
+// seedAndLeaseRun creates a planning run, seeds an S2-capable connector with
+// a known raw token (stored as sha256 in the DB), and leases the run. Returns
+// the run ID and the raw token to use as X-Connector-Token.
+func (fx *pathBS5aFixture) seedAndLeaseRun(t *testing.T) (runID, rawToken string) {
+	t.Helper()
+	rawToken = "s5a-test-connector-token"
+	tokenHashBytes := sha256.Sum256([]byte(rawToken))
+	tokenHashHex := hex.EncodeToString(tokenHashBytes[:])
+
+	connID := "connector-s5a"
+	now := time.Now().UTC()
+	if _, err := fx.db.Exec(`
+		INSERT INTO local_connectors (id, user_id, label, platform, client_version, status, capabilities, protocol_version, token_hash, last_seen_at, last_error, created_at, updated_at)
+		VALUES ($1, $2, $3, '', '', $4, '{}', $5, $6, $7, '', $7, $7)`,
+		connID, fx.userID, "s5a", models.LocalConnectorStatusOnline, 1, tokenHashHex, now); err != nil {
+		t.Fatalf("seed s5a connector: %v", err)
+	}
+	conn, err := fx.localConnectorStore.GetByID(connID, fx.userID)
+	if err != nil || conn == nil {
+		t.Fatalf("re-fetch s5a connector: %v", err)
+	}
+
+	rec := fx.postPlanningRun(t, models.CreatePlanningRunRequest{
+		ExecutionMode: models.PlanningExecutionModeLocalConnector,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create run: %d %s", rec.Code, rec.Body.String())
+	}
+	var env pathBEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode run response: %v", err)
+	}
+	runID = env.Data.ID
+
+	if _, err := fx.planningRunStore.LeaseNextLocalConnectorRunForProtocol(
+		fx.userID, conn.ID, conn.Label, time.Minute, conn.ProtocolVersion,
+	); err != nil {
+		t.Fatalf("lease run: %v", err)
+	}
+	return runID, rawToken
+}
+
+// T-S5a-1: submit-result with error_kind=session_expired → run's
+// connector_cli_info.error_kind == "session_expired" and remediation_hint non-empty.
+func TestPathBS5a_T_S5a_1_SessionExpiredHint(t *testing.T) {
+	fx := newPathBS5aFixture(t)
+	runID, token := fx.seedAndLeaseRun(t)
+
+	rec := fx.submitResult(t, runID, token, map[string]any{
+		"success":      false,
+		"error_message": "session expired",
+		"error_kind":   "session_expired",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	run, err := fx.planningRunStore.GetByID(runID)
+	if err != nil || run == nil {
+		t.Fatalf("reload run: %v", err)
+	}
+	if run.ConnectorCliInfo == nil {
+		t.Fatalf("expected connector_cli_info to be set")
+	}
+	if run.ConnectorCliInfo.ErrorKind != "session_expired" {
+		t.Fatalf("expected error_kind=session_expired, got %q", run.ConnectorCliInfo.ErrorKind)
+	}
+	if run.ConnectorCliInfo.RemediationHint == "" {
+		t.Fatalf("expected non-empty remediation_hint for session_expired")
+	}
+}
+
+// T-S5a-2: submit-result with error_kind=unknown → error_kind=="unknown",
+// remediation_hint empty.
+func TestPathBS5a_T_S5a_2_UnknownNoHint(t *testing.T) {
+	fx := newPathBS5aFixture(t)
+	runID, token := fx.seedAndLeaseRun(t)
+
+	rec := fx.submitResult(t, runID, token, map[string]any{
+		"success":      false,
+		"error_message": "something unknown",
+		"error_kind":   "unknown",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	run, err := fx.planningRunStore.GetByID(runID)
+	if err != nil || run == nil {
+		t.Fatalf("reload run: %v", err)
+	}
+	if run.ConnectorCliInfo == nil {
+		t.Fatalf("expected connector_cli_info to be set")
+	}
+	if run.ConnectorCliInfo.ErrorKind != "unknown" {
+		t.Fatalf("expected error_kind=unknown, got %q", run.ConnectorCliInfo.ErrorKind)
+	}
+	if run.ConnectorCliInfo.RemediationHint != "" {
+		t.Fatalf("expected empty remediation_hint for unknown, got %q", run.ConnectorCliInfo.RemediationHint)
+	}
+}
+
+// T-S5a-3: submit-result with error_kind not in the allowlist → normalised to "unknown".
+func TestPathBS5a_T_S5a_3_UnknownEnumNormalized(t *testing.T) {
+	fx := newPathBS5aFixture(t)
+	runID, token := fx.seedAndLeaseRun(t)
+
+	rec := fx.submitResult(t, runID, token, map[string]any{
+		"success":      false,
+		"error_message": "bad enum",
+		"error_kind":   "not_in_enum",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	run, err := fx.planningRunStore.GetByID(runID)
+	if err != nil || run == nil {
+		t.Fatalf("reload run: %v", err)
+	}
+	if run.ConnectorCliInfo == nil {
+		t.Fatalf("expected connector_cli_info to be set")
+	}
+	if run.ConnectorCliInfo.ErrorKind != "unknown" {
+		t.Fatalf("expected normalised error_kind=unknown, got %q", run.ConnectorCliInfo.ErrorKind)
+	}
+}
+
+// T-S5a-4: submit-result without error_kind field → defaults to "unknown"
+// (backwards compatibility).
+func TestPathBS5a_T_S5a_4_MissingErrorKindDefaultsToUnknown(t *testing.T) {
+	fx := newPathBS5aFixture(t)
+	runID, token := fx.seedAndLeaseRun(t)
+
+	rec := fx.submitResult(t, runID, token, map[string]any{
+		"success":      false,
+		"error_message": "generic failure",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	run, err := fx.planningRunStore.GetByID(runID)
+	if err != nil || run == nil {
+		t.Fatalf("reload run: %v", err)
+	}
+	if run.ConnectorCliInfo == nil {
+		t.Fatalf("expected connector_cli_info to be set")
+	}
+	if run.ConnectorCliInfo.ErrorKind != "unknown" {
+		t.Fatalf("expected error_kind=unknown (backwards compat), got %q", run.ConnectorCliInfo.ErrorKind)
+	}
+}
+
+// T-S5a-5: every AllowedErrorKinds member except "unknown" has a
+// corresponding entry in ErrorKindRemediations.
+func TestPathBS5a_T_S5a_5_RemediationCatalogComplete(t *testing.T) {
+	for kind := range models.AllowedErrorKinds {
+		if kind == models.ErrorKindUnknown {
+			continue
+		}
+		hint, ok := models.ErrorKindRemediations[kind]
+		if !ok {
+			t.Errorf("AllowedErrorKinds[%q] has no entry in ErrorKindRemediations", kind)
+			continue
+		}
+		if strings.TrimSpace(hint) == "" {
+			t.Errorf("ErrorKindRemediations[%q] is blank", kind)
+		}
+	}
 }
 
 // Defensive build assertion: ensure the database driver constants we
