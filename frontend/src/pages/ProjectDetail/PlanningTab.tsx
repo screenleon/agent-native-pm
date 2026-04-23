@@ -163,10 +163,10 @@ export function PlanningTab({
               providerOptionsError={ws.planningProviderOptionsError}
               executionMode={ws.planningSelectedExecutionMode}
               onExecutionModeChange={ws.onPlanningExecutionModeChange}
-              localAdapterType={ws.localAdapterType}
-              onLocalAdapterTypeChange={ws.onLocalAdapterTypeChange}
-              localModelOverride={ws.localModelOverride}
-              onLocalModelOverrideChange={ws.onLocalModelOverrideChange}
+              cliBindings={ws.cliBindings}
+              cliBindingsLoading={ws.cliBindingsLoading}
+              selectedCliBindingId={ws.selectedCliBindingId}
+              onCliBindingChange={ws.onCliBindingChange}
               planningModelOverride={ws.planningModelOverride}
               onPlanningModelOverrideChange={ws.onPlanningModelOverrideChange}
               creatingRun={ws.creatingPlanningRun}

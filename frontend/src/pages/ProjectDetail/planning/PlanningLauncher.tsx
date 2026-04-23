@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import type { PlanningExecutionMode, PlanningProviderOptions, Requirement } from '../../../types'
+import type { AccountBinding, PlanningExecutionMode, PlanningProviderOptions, Requirement } from '../../../types'
 import { formatRelativeTime } from '../../../utils/formatters'
 import {
   credentialModeLabel,
@@ -17,10 +17,10 @@ interface PlanningLauncherProps {
   executionMode: PlanningExecutionMode
   onExecutionModeChange: (mode: PlanningExecutionMode) => void
 
-  localAdapterType: string
-  onLocalAdapterTypeChange: (value: string) => void
-  localModelOverride: string
-  onLocalModelOverrideChange: (value: string) => void
+  cliBindings: AccountBinding[]
+  cliBindingsLoading: boolean
+  selectedCliBindingId: string | null
+  onCliBindingChange: (id: string) => void
 
   planningModelOverride: string
   onPlanningModelOverrideChange: (value: string) => void
@@ -52,10 +52,10 @@ export function PlanningLauncher({
   providerOptionsError,
   executionMode,
   onExecutionModeChange,
-  localAdapterType,
-  onLocalAdapterTypeChange,
-  localModelOverride,
-  onLocalModelOverrideChange,
+  cliBindings,
+  cliBindingsLoading,
+  selectedCliBindingId,
+  onCliBindingChange,
   planningModelOverride,
   onPlanningModelOverrideChange,
   creatingRun,
@@ -137,8 +137,7 @@ export function PlanningLauncher({
                   </div>
                   <div className="connector-run-desc">
                     The run will be queued and your local connector will pick it up automatically.
-                    The connector calls your local AI CLI (<code>claude</code> or <code>codex</code>).
-                    Configure your connector with <code>dispatcher_adapter.py</code> to switch between adapters without restarting.
+                    The connector calls your local AI CLI (<code>claude</code> or <code>codex</code>) using the binding selected below.
                   </div>
 
                   <div style={{ marginTop: '0.75rem', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '0.5rem', padding: '0.65rem 0.9rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
@@ -160,34 +159,37 @@ export function PlanningLauncher({
                   </div>
 
                   <div style={{ marginTop: '0.75rem', display: 'grid', gap: '0.5rem' }}>
-                    <fieldset style={{ display: 'grid', gap: '0.3rem', border: 'none', padding: 0, margin: 0 }}>
-                      <legend style={{ fontSize: '0.88rem', padding: 0 }}>Adapter for requirement-based run</legend>
-                      <div style={{ display: 'flex', gap: '1rem' }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.88rem' }}>
-                          <input type="radio" name="localAdapterType" value="backlog" checked={localAdapterType === 'backlog'} onChange={() => onLocalAdapterTypeChange('backlog')} disabled={creatingRun} />
-                          Backlog Planner
-                        </label>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.88rem' }}>
-                          <input type="radio" name="localAdapterType" value="whatsnext" checked={localAdapterType === 'whatsnext'} onChange={() => onLocalAdapterTypeChange('whatsnext')} disabled={creatingRun} />
-                          What's Next (scoped)
-                        </label>
+                    {/* CLI Binding Selector */}
+                    {cliBindingsLoading ? (
+                      <span style={{ fontSize: '0.88rem', color: 'var(--text-muted)' }}>Loading CLI bindings…</span>
+                    ) : cliBindings.length === 0 ? (
+                      <div style={{ fontSize: '0.88rem', color: 'var(--text-muted)' }}>
+                        No CLI binding configured.{' '}
+                        <Link to="/account-bindings">Set up a CLI binding</Link> to use your subscription.
                       </div>
-                      <small style={{ color: 'var(--text-muted)' }}>
-                        {localAdapterType === 'whatsnext' ? 'Analyzes project state scoped to the selected requirement.' : 'Decomposes the selected requirement into ranked backlog candidates.'}
-                      </small>
-                    </fieldset>
-                    <label style={{ display: 'grid', gap: '0.3rem' }}>
-                      <span style={{ fontSize: '0.88rem' }}>Model override <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(optional)</span></span>
-                      <input
-                        type="text"
-                        placeholder="leave blank to use connector default"
-                        value={localModelOverride}
-                        onChange={e => onLocalModelOverrideChange(e.target.value)}
-                        disabled={creatingRun}
-                        style={{ padding: '0.4rem 0.6rem', fontSize: '0.88rem', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '0.375rem', color: 'var(--text)' }}
-                      />
-                      <small style={{ color: 'var(--text-muted)' }}>e.g. <code>claude-sonnet-4-6</code> (Claude default), <code>claude-opus-4-7</code> (higher quality, more tokens), <code>gpt-5.4</code> or <code>gpt-5.3-codex</code> (Codex). Overrides ANPM_ADAPTER_MODEL for this run only.</small>
-                    </label>
+                    ) : (
+                      <label style={{ display: 'grid', gap: '0.3rem' }}>
+                        <span style={{ fontSize: '0.88rem' }}>CLI binding for this run</span>
+                        <select
+                          value={selectedCliBindingId ?? ''}
+                          onChange={e => onCliBindingChange(e.target.value)}
+                          disabled={creatingRun}
+                          style={{ padding: '0.4rem 0.6rem', fontSize: '0.88rem', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '0.375rem', color: 'var(--text)' }}
+                        >
+                          {cliBindings.map(b => (
+                            <option key={b.id} value={b.id}>
+                              {b.label}{b.model_id ? ` [${b.model_id}]` : ''}{b.is_primary ? ' (primary)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                        <small style={{ color: 'var(--text-muted)' }}>
+                          Manage bindings in <Link to="/account-bindings">My Bindings</Link>.
+                        </small>
+                      </label>
+                    )}
+                    <small style={{ color: 'var(--text-muted)' }}>
+                      Adapter type is selected automatically: backlog planner for requirement runs, what's next for health checks.
+                    </small>
                   </div>
                 </div>
               ) : (
