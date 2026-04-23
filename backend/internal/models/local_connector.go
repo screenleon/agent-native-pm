@@ -26,10 +26,15 @@ type LocalConnector struct {
 	ClientVersion string                 `json:"client_version"`
 	Status        string                 `json:"status"`
 	Capabilities  map[string]interface{} `json:"capabilities"`
-	LastSeenAt    *time.Time             `json:"last_seen_at"`
-	LastError     string                 `json:"last_error"`
-	CreatedAt     time.Time              `json:"created_at"`
-	UpdatedAt     time.Time              `json:"updated_at"`
+	// ProtocolVersion identifies which wire-protocol revision the connector
+	// understands. 0 = pre-Path-B (does not parse `cli_binding` in claim
+	// response). 1 = Path B / S2-aware. Set by the connector at pair time
+	// (Path B S2). See migration 023 and design §6.2 / §6.5 R3.
+	ProtocolVersion int                    `json:"protocol_version"`
+	LastSeenAt      *time.Time             `json:"last_seen_at"`
+	LastError       string                 `json:"last_error"`
+	CreatedAt       time.Time              `json:"created_at"`
+	UpdatedAt       time.Time              `json:"updated_at"`
 }
 
 type ConnectorPairingSession struct {
@@ -58,6 +63,11 @@ type PairLocalConnectorRequest struct {
 	Platform      string                 `json:"platform,omitempty"`
 	ClientVersion string                 `json:"client_version,omitempty"`
 	Capabilities  map[string]interface{} `json:"capabilities,omitempty"`
+	// ProtocolVersion is sent by Path-B-aware connectors (S2+). Old
+	// connectors that omit the field default to 0 server-side, which the
+	// claim dispatcher treats as "cannot receive cli_binding". See design
+	// §6.2 and migration 023.
+	ProtocolVersion int `json:"protocol_version,omitempty"`
 }
 
 type PairLocalConnectorResponse struct {
@@ -89,6 +99,25 @@ type LocalConnectorClaimNextRunResponse struct {
 	Requirement     *Requirement            `json:"requirement"`
 	Project         *Project                `json:"project,omitempty"`
 	PlanningContext *wire.PlanningContextV1 `json:"planning_context,omitempty"`
+	// CliBinding is populated when the run was created with an explicit
+	// account_binding_id (or auto-resolved to the user's primary CLI
+	// binding). Sourced from the run's ConnectorCliInfo.BindingSnapshot
+	// rather than a live binding lookup so audit info survives even if the
+	// binding row was deleted between create and claim (R10 mitigation;
+	// design §6.2 and §6.5). Path B / S2.
+	CliBinding *PlanningRunCliBindingPayload `json:"cli_binding,omitempty"`
+}
+
+// PlanningRunCliBindingPayload is the shape returned to the connector in the
+// claim-next-run response. Mirrors the fields stored in the run's binding
+// snapshot but trimmed to what the connector actually needs to invoke the
+// adapter (no IsPrimary; that flag is irrelevant after dispatch).
+type PlanningRunCliBindingPayload struct {
+	ID         string `json:"id"`
+	ProviderID string `json:"provider_id"`
+	ModelID    string `json:"model_id,omitempty"`
+	CliCommand string `json:"cli_command,omitempty"`
+	Label      string `json:"label,omitempty"`
 }
 
 // CliUsageInfo captures which CLI agent and model were actually used during adapter execution.

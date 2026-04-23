@@ -6,8 +6,9 @@ This file is the canonical API contract reference for the current deployed backe
 
 - Base path: `/api`
 - Content type: `application/json`
-- Response envelope: `{ "data": <payload>, "error": <string|null>, "meta": <object|null> }`
+- Response envelope: `{ "data": <payload>, "error": <string|null>, "meta": <object|null>, "warnings"?: [...] }`
 - Error responses: `{ "data": null, "error": "<message>", "meta": null }`
+- Warnings (Path B Slice S2): some 2xx endpoints attach an optional `warnings` array of advisory codes that do not fail the request. Each entry is `{ code, message?, details? }`. Documented codes today: `connector_outdated` (planning-run create with a CLI binding when the user's connector reports `protocol_version < 1`), `stale_cli_health` (planning-run create when the picked binding's last health probe is more than 2× the probe interval old; reserved for S5b — not emitted yet in S2). The field is `omitempty`, so endpoints that do not produce warnings remain byte-identical to the pre-S2 envelope.
 - Pagination: `?page=1&per_page=20` and `meta = { "page": 1, "per_page": 20, "total": 42 }`
 - IDs: UUID v4 strings
 - Timestamps: ISO 8601 UTC
@@ -334,8 +335,10 @@ Behavior:
 
 - `POST /api/me/local-connectors/pairing-sessions` is authenticated and returns both a pairing-session record and a plaintext pairing code. The server stores only the code hash.
 - `POST /api/connector/pair` is public because the pairing code itself is the temporary credential. A successful claim creates one connector record and returns a plaintext connector token once.
+- `POST /api/connector/pair` (Path B Slice S2) accepts an optional `protocol_version` integer. Path-B-aware connectors send `1`. The server stores it on `local_connectors.protocol_version` (migration 023). Old clients that omit the field default to `0` server-side, which the dispatcher treats as "cannot receive cli_binding."
 - `POST /api/connector/heartbeat` requires `X-Connector-Token` and marks the connector `online` while refreshing `last_seen_at`.
 - `POST /api/connector/claim-next-run` requires `X-Connector-Token` and only leases `execution_mode = local_connector` runs requested by the same human user who owns the connector.
+- `POST /api/connector/claim-next-run` (Path B Slice S2) returns an optional `cli_binding` block on the response when the leased run was created with an `account_binding_id`. Shape: `{ id, provider_id, model_id, cli_command, label }`. Sourced from the run's `connector_cli_info.binding_snapshot` so the audit value survives even if the live binding row was deleted between create and claim (R10 mitigation, design §6.2 / §6.5). Backwards-compat dispatch rule: when the calling connector reports `protocol_version < 1` the server refuses to lease any run with non-NULL `account_binding_id` and instead returns the same shape as "queue empty"; the run stays queued for an updated connector to claim later.
 - `POST /api/connector/planning-runs/:id/result` requires `X-Connector-Token`, accepts `{ success, error_message?, candidates? }`, and finalizes the leased planning run plus its correlated audit run.
 - Connector tokens are distinct from session tokens and API keys.
 
@@ -355,8 +358,13 @@ Behavior:
 
 #### Create planning run behavior
 
-- Request body is optional. Active fields are `trigger_source`, optional `model_id`, and optional `execution_mode`.
+- Request body is optional. Active fields are `trigger_source`, optional `model_id`, optional `execution_mode`, and (Path B Slice S2) optional `account_binding_id`.
 - `trigger_source` still defaults to `manual`.
+- `account_binding_id` (Path B S2) names a personal `account_bindings` row to dispatch this run against. Optional. When omitted AND `execution_mode == "local_connector"` AND the user has at least one active `cli:*` binding, the server resolves the user's primary CLI binding and snapshots it onto the run. When the user has zero `cli:*` bindings, the field stays `NULL` on the run row and the connector falls back to its env-var default (backwards compatible with pre-Path-B connectors). Validation per design §6.2:
+  - Must reference a binding owned by the requesting user; otherwise `400`.
+  - For `execution_mode == "local_connector"` the binding must have `provider_id LIKE 'cli:%'` AND `is_active = TRUE`; otherwise `400`.
+  - The server snapshots `provider_id`, `model_id`, `cli_command`, `label`, `is_primary` into `connector_cli_info.binding_snapshot` (existing JSON column from migration 019). The snapshot survives later edits or deletion of the binding (R10 mitigation).
+  - The 015 audit columns (`adapter_type`, `model_override`, `binding_label`, `binding_source`) are populated to mirror the snapshot so the row is self-describing without parsing the JSON envelope.
 - The server always resolves the provider from workspace policy, then resolves credentials from personal binding or shared settings based on `credential_mode`.
 - `model_id` may be sent as a one-run override, but it must belong to the resolved provider exposed by `GET /api/projects/:id/planning-provider-options`.
 - `provider_id` is server-controlled in the current implementation; request bodies do not select a different provider implementation.

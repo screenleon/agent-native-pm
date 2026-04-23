@@ -26,6 +26,7 @@ var (
 
 type planningRunStore interface {
 	Create(projectID, requirementID, requestedByUserID string, request models.CreatePlanningRunRequest, selection models.PlanningProviderSelection) (*models.PlanningRun, error)
+	CreateWithBinding(projectID, requirementID, requestedByUserID string, request models.CreatePlanningRunRequest, selection models.PlanningProviderSelection, snapshot *models.PlanningRunBindingSnapshot) (*models.PlanningRun, error)
 	MarkRunning(id string) error
 	Complete(id string) error
 	Fail(id, errorMessage string) error
@@ -64,6 +65,15 @@ func NewOrchestrator(planningRuns planningRunStore, agentRuns agentRunStore, can
 }
 
 func (o *Orchestrator) Run(ctx context.Context, requirement *models.Requirement, request models.CreatePlanningRunRequest, requestedByUserID string) (*models.PlanningRun, error) {
+	return o.RunWithBindingSnapshot(ctx, requirement, request, requestedByUserID, nil)
+}
+
+// RunWithBindingSnapshot is the Path B S2 entry point: same orchestration as
+// Run, but the caller may pass a pre-resolved binding snapshot that gets
+// embedded into the run's connector_cli_info column at INSERT time. The
+// caller is responsible for the three-way ownership check + active-check
+// (handler does this in planning_runs.Create).
+func (o *Orchestrator) RunWithBindingSnapshot(ctx context.Context, requirement *models.Requirement, request models.CreatePlanningRunRequest, requestedByUserID string, snapshot *models.PlanningRunBindingSnapshot) (*models.PlanningRun, error) {
 	if requirement == nil {
 		return nil, fmt.Errorf("%w: requirement is required", ErrStartPlanningRun)
 	}
@@ -72,7 +82,7 @@ func (o *Orchestrator) Run(ctx context.Context, requirement *models.Requirement,
 		return nil, errors.Join(ErrStartPlanningRun, err)
 	}
 
-	run, err := o.planningRuns.Create(requirement.ProjectID, requirement.ID, requestedByUserID, request, selection)
+	run, err := o.planningRuns.CreateWithBinding(requirement.ProjectID, requirement.ID, requestedByUserID, request, selection, snapshot)
 	if err != nil {
 		return nil, err
 	}

@@ -280,18 +280,34 @@ var _ = models.TaskStatusOpen // compile-time check the dependency exists
 ```
 
 ```go
-// backend/internal/models/local_connector.go (Phase A extension)
+// backend/internal/models/local_connector.go (Phase A + Path B S2)
 import "github.com/screenleon/agent-native-pm/internal/planning/wire"
 
 type LocalConnectorClaimNextRunResponse struct {
-    Run             *PlanningRun            `json:"run"`
-    Requirement     *Requirement            `json:"requirement"`
-    PlanningContext *wire.PlanningContextV1 `json:"planning_context,omitempty"`
+    Run             *PlanningRun                  `json:"run"`
+    Requirement     *Requirement                  `json:"requirement"`
+    Project         *Project                      `json:"project,omitempty"`
+    PlanningContext *wire.PlanningContextV1       `json:"planning_context,omitempty"`
+    // Path B S2 — present iff the leased run had account_binding_id.
+    // Sourced from the run's connector_cli_info.binding_snapshot, never
+    // from a live binding lookup (R10 mitigation: snapshot survives
+    // binding deletion). Old connectors that don't recognise this field
+    // simply ignore it via standard json.Unmarshal forward-compat
+    // (see §4.4 — DisallowUnknownFields is forbidden).
+    CliBinding      *PlanningRunCliBindingPayload `json:"cli_binding,omitempty"`
+}
+
+type PlanningRunCliBindingPayload struct {
+    ID         string `json:"id"`
+    ProviderID string `json:"provider_id"`           // "cli:claude" | "cli:codex"
+    ModelID    string `json:"model_id,omitempty"`
+    CliCommand string `json:"cli_command,omitempty"`
+    Label      string `json:"label,omitempty"`
 }
 ```
 
 ```go
-// backend/internal/connector/adapter.go (Phase A extension)
+// backend/internal/connector/adapter.go (Phase A + Path B S2)
 import "github.com/screenleon/agent-native-pm/internal/planning/wire"
 
 type ExecJSONInput struct {
@@ -299,8 +315,24 @@ type ExecJSONInput struct {
     Requirement            *models.Requirement     `json:"requirement"`
     RequestedMaxCandidates int                     `json:"requested_max_candidates"`
     PlanningContext        *wire.PlanningContextV1 `json:"planning_context,omitempty"`
+    // Path B S2 — populated by the connector when the claim response
+    // carried a cli_binding block. Adapter precedence per design D4:
+    // cli_selection > ANPM_ADAPTER_* env vars > built-in default.
+    CliSelection           *AdapterCliSelection    `json:"cli_selection,omitempty"`
+}
+
+type AdapterCliSelection struct {
+    ProviderID string `json:"provider_id"`
+    ModelID    string `json:"model_id,omitempty"`
+    CliCommand string `json:"cli_command,omitempty"`
 }
 ```
+
+The connector enforces a 264 KiB cap on the marshalled `ExecJSONInput`
+envelope before subprocess spawn (256 KiB planning context ceiling +
+8 KiB headroom for run/requirement/cli_selection). Overflow returns
+`success=false` with an `adapter_protocol_error` hint instead of
+launching a doomed subprocess (R5 / R7 mitigation).
 
 Layering proof (no cycles):
 

@@ -25,6 +25,8 @@ type PlanningRunHandler struct {
 	requirementStore    *store.RequirementStore
 	agentRunStore       *store.AgentRunStore
 	localConnectorStore *store.LocalConnectorStore
+	accountBindings     *store.AccountBindingStore
+	notifications       *store.NotificationStore
 	planner             planning.DraftPlanner
 	plannerFactory      plannerFactory
 }
@@ -47,6 +49,27 @@ func (h *PlanningRunHandler) WithPlannerFactory(factory plannerFactory) *Plannin
 
 func (h *PlanningRunHandler) WithLocalConnectorStore(localConnectorStore *store.LocalConnectorStore) *PlanningRunHandler {
 	h.localConnectorStore = localConnectorStore
+	return h
+}
+
+// WithAccountBindings wires the account-bindings store so the Create path
+// can validate `account_binding_id`, snapshot the binding into the run
+// (Path B S2), and auto-resolve the user's primary cli:* binding when the
+// request omits the field (design §6.2 / §6.5). Optional: when nil the
+// request's `account_binding_id` is silently ignored and Create falls back
+// to the pre-Path-B behavior.
+func (h *PlanningRunHandler) WithAccountBindings(bindings *store.AccountBindingStore) *PlanningRunHandler {
+	h.accountBindings = bindings
+	return h
+}
+
+// WithNotifications wires the notification store so the Create path can
+// emit the R3 "connector outdated" warning at run-creation time when the
+// user's only active connector reports protocol_version < 1 yet a CLI
+// binding was selected (design §6.2). Optional: when nil the warning is
+// returned in the response envelope only.
+func (h *PlanningRunHandler) WithNotifications(notifications *store.NotificationStore) *PlanningRunHandler {
+	h.notifications = notifications
 	return h
 }
 
@@ -99,9 +122,19 @@ func (h *PlanningRunHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// Path B S2: resolve account_binding_id (explicit or auto-primary) and
+	// build the snapshot the orchestrator will embed into the run.
+	// Returns warnings to emit in the success envelope (stale_cli_health,
+	// connector_outdated). 4xx errors are written directly.
+	snapshot, warnings, ok := h.resolvePathBBinding(w, r, &req, requirement, requestingUserID)
+	if !ok {
+		return
+	}
+
 	plannerToUse := h.resolvePlanner(r)
 	orchestrator := planning.NewOrchestrator(h.store, h.agentRunStore, h.candidateStore, plannerToUse)
-	run, err := orchestrator.Run(r.Context(), requirement, req, requestingUserID)
+	run, err := orchestrator.RunWithBindingSnapshot(r.Context(), requirement, req, requestingUserID, snapshot)
 	if err != nil {
 		if errors.Is(err, store.ErrActivePlanningRunExists) {
 			writeError(w, http.StatusConflict, "an active planning run already exists for this requirement")
@@ -130,7 +163,223 @@ func (h *PlanningRunHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeSuccess(w, http.StatusCreated, run, nil)
+	writeSuccessWithWarnings(w, http.StatusCreated, run, nil, warnings)
+}
+
+// resolvePathBBinding implements the design §6.2 / §6.5 server-side
+// validation + snapshot for the planning-run create endpoint. Steps:
+//
+//  1. Validate `account_binding_id` if provided: row must exist, belong to
+//     the requesting user (R2), and (for local_connector mode) be a cli:%
+//     active binding. Reject 400 otherwise.
+//  2. If absent AND execution_mode is local_connector AND user has at
+//     least one active cli:* binding, auto-resolve to the user's primary
+//     cli binding (one primary per user-namespace per design D2).
+//  3. If absent AND user has zero cli:* bindings, leave the field nil; the
+//     run still creates and the connector falls back to its env-var
+//     default (backwards compatible).
+//  4. Build the snapshot to persist inside connector_cli_info.binding_snapshot.
+//  5. Append envelope warnings for stale CLI health and pre-Path-B
+//     connector. Fire a one-time notification for the connector_outdated
+//     case (R3).
+//
+// Returns (snapshot, warnings, ok). When ok=false the function has already
+// written the HTTP error response.
+func (h *PlanningRunHandler) resolvePathBBinding(w http.ResponseWriter, r *http.Request, req *models.CreatePlanningRunRequest, requirement *models.Requirement, requestingUserID string) (*models.PlanningRunBindingSnapshot, []models.EnvelopeWarning, bool) {
+	if h.accountBindings == nil {
+		// Account bindings store is optional in tests. When unwired we
+		// short-circuit and ignore any account_binding_id the caller sent
+		// (no snapshot, no warnings) — same shape as a Phase-0 deployment.
+		return nil, nil, true
+	}
+	executionMode := strings.TrimSpace(req.ExecutionMode)
+	isLocalConnector := executionMode == models.PlanningExecutionModeLocalConnector
+
+	var binding *models.StoredAccountBinding
+	var warnings []models.EnvelopeWarning
+
+	// Step 1: explicit binding id.
+	if req.AccountBindingID != nil && strings.TrimSpace(*req.AccountBindingID) != "" {
+		bindingID := strings.TrimSpace(*req.AccountBindingID)
+		// Three-way ownership check (design §6.2): the current schema has
+		// no per-project owner column, so the third leg (== project owner)
+		// collapses to "binding belongs to the requesting user". GetByID
+		// already scopes to userID, so a row owned by user B returns nil.
+		fetched, err := h.accountBindings.GetByID(bindingID, requestingUserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to verify account binding")
+			return nil, nil, false
+		}
+		if fetched == nil {
+			writeError(w, http.StatusBadRequest, "account_binding_id does not belong to this user")
+			return nil, nil, false
+		}
+		if isLocalConnector {
+			if !models.IsCLIAccountBindingProvider(fetched.ProviderID) {
+				writeError(w, http.StatusBadRequest, "account_binding_id must be a cli:* provider for local_connector execution mode")
+				return nil, nil, false
+			}
+			if !fetched.IsActive {
+				writeError(w, http.StatusBadRequest, "account_binding_id must reference an active binding")
+				return nil, nil, false
+			}
+		}
+		binding = fetched
+	}
+
+	// Step 2: auto-resolve primary cli binding when caller omitted the field.
+	if binding == nil && isLocalConnector {
+		listed, err := h.accountBindings.ListByUser(requestingUserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load account bindings")
+			return nil, nil, false
+		}
+		var primaryCli *models.AccountBinding
+		var firstActiveCli *models.AccountBinding
+		for i := range listed {
+			b := listed[i]
+			if !models.IsCLIAccountBindingProvider(b.ProviderID) || !b.IsActive {
+				continue
+			}
+			if firstActiveCli == nil {
+				firstActiveCli = &listed[i]
+			}
+			if b.IsPrimary {
+				primaryCli = &listed[i]
+				break
+			}
+		}
+		// Primary takes precedence; fall back to the first active cli
+		// binding if no primary is set (covers users who haven't toggled
+		// is_primary on a single-binding setup before S3 ships the UI).
+		picked := primaryCli
+		if picked == nil {
+			picked = firstActiveCli
+		}
+		if picked != nil {
+			fetched, err := h.accountBindings.GetByID(picked.ID, requestingUserID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to load account binding")
+				return nil, nil, false
+			}
+			if fetched != nil {
+				binding = fetched
+				bindingID := fetched.ID
+				req.AccountBindingID = &bindingID
+			}
+		}
+		// Step 3: zero cli bindings → leave nil, no snapshot, success.
+	}
+
+	if binding == nil {
+		return nil, nil, true
+	}
+
+	// Step 4: build snapshot. Persisted by the orchestrator inside
+	// connector_cli_info.binding_snapshot via PlanningRunStore.CreateWithBinding.
+	snapshot := &models.PlanningRunBindingSnapshot{
+		ProviderID: binding.ProviderID,
+		ModelID:    binding.ModelID,
+		CliCommand: binding.CliCommand,
+		Label:      binding.Label,
+		IsPrimary:  binding.IsPrimary,
+	}
+
+	// Mirror the snapshot into the existing 015/018 audit columns so the
+	// run row is self-describing without parsing the JSON envelope.
+	if strings.TrimSpace(req.AdapterType) == "" {
+		req.AdapterType = binding.ProviderID
+	}
+	if strings.TrimSpace(req.ModelOverride) == "" {
+		req.ModelOverride = binding.ModelID
+	}
+
+	// Step 5a: stale_cli_health warning. cli_health is added in S5b under
+	// local_connectors.metadata; that column doesn't exist in the current
+	// schema, so we cannot meaningfully emit this warning yet. Keep the
+	// hook so S5b just has to flip a flag — design §6.2 explicitly says S2
+	// is a stub here.
+
+	// Step 5b: connector_outdated warning (R3 mitigation). If the user
+	// only has pre-Path-B connectors (protocol_version < 1) yet a CLI
+	// binding was selected, the run will sit queued. Surface it now so
+	// the operator knows what to do.
+	if isLocalConnector && h.localConnectorStore != nil {
+		hasUpToDate, outdated, lookupErr := h.userConnectorProtocolStatus(requestingUserID)
+		if lookupErr == nil && !hasUpToDate && outdated != nil {
+			warning := models.EnvelopeWarning{
+				Code:    "connector_outdated",
+				Message: "Update anpm-connector to claim this run.",
+				Details: map[string]interface{}{
+					"connector_id":     outdated.ID,
+					"connector_label":  outdated.Label,
+					"protocol_version": outdated.ProtocolVersion,
+				},
+			}
+			warnings = append(warnings, warning)
+			h.fireConnectorOutdatedNotification(requirement, requestingUserID, outdated)
+		}
+	}
+
+	return snapshot, warnings, true
+}
+
+// userConnectorProtocolStatus reports whether the requesting user has at
+// least one usable connector that knows the Path B claim wire (protocol
+// version >= 1), and returns the most recently active outdated connector
+// if not. The result fuels the R3 "connector outdated" envelope warning.
+func (h *PlanningRunHandler) userConnectorProtocolStatus(userID string) (bool, *models.LocalConnector, error) {
+	if h.localConnectorStore == nil {
+		return false, nil, nil
+	}
+	connectors, err := h.localConnectorStore.ListByUser(userID)
+	if err != nil {
+		return false, nil, err
+	}
+	hasUpToDate := false
+	var outdated *models.LocalConnector
+	for i := range connectors {
+		c := connectors[i]
+		if c.Status == models.LocalConnectorStatusRevoked {
+			continue
+		}
+		if c.ProtocolVersion >= 1 {
+			hasUpToDate = true
+			continue
+		}
+		outdated = &connectors[i]
+	}
+	return hasUpToDate, outdated, nil
+}
+
+// fireConnectorOutdatedNotification is a best-effort helper that drops a
+// warning notification for the user. Failures (e.g. the store is unwired
+// or the insert fails) are swallowed — the envelope warning is the
+// load-bearing surface; the notification is just a nudge.
+func (h *PlanningRunHandler) fireConnectorOutdatedNotification(requirement *models.Requirement, userID string, connector *models.LocalConnector) {
+	if h.notifications == nil || connector == nil || strings.TrimSpace(userID) == "" {
+		return
+	}
+	requirementTitle := "(untitled requirement)"
+	if requirement != nil && strings.TrimSpace(requirement.Title) != "" {
+		requirementTitle = requirement.Title
+	}
+	projectIDPtr := (*string)(nil)
+	link := ""
+	if requirement != nil && strings.TrimSpace(requirement.ProjectID) != "" {
+		pid := requirement.ProjectID
+		projectIDPtr = &pid
+		link = "/projects/" + pid
+	}
+	body := fmt.Sprintf("Run on requirement %q is waiting for an updated connector. Update anpm-connector to claim this run.", requirementTitle)
+	_, _ = h.notifications.Create(models.CreateNotificationRequest{
+		UserID:    userID,
+		ProjectID: projectIDPtr,
+		Kind:      "warning",
+		Title:     "Connector update required",
+		Body:      body,
+		Link:      link,
+	})
 }
 
 func (h *PlanningRunHandler) ProviderOptions(w http.ResponseWriter, r *http.Request) {

@@ -13,12 +13,39 @@ import (
 	"github.com/screenleon/agent-native-pm/internal/planning/wire"
 )
 
+// ConnectorProtocolVersion is the wire-protocol revision this binary
+// understands. 1 means "knows how to read cli_binding from claim-next-run
+// and pass cli_selection to the adapter on stdin." Bump in lockstep with
+// the server-side handler if the wire shape changes (Path B S2).
+const ConnectorProtocolVersion = 1
+
+// MaxAdapterStdinBytes caps the marshalled stdin envelope passed to the
+// adapter subprocess (256 KiB planning context ceiling + 8 KiB headroom
+// for run/requirement/cli_selection). Exceeding the cap returns
+// success=false with error_kind=adapter_protocol_error to the server
+// rather than launching a doomed subprocess (R5 / R7 mitigation).
+const MaxAdapterStdinBytes = 264 * 1024
+
+// AdapterCliSelection mirrors the per-run CLI binding picked at run-create
+// time on the server. Sent on adapter stdin under the `cli_selection`
+// key. The adapter's documented precedence (D4): cli_selection >
+// ANPM_ADAPTER_* env vars > built-in default.
+type AdapterCliSelection struct {
+	ProviderID string `json:"provider_id"`
+	ModelID    string `json:"model_id,omitempty"`
+	CliCommand string `json:"cli_command,omitempty"`
+}
+
 type ExecJSONInput struct {
 	Run                    *models.PlanningRun     `json:"run"`
 	Requirement            *models.Requirement     `json:"requirement"`
 	Project                *models.Project         `json:"project,omitempty"`
 	RequestedMaxCandidates int                     `json:"requested_max_candidates"`
 	PlanningContext        *wire.PlanningContextV1 `json:"planning_context,omitempty"`
+	// CliSelection is populated by the connector when the claim response
+	// carried a `cli_binding` block (Path B S2). Optional; when omitted
+	// the adapter falls back to env vars / built-in default per D4.
+	CliSelection *AdapterCliSelection `json:"cli_selection,omitempty"`
 }
 
 type ExecJSONOutput struct {
@@ -62,6 +89,21 @@ func ExecuteExecJSON(parent context.Context, config ExecJSONAdapterConfig, input
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return models.LocalConnectorSubmitRunResultRequest{Success: false, ErrorMessage: fmt.Sprintf("encode exec-json input: %v", err)}
+	}
+	// Path B S2: refuse to spawn the subprocess when the marshalled
+	// envelope exceeds MaxAdapterStdinBytes. This catches misconfigured
+	// planning contexts AND defends the OS pipe buffer (R5 / R7
+	// mitigation, design §6.3). The error_kind hint is consumed by the
+	// S5a remediation catalog ("Update the reference adapter — version
+	// mismatch."), which is the right surface even though the actual
+	// cause is server-side: the alternative is a partial write that the
+	// adapter parses as truncated JSON and reports as adapter_protocol_error
+	// anyway, so we just classify it correctly here.
+	if len(payload) > MaxAdapterStdinBytes {
+		return models.LocalConnectorSubmitRunResultRequest{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("adapter stdin envelope %d bytes exceeds %d byte cap (adapter_protocol_error)", len(payload), MaxAdapterStdinBytes),
+		}
 	}
 	runContext, cancel := context.WithTimeout(parent, time.Duration(normalized.TimeoutSeconds)*time.Second)
 	defer cancel()
