@@ -91,14 +91,20 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 			CliCommand: claim.CliBinding.CliCommand,
 		}
 	}
-	result := ExecuteExecJSON(ctx, s.State.Adapter, ExecJSONInput{
+	execInput := ExecJSONInput{
 		Run:                    claim.Run,
 		Requirement:            claim.Requirement,
 		Project:                claim.Project,
 		RequestedMaxCandidates: defaultRequestedCandidates,
 		PlanningContext:        claim.PlanningContext,
 		CliSelection:           cliSelection,
-	})
+	}
+	var result models.LocalConnectorSubmitRunResultRequest
+	if strings.TrimSpace(s.State.Adapter.Command) == "" {
+		result = ExecuteBuiltin(ctx, execInput)
+	} else {
+		result = ExecuteExecJSON(ctx, s.State.Adapter, execInput)
+	}
 	if _, err := s.Client.SubmitRunResult(ctx, claim.Run.ID, result); err != nil {
 		return true, fmt.Errorf("submit run result for %s: %w", claim.Run.ID, err)
 	}

@@ -175,13 +175,14 @@ func runDoctor(ctx context.Context, args []string, stdout io.Writer) error {
 	fmt.Fprintf(stdout, "server status: %s\n", conn.Status)
 	fmt.Fprintf(stdout, "last seen: %v\n", conn.LastSeenAt)
 	if strings.TrimSpace(state.Adapter.Command) == "" {
-		fmt.Fprintln(stdout, "note: adapter is not configured yet; doctor verified connectivity only. Configure --adapter-command before running serve.")
+		fmt.Fprintln(stdout, "note: no --adapter-command configured; serve will use the built-in adapter (claude or codex on PATH).")
 	}
 	return nil
 }
 
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	state, client, statePath, changed, err := loadRuntimeState(args, true)
+	// requireAdapter is false because the built-in adapter covers the zero-flag case.
+	state, client, statePath, changed, err := loadRuntimeState(args, false)
 	if err != nil {
 		return err
 	}
@@ -211,7 +212,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 func emitAdapterDiagnostics(stdout, stderr io.Writer, adapter ExecJSONAdapterConfig) {
 	cmd := strings.TrimSpace(adapter.Command)
 	if cmd == "" {
-		fmt.Fprintln(stderr, "warn: no --adapter-command configured; runs will be claimed but not executed")
+		fmt.Fprintln(stdout, "using built-in adapter; CLI and adapter type are read from each run's configuration")
 		return
 	}
 	resolved, lookErr := exec.LookPath(cmd)
