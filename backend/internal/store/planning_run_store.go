@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -77,12 +78,19 @@ func (s *PlanningRunStore) CreateWithBinding(projectID, requirementID, requested
 	// connector_cli_info is also nullable — only emit a JSON blob when we
 	// have something to record (a binding snapshot today; the adapter's
 	// CliUsageInfo and error_kind land later via update paths in S5a/S5b).
+	//
+	// Marshal failure here MUST surface as an insert error: silently dropping
+	// the snapshot would leave account_binding_id set with no corresponding
+	// binding_snapshot, breaking claim-next-run's ability to populate
+	// cli_binding for Path-B connectors.
 	var connectorCliInfoArg any
 	if bindingSnapshot != nil {
 		envelope := models.PlanningRunCliInfo{BindingSnapshot: bindingSnapshot}
-		if b, marshalErr := json.Marshal(envelope); marshalErr == nil {
-			connectorCliInfoArg = string(b)
+		b, marshalErr := json.Marshal(envelope)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("marshal binding snapshot: %w", marshalErr)
 		}
+		connectorCliInfoArg = string(b)
 	}
 
 	_, err := s.db.Exec(`
@@ -419,11 +427,25 @@ func (s *PlanningRunStore) mergeCliInfoEnvelope(id, adapterPayload string) (stri
 	}
 	envelope := models.PlanningRunCliInfo{}
 	if existingRaw.Valid && existingRaw.String != "" {
-		if err := json.Unmarshal([]byte(existingRaw.String), &envelope); err != nil {
-			// Legacy bare CliUsageInfo payload (pre-Path-B). Treat the
-			// whole thing as the prior `cli_invocation`.
+		// Try the new envelope shape first. Note: a legacy bare CliUsageInfo
+		// payload like `{"agent":...,"model":...}` will Unmarshal into the
+		// envelope WITHOUT an error (Go's JSON decoder silently ignores
+		// unknown fields by default), but the resulting envelope will be
+		// all-zero. Mirror scanPlanningRun's check: if Unmarshal fails OR
+		// the envelope has no recognised fields set, attempt the legacy
+		// CliUsageInfo decode as a second pass so we don't lose the
+		// historical adapter info on update.
+		envelopeOK := false
+		if err := json.Unmarshal([]byte(existingRaw.String), &envelope); err == nil {
+			if envelope.BindingSnapshot != nil || envelope.Invocation != nil ||
+				envelope.ErrorKind != "" || envelope.DispatchWarning != "" {
+				envelopeOK = true
+			}
+		}
+		if !envelopeOK {
 			var legacy models.CliUsageInfo
-			if err := json.Unmarshal([]byte(existingRaw.String), &legacy); err == nil {
+			if err := json.Unmarshal([]byte(existingRaw.String), &legacy); err == nil &&
+				(legacy.Agent != "" || legacy.Model != "" || legacy.ModelSource != "") {
 				envelope.Invocation = &legacy
 			}
 		}
@@ -671,6 +693,40 @@ func scanPlanningRun(scanner planningRunScanner) (*models.PlanningRun, error) {
 		}
 	}
 	return &run, nil
+}
+
+// ListQueuedCliBoundRunIDsForUser returns the IDs of every queued
+// local-connector planning run with a non-NULL account_binding_id for the
+// given user. Used by the claim path so we can stamp a one-shot
+// `dispatch_warning` on each run when the requesting connector is too old
+// to handle the cli_binding block (R3 mitigation, design §6.2 step
+// "claim-next-run"). The list is ordered newest-first so callers can cap
+// the number of stamps if needed; today every queued match is stamped.
+func (s *PlanningRunStore) ListQueuedCliBoundRunIDsForUser(userID string) ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT id FROM planning_runs
+		WHERE requested_by_user_id = $1
+		  AND execution_mode = $2
+		  AND status = $3
+		  AND account_binding_id IS NOT NULL
+		ORDER BY created_at DESC
+	`, strings.TrimSpace(userID), models.PlanningExecutionModeLocalConnector, models.PlanningRunStatusQueued)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
 
 // HasQueuedCliBoundRunsForUser reports whether the user has any queued

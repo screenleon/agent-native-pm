@@ -204,24 +204,26 @@ func (h *LocalConnectorHandler) ClaimNextRun(w http.ResponseWriter, r *http.Requ
 }
 
 // markCliBoundRunsAwaitingUpdate stamps a one-shot "awaiting connector
-// update" hint on any CLI-bound run currently queued for the user. The
+// update" hint on every CLI-bound run currently queued for the user. The
 // stamp lives inside connector_cli_info.dispatch_warning and is
 // best-effort: errors are swallowed because the user has already received
-// the notification at run-creation time.
+// the notification at run-creation time and the stamp itself is just an
+// audit / debugging breadcrumb (a future S2-aware connector picks the run
+// up on its next claim regardless).
 func (h *LocalConnectorHandler) markCliBoundRunsAwaitingUpdate(userID string) {
 	if h.planningRuns == nil {
 		return
 	}
-	hasQueued, err := h.planningRuns.HasQueuedCliBoundRunsForUser(userID)
-	if err != nil || !hasQueued {
+	ids, err := h.planningRuns.ListQueuedCliBoundRunIDsForUser(userID)
+	if err != nil || len(ids) == 0 {
 		return
 	}
-	// We don't iterate runs in S2 — the existence check is sufficient to
-	// trigger the notification at run-creation; this hook is a placeholder
-	// so S4/S5b can extend it once we have a list helper that returns the
-	// IDs to stamp. Leaving the function call site present keeps the
-	// behaviour easy to upgrade without re-touching the claim path.
-	_ = hasQueued
+	const stamp = "awaiting connector update — pre-Path-B connector skipped this run"
+	for _, id := range ids {
+		// Best-effort. A failed stamp doesn't block other runs and doesn't
+		// re-fire the user notification (already sent at run creation).
+		_ = h.planningRuns.MarkDispatchWarning(id, stamp)
+	}
 }
 
 func (h *LocalConnectorHandler) SubmitPlanningRunResult(w http.ResponseWriter, r *http.Request) {

@@ -105,12 +105,13 @@ type CreatePlanningRunRequest struct {
 	AdapterType   string `json:"adapter_type,omitempty"`
 	ModelOverride string `json:"model_override,omitempty"`
 	// AccountBindingID names a personal account_bindings row to dispatch
-	// this run against. Optional. When omitted AND execution_mode is
-	// local_connector, the server resolves the user's primary cli:* binding
-	// (Path B S2). When the user has no cli:* bindings the field stays nil
-	// on the run and the connector falls back to its env-var default
-	// (backwards compatible with pre-Path-B connectors). Pointer so we can
-	// distinguish absent from explicit empty string in JSON.
+	// this run against. Optional. When execution_mode is local_connector
+	// and no non-empty binding ID is provided, the server may resolve the
+	// user's primary cli:* binding (Path B S2). When the user has no
+	// cli:* bindings the field stays nil on the run and the connector
+	// falls back to its env-var default (backwards compatible with
+	// pre-Path-B connectors). Explicit empty string is treated identically
+	// to absent — there is no "opt out of auto-resolution" sentinel today.
 	AccountBindingID *string `json:"account_binding_id,omitempty"`
 }
 

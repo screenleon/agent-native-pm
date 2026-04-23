@@ -347,7 +347,14 @@ func (h *PlanningRunHandler) userConnectorProtocolStatus(userID string) (bool, *
 			hasUpToDate = true
 			continue
 		}
-		outdated = &connectors[i]
+		// ListByUser returns connectors ordered by created_at DESC, so the
+		// first outdated row we encounter is the most recently created one.
+		// Lock it in and don't overwrite — without this break the loop ends
+		// up returning the OLDEST outdated connector, which is the wrong
+		// one to nudge the operator about.
+		if outdated == nil {
+			outdated = &connectors[i]
+		}
 	}
 	return hasUpToDate, outdated, nil
 }
