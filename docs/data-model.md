@@ -119,22 +119,26 @@ Notes:
 |--------|------|-------------|-------------|
 | `id` | TEXT | PRIMARY KEY | UUID v4 |
 | `user_id` | TEXT | NOT NULL, FK -> users.id | Owning user |
-| `provider_id` | TEXT | NOT NULL | Currently `openai-compatible` |
+| `provider_id` | TEXT | NOT NULL | `openai-compatible`, `cli:claude`, or `cli:codex` |
 | `label` | TEXT | NOT NULL DEFAULT '' | User-facing binding name |
-| `base_url` | TEXT | NOT NULL DEFAULT '' | Per-user OpenAI-compatible endpoint |
+| `base_url` | TEXT | NOT NULL DEFAULT '' | Per-user OpenAI-compatible endpoint (empty for `cli:*`) |
 | `model_id` | TEXT | NOT NULL DEFAULT '' | Default model for this binding |
 | `configured_models` | JSONB | NOT NULL DEFAULT '[]' | User-selectable models exposed for this binding |
-| `api_key_ciphertext` | TEXT | NOT NULL DEFAULT '' | Encrypted personal API credential |
+| `api_key_ciphertext` | TEXT | NOT NULL DEFAULT '' | Encrypted personal API credential (empty for `cli:*`) |
 | `api_key_configured` | BOOLEAN | NOT NULL DEFAULT FALSE | Whether the binding has a stored credential |
 | `is_active` | BOOLEAN | NOT NULL DEFAULT TRUE | Whether this binding is the active one for the provider |
+| `cli_command` | TEXT | NOT NULL DEFAULT '' | Absolute path to the CLI binary; empty = PATH lookup (migration 021) |
+| `is_primary` | BOOLEAN | NOT NULL DEFAULT FALSE | Whether this binding is the primary in its namespace (migration 021) |
 | `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 
 Notes:
 
 - `(user_id, provider_id, label)` is unique.
-- At most one binding per `(user_id, provider_id)` may be active at a time.
+- At most one binding per `(user_id, provider_id)` may be active at a time (`idx_account_bindings_active_unique`, migration 015).
+- At most one binding per `(user_id, namespace)` may be primary at a time (`idx_account_bindings_primary_unique`, migration 021), where namespace is `cli` for `cli:*` providers and `api` for everything else.
 - Personal API keys use the same encryption-at-rest mechanism as `planning_settings`.
+- `cli:*` provider ids are local-mode only (design §5 D8); the API rejects them with 403 in server mode.
 
 ### Table: `local_connectors`
 

@@ -73,10 +73,17 @@ func IsUniqueViolation(err error) bool {
 	if strings.Contains(msg, "UNIQUE constraint failed") {
 		return true
 	}
-	// Postgres: SQLSTATE 23505 appears in the formatted error text when the
-	// caller doesn't import pq. The more robust Postgres path uses
-	// pq.Error.Code — callers that need constraint identity still do so.
-	return strings.Contains(msg, "SQLSTATE 23505")
+	// Postgres surface forms vary depending on whether the caller wraps the
+	// pq error or stringifies it directly. Match on every encoding of the
+	// 23505 SQLSTATE we have observed in the wild:
+	//   - "ERROR ... (SQLSTATE 23505)" — github.com/lib/pq formatted error
+	//   - "pq: duplicate key value violates unique constraint ... (23505)"
+	//     — github.com/lib/pq Error.String()
+	//   - bare "SQLSTATE 23505" inside a wrapped fmt.Errorf chain
+	if strings.Contains(msg, "SQLSTATE 23505") || strings.Contains(msg, "(23505)") {
+		return true
+	}
+	return strings.Contains(msg, "duplicate key value violates unique constraint")
 }
 
 // IntervalDays returns a SQL expression subtracting N days from a timestamp.
@@ -178,9 +185,19 @@ func runMigrationsFromFS(db *sql.DB, migrationsFS fs.FS, isSQLite bool) error {
 
 	var files []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			files = append(files, e.Name())
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
 		}
+		// Skip dev-only rollback companions (e.g. 021_*.down.sql). The
+		// design §13 rollback story keeps these as sibling files for hand
+		// invocation; the forward-only migration runner must never apply
+		// them automatically. Without this filter the runner would treat
+		// "021_*.down.sql" as a brand-new migration version and execute
+		// the DROP statements right after the forward migration ran.
+		if strings.HasSuffix(e.Name(), ".down.sql") {
+			continue
+		}
+		files = append(files, e.Name())
 	}
 	sort.Strings(files)
 

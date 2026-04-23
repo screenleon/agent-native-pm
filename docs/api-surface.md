@@ -287,6 +287,37 @@ Behavior:
 | PATCH | `/api/me/account-bindings/:id` | Update one personal provider binding |
 | DELETE | `/api/me/account-bindings/:id` | Delete one personal provider binding |
 
+Request and response shape (Path B Slice S1):
+
+```jsonc
+{
+  "provider_id": "openai-compatible | cli:claude | cli:codex",
+  "label": "My Mac Claude",
+  "base_url": "",                   // empty for cli:* providers
+  "model_id": "claude-sonnet-4-6",
+  "configured_models": ["claude-sonnet-4-6", "claude-opus-4-7"],
+  "api_key": "sk-...",              // omitted for cli:* providers
+  "cli_command": "/usr/local/bin/claude", // optional; empty = PATH lookup
+  "is_primary": true                // optional; auto-true on first binding per namespace
+}
+```
+
+Response includes the persisted fields plus `is_active`, `api_key_configured`,
+`is_primary`, `cli_command`, `created_at`, `updated_at`. The plaintext
+`api_key` is never returned.
+
+Validation rules enforced server-side:
+
+- `provider_id` must be one of `openai-compatible`, `cli:claude`, `cli:codex`. Unrecognized values return 400 (the allowlist check runs before the local-mode gate, so e.g. `cli:unknown` returns 400 in any deployment mode).
+- `cli:*` provider ids (when allowlisted) are local-mode only. In server mode (`config.LocalMode == false`) any create or update of an allowlisted `cli:*` binding returns 403 (design §5 D8). The frontend hides the CLI binding section in server mode and shows an info card in its place.
+- For `provider_id LIKE 'cli:%'`: `base_url` MUST be empty after trim, `api_key` MUST be absent or empty after trim, `model_id` is REQUIRED non-empty after trim.
+- `cli_command` is optional. If non-empty it MUST match `^/[A-Za-z0-9_./\-]+$` (server-side sanity check; the connector enforces real hardening — `realpath` resolution, allowed-roots, interpreter blocklist, setuid rejection — at probe / invocation time per design §10).
+- `configured_models` is capped at 16 entries, each at most 64 characters after trim (design §6.2 rule 4).
+- `is_primary=true` atomically demotes any other primary binding in the same `(user_id, namespace)` group within the same database transaction. Namespace is `cli` for `cli:*` providers and `api` for everything else. The CLI namespace is shared across all `cli:*` providers — flipping primary from `cli:claude` to `cli:codex` auto-demotes the previous primary CLI binding. When `is_primary` is omitted on the first binding of a namespace, it defaults to `true`.
+- Active uniqueness — `idx_account_bindings_active_unique` (migration 015) — is preserved. The Create/Update handler **auto-demotes** any existing active binding for the same `(user_id, provider_id)` within the same transaction before inserting/updating, so a second create normally returns **201** with the prior row silently flipped to `is_active=FALSE`. Direct INSERTs that bypass the handler (e.g. data import scripts) still hit the index and surface as 409. The `account_bindings_user_id_provider_id_label_key` UNIQUE constraint from migration 014 surfaces label collisions as 409 even via the handler path (a user cannot have two bindings with the same provider+label, regardless of `is_active`).
+
+Source: `[agent:backend-architect]`
+
 ### Local Connectors
 
 | Method | Path | Description |

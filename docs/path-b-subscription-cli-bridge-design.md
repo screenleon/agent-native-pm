@@ -186,7 +186,7 @@ The earlier draft posed six open questions. Five resolved per owner approval; on
 - At most one `is_primary = TRUE` per `(user_id, provider_id_prefix)` where prefix is `cli` for `cli:*` bindings, `api` for everything else. Enforced by partial unique index in migration 021.
 - When a user creates their first `cli:claude` binding, it auto-becomes primary. Same for `cli:codex`.
 - User can flip primary in the UI (S3).
-- "Primary" resolution is namespace-scoped: a user can have one primary `cli:claude` AND one primary `cli:codex`. The launcher picks based on the run's chosen `adapter_type`.
+- "Primary" resolution is namespace-scoped to ONE primary CLI binding per user, regardless of which `cli:*` provider it points at. The partial unique index in §6.1 enforces this via `CASE WHEN provider_id LIKE 'cli:%' THEN 'cli' ELSE 'api' END` — `cli:claude` and `cli:codex` share one "cli" namespace slot. To switch the launcher's default from Claude to Codex, the user flips primary on the Codex binding (one click in S3); the previously-primary Claude binding is auto-demoted within the same TX.
 
 ### D3 — `cli_health` lives in `local_connectors.metadata` JSONB, not a new table
 
