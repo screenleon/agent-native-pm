@@ -16,8 +16,12 @@ ALTER TABLE account_bindings ADD COLUMN is_primary BOOLEAN NOT NULL DEFAULT FALS
 -- One primary binding per (user_id, provider_id_namespace) where the
 -- namespace is `cli` for cli:* providers and `api` for everything else.
 -- The CASE expression keeps API-key bindings and CLI bindings in separate
--- primary slots so a user can have one primary api binding AND one primary
--- cli:claude / one primary cli:codex without violating the index.
+-- primary slots so a user can have one primary API-key binding AND one
+-- primary CLI binding. NOTE: the CLI namespace is shared across all cli:*
+-- providers, so the user has only ONE primary CLI binding total — switching
+-- the launcher's default from cli:claude to cli:codex requires flipping
+-- is_primary on the desired row, which auto-demotes the previous primary
+-- within the same TX (see store.demoteOtherPrimaryBindings).
 CREATE UNIQUE INDEX idx_account_bindings_primary_unique
     ON account_bindings(user_id,
                         (CASE WHEN provider_id LIKE 'cli:%' THEN 'cli' ELSE 'api' END))

@@ -223,6 +223,39 @@ func TestS1_3CLIClaudeServerMode(t *testing.T) {
 	}
 }
 
+// T-S1-3b — provider_id allowlist takes precedence over D8 LocalMode gate.
+// An unrecognised cli:* value (e.g. cli:unknown) MUST surface as 400 from
+// the store's allowlist check, not as 403 from the D8 gate, so the operator
+// gets a meaningful error instead of "feature unavailable" when they
+// actually mistyped the provider id. Addresses Copilot review on PR #15.
+func TestS1_3bUnknownCLIProviderPrecedence(t *testing.T) {
+	t.Run("server mode", func(t *testing.T) {
+		fx := newAccountBindingFixture(t, false)
+		w := fx.post(t, map[string]any{
+			"provider_id": "cli:unknown",
+			"label":       "test",
+			"model_id":    "some-model",
+		})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 (allowlist precedence), got %d: %s", w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), "local-mode") {
+			t.Fatalf("error must not mention local-mode for unrecognised cli:* values, got: %s", w.Body.String())
+		}
+	})
+	t.Run("local mode", func(t *testing.T) {
+		fx := newAccountBindingFixture(t, true)
+		w := fx.post(t, map[string]any{
+			"provider_id": "cli:unknown",
+			"label":       "test",
+			"model_id":    "some-model",
+		})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 (allowlist), got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
 // T-S1-4a — cli_command happy path: an absolute path matching the regex
 // is accepted.
 func TestS1_4aCLICommandHappy(t *testing.T) {
@@ -356,6 +389,49 @@ func TestS1_6ActiveUniquenessPreserved(t *testing.T) {
 	}
 	if !database.IsUniqueViolation(err) {
 		t.Fatalf("expected unique violation, got: %v", err)
+	}
+}
+
+// T-S1-6b — label conflict classification: creating a second binding with
+// the same (provider_id, label) as an EXISTING INACTIVE binding triggers the
+// migration 014 UNIQUE(user_id, provider_id, label) constraint and must
+// surface as 409 with the label-specific sentinel (not the active or primary
+// conflict messages). Addresses Copilot review on PR #15: substring matching
+// on `active_unique` / `primary_unique` index names is unreliable on SQLite;
+// the new classifier uses pq.Error.Constraint on PG and column-name checks
+// on SQLite.
+func TestS1_6bLabelConflictClassification(t *testing.T) {
+	fx := newAccountBindingFixture(t, true)
+
+	// Seed an INACTIVE binding directly so we can collide on (user, provider, label)
+	// without going through the auto-demote path.
+	if _, err := fx.db.Exec(`
+		INSERT INTO account_bindings (id, user_id, provider_id, label, base_url, model_id,
+			configured_models, api_key_ciphertext, api_key_configured, is_active,
+			cli_command, is_primary, created_at, updated_at)
+		VALUES ('seed-inactive', 'local-admin', 'cli:claude', 'duplicate-label', '', 'claude-sonnet-4-6',
+			'[]', '', FALSE, FALSE, '', FALSE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`); err != nil {
+		t.Fatalf("seed inactive binding: %v", err)
+	}
+
+	// Now create a second binding with the same (provider_id, label).
+	// Auto-demote does NOT apply (the seed is already inactive); the
+	// migration 014 label UNIQUE constraint should fire with 409.
+	w := fx.post(t, map[string]any{
+		"provider_id": "cli:claude",
+		"label":       "duplicate-label",
+		"model_id":    "claude-sonnet-4-6",
+	})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for label conflict, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	// The error message should mention "label" or "provider and label" so the
+	// operator can tell this apart from active/primary conflicts. Both the
+	// active and primary sentinels would produce different messages.
+	if !strings.Contains(body, "label") {
+		t.Fatalf("expected error message to mention label, got: %s", body)
 	}
 }
 

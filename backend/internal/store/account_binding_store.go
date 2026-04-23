@@ -10,10 +10,79 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/screenleon/agent-native-pm/internal/database"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/secrets"
 )
+
+// PostgreSQL constraint / index names used by the unique-violation classifier.
+// SQLite does not expose these in the error text — see classifyAccountBindingUniqueViolation
+// for the fallback path.
+const (
+	activeBindingConstraint  = "idx_account_bindings_active_unique"  // migration 015
+	primaryBindingConstraint = "idx_account_bindings_primary_unique" // migration 021
+	// PostgreSQL auto-names inline UNIQUE constraints as <table>_<col1>_..._<colN>_key.
+	// See migration 014: `UNIQUE(user_id, provider_id, label)`.
+	labelBindingConstraint = "account_bindings_user_id_provider_id_label_key"
+)
+
+// classifyAccountBindingUniqueViolation maps a DB unique-constraint violation
+// to a typed sentinel so the handler can emit the correct 409 message.
+//
+// Two driver paths, mirroring planning_run_store.go and agent_run_store.go:
+//
+//   - PostgreSQL: pq.Error.Constraint carries the constraint/index name
+//     deterministically. Switch on it.
+//   - SQLite (modernc.org/sqlite): the error text reads
+//     `UNIQUE constraint failed: account_bindings.col1, account_bindings.col2`.
+//     Partial unique indexes built on expressions (idx_account_bindings_primary_unique
+//     uses a CASE on provider_id) do not surface the index name. Disambiguate by
+//     the column list — label conflict carries `account_bindings.label`, active
+//     conflict carries user_id+provider_id without label, primary conflict is the
+//     fallthrough (the CASE expression collapses to a bare user_id reference in
+//     the SQLite error text).
+//
+// Returns the original err if it is not a unique violation.
+func classifyAccountBindingUniqueViolation(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	// PostgreSQL path: constraint name is deterministic.
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && string(pqErr.Code) == "23505" {
+		switch pqErr.Constraint {
+		case activeBindingConstraint:
+			return fmt.Errorf("%w: a binding with this provider is already active", ErrAccountBindingActiveConflict)
+		case primaryBindingConstraint:
+			return fmt.Errorf("%w: another primary binding already exists in this namespace", ErrAccountBindingPrimaryConflict)
+		case labelBindingConstraint:
+			return fmt.Errorf("%w: a binding with this provider and label already exists", ErrAccountBindingDuplicateLabel)
+		}
+		// Unrecognized PG constraint — fall through to the message-based path.
+	}
+
+	// SQLite path (and PG fallback): inspect error text.
+	msg := err.Error()
+	if !strings.Contains(msg, "UNIQUE constraint failed") &&
+		!strings.Contains(msg, "duplicate key value violates unique constraint") {
+		return err
+	}
+
+	// Label conflict: most specific column signature.
+	if strings.Contains(msg, "account_bindings.label") || strings.Contains(msg, "_label_key") {
+		return fmt.Errorf("%w: a binding with this provider and label already exists", ErrAccountBindingDuplicateLabel)
+	}
+	// Active conflict: (user_id, provider_id) without label.
+	if strings.Contains(msg, "account_bindings.user_id") && strings.Contains(msg, "account_bindings.provider_id") {
+		return fmt.Errorf("%w: a binding with this provider is already active", ErrAccountBindingActiveConflict)
+	}
+	// Primary conflict fallthrough: the CASE-expression partial index doesn't
+	// surface column names cleanly; if we got here with a UNIQUE error it is
+	// most likely the primary index.
+	return fmt.Errorf("%w: another primary binding already exists in this namespace", ErrAccountBindingPrimaryConflict)
+}
 
 // Sentinel errors so the handler can map store outcomes to proper HTTP
 // status codes (400 / 403 / 404 / 409). Keeping these typed avoids the
@@ -372,23 +441,15 @@ func (s *AccountBindingStore) Create(userID string, req models.CreateAccountBind
 	`, id, userID, providerID, label, baseURL, modelID, configuredModelsJSON,
 		apiKeyCiphertext, apiKeyConfigured, cliCommand, isPrimary, now)
 	if err != nil {
+		// Three unique indexes can collide here, all → 409 to the caller:
+		//   - idx_account_bindings_active_unique  (migration 015)
+		//   - idx_account_bindings_primary_unique (migration 021)
+		//   - account_bindings_user_id_provider_id_label_key (migration 014)
+		// Auto-demote in deactivateOtherActiveBindings + demoteOtherPrimaryBindings
+		// makes the first two effectively unreachable from the user-facing path,
+		// but they remain as defense in depth (e.g. concurrent creates).
 		if database.IsUniqueViolation(err) {
-			// Two distinct unique indexes can fail here:
-			//   - idx_account_bindings_active_unique (migration 015) — same
-			//     (user_id, provider_id) is_active=TRUE → 409
-			//   - idx_account_bindings_primary_unique (migration 021) — two
-			//     primary in same namespace; should be impossible after the
-			//     demote above but kept as defense in depth → 409
-			//   - the (user_id, provider_id, label) UNIQUE constraint from
-			//     migration 014 → 409 with a label-specific message
-			msg := err.Error()
-			if strings.Contains(msg, "active_unique") {
-				return nil, fmt.Errorf("%w: a binding with this provider is already active", ErrAccountBindingActiveConflict)
-			}
-			if strings.Contains(msg, "primary_unique") {
-				return nil, fmt.Errorf("%w: another primary binding already exists in this namespace", ErrAccountBindingPrimaryConflict)
-			}
-			return nil, fmt.Errorf("%w: a binding with this provider and label already exists", ErrAccountBindingDuplicateLabel)
+			return nil, classifyAccountBindingUniqueViolation(err)
 		}
 		return nil, err
 	}
@@ -522,14 +583,7 @@ func (s *AccountBindingStore) Update(id, userID string, req models.UpdateAccount
 		existing.CliCommand, existing.IsPrimary, now, id, userID)
 	if err != nil {
 		if database.IsUniqueViolation(err) {
-			msg := err.Error()
-			if strings.Contains(msg, "active_unique") {
-				return nil, fmt.Errorf("%w: a binding with this provider is already active", ErrAccountBindingActiveConflict)
-			}
-			if strings.Contains(msg, "primary_unique") {
-				return nil, fmt.Errorf("%w: another primary binding already exists in this namespace", ErrAccountBindingPrimaryConflict)
-			}
-			return nil, fmt.Errorf("%w: a binding with this provider and label already exists", ErrAccountBindingDuplicateLabel)
+			return nil, classifyAccountBindingUniqueViolation(err)
 		}
 		return nil, err
 	}

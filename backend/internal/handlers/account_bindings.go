@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -64,11 +65,18 @@ func (h *AccountBindingHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// D8 gate: cli:* providers require local mode. Enforced in the handler
-	// (not the store) because LocalMode is a runtime mode flag that does not
-	// belong in the persistence layer. Handlers are also where 403 vs 400
-	// distinction is meaningful.
-	if models.IsCLIAccountBindingProvider(req.ProviderID) && !h.localMode {
+	// D8 gate: allowlisted cli:* providers require local mode. Enforced in
+	// the handler (not the store) because LocalMode is a runtime mode flag
+	// that does not belong in the persistence layer.
+	//
+	// Allowlist precedence: an unrecognized cli:* value (e.g. cli:unknown)
+	// must surface as 400 from the store's allowlist check, NOT as 403 from
+	// this gate. Otherwise the operator gets a misleading "feature unavailable"
+	// when they actually mistyped the provider id. So we only fire the 403
+	// gate for cli:* values that are in the allowlist (cli:claude, cli:codex).
+	if models.IsCLIAccountBindingProvider(req.ProviderID) &&
+		models.AllowedAccountBindingProviderIDs[req.ProviderID] &&
+		!h.localMode {
 		writeError(w, http.StatusForbidden, "cli:* providers are only available in local-mode deployments")
 		return
 	}
@@ -148,6 +156,12 @@ func (h *AccountBindingHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 // writeAccountBindingError maps store sentinel errors to HTTP status codes
 // per design §6.2 rule 8 (uniqueness conflicts surface as 409, not 500/400).
+//
+// Anything that is NOT a recognised sentinel is treated as an internal error:
+// we log the underlying message server-side for ops and return a generic 500
+// to the client. This avoids leaking internal details (DB connection state,
+// secret-storage misconfiguration, etc.) to API consumers and avoids the
+// previous bug where unmapped errors were misclassified as 400 client errors.
 func writeAccountBindingError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrAccountBindingValidation):
@@ -161,6 +175,7 @@ func writeAccountBindingError(w http.ResponseWriter, err error) {
 		errors.Is(err, store.ErrAccountBindingDuplicateLabel):
 		writeError(w, http.StatusConflict, err.Error())
 	default:
-		writeError(w, http.StatusBadRequest, err.Error())
+		log.Printf("account_bindings handler: unmapped store error: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 	}
 }
