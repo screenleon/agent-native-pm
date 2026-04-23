@@ -361,14 +361,78 @@ def _run_with_pty(argv: list[str], timeout_sec: int) -> tuple[str, str]:
                 pass
 
 
-def _invoke_agent(prompt: str, timeout_sec: int) -> tuple[str, str, dict[str, Any]]:
+def _resolve_cli_selection(request: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    """Return (agent, model, cli_command, agent_source, model_source).
+
+    Precedence per design D4 / §6.3:
+      1. stdin `cli_selection.{provider_id, model_id, cli_command}`
+      2. ANPM_ADAPTER_AGENT / ANPM_ADAPTER_MODEL env vars
+      3. built-in default (`claude`, default Claude model)
+
+    `cli_command` only flows from `cli_selection`; there is no env-var
+    equivalent. When both stdin selection AND env vars are present we
+    log a one-line WARN to stderr naming both values and which one won
+    (env vars are deliberately preserved as a power-user escape hatch).
+    """
+    selection = request.get("cli_selection") or {}
+    stdin_provider = str(selection.get("provider_id") or "").strip()
+    stdin_model = str(selection.get("model_id") or "").strip()
+    stdin_command = str(selection.get("cli_command") or "").strip()
+
+    env_agent = (os.environ.get("ANPM_ADAPTER_AGENT") or "").strip().lower()
+    env_model = (os.environ.get("ANPM_ADAPTER_MODEL") or "").strip()
+
+    # Provider/agent resolution. cli_selection.provider_id is "cli:claude"
+    # or "cli:codex"; the legacy env var uses the bare suffix.
+    agent = ""
+    agent_source = "default"
+    if stdin_provider:
+        if stdin_provider.startswith("cli:"):
+            agent = stdin_provider[4:].strip().lower()
+        else:
+            agent = stdin_provider.strip().lower()
+        agent_source = "stdin"
+        if env_agent and env_agent != agent:
+            print(
+                f"[anpm-adapter] WARN agent: stdin selection {agent!r} took precedence over env ANPM_ADAPTER_AGENT={env_agent!r}",
+                file=sys.stderr,
+                flush=True,
+            )
+    elif env_agent:
+        agent = env_agent
+        agent_source = "env"
+    else:
+        agent = "claude"
+        agent_source = "default"
+
+    # Model resolution.
+    model = ""
+    model_source = "default"
+    if stdin_model:
+        model = stdin_model
+        model_source = "stdin"
+        if env_model and env_model != stdin_model:
+            print(
+                f"[anpm-adapter] WARN model: stdin selection {stdin_model!r} took precedence over env ANPM_ADAPTER_MODEL={env_model!r}",
+                file=sys.stderr,
+                flush=True,
+            )
+    elif env_model:
+        model = env_model
+        model_source = "override"
+
+    return agent, model, stdin_command, agent_source, model_source
+
+
+def _invoke_agent(request: dict[str, Any], prompt: str, timeout_sec: int) -> tuple[str, str, dict[str, Any]]:
     """Return (stdout, error, cli_info). error is empty on success."""
-    agent = (os.environ.get("ANPM_ADAPTER_AGENT") or "claude").strip().lower()
-    model = (os.environ.get("ANPM_ADAPTER_MODEL") or "").strip()
-    model_source = "override" if model else "default"
+    agent, model, stdin_command, agent_source, model_source = _resolve_cli_selection(request)
 
     if agent == "claude":
-        binary = shutil.which("claude")
+        # cli_selection.cli_command wins over PATH lookup so the operator
+        # can pin a specific install. Empty stdin_command falls back to
+        # `which`, the historical behavior.
+        binary = stdin_command or shutil.which("claude")
         if not binary:
             return "", "claude CLI not found on PATH (install Claude Code)", {}
         if not model:
@@ -376,7 +440,7 @@ def _invoke_agent(prompt: str, timeout_sec: int) -> tuple[str, str, dict[str, An
             model_source = "default"
         argv = [binary, "-p", prompt, "--model", model]
     elif agent == "codex":
-        binary = shutil.which("codex")
+        binary = stdin_command or shutil.which("codex")
         if not binary:
             return "", "codex CLI not found on PATH (install Codex CLI)", {}
         if not model:
@@ -391,10 +455,15 @@ def _invoke_agent(prompt: str, timeout_sec: int) -> tuple[str, str, dict[str, An
         if model:
             argv.extend(["--model", model])
     else:
-        return "", f"unsupported ANPM_ADAPTER_AGENT={agent!r} (expected 'claude' or 'codex')", {}
+        return "", f"unsupported agent {agent!r} (expected 'claude' or 'codex')", {}
 
-    cli_info: dict[str, Any] = {"agent": agent, "model": model, "model_source": model_source}
-    _debug(f"invoking {agent}: {binary} model={model or '(default)'} source={model_source} (prompt_len={len(prompt)})")
+    cli_info: dict[str, Any] = {
+        "agent": agent,
+        "model": model,
+        "model_source": model_source,
+        "agent_source": agent_source,
+    }
+    _debug(f"invoking {agent}: {binary} model={model or '(default)'} agent_source={agent_source} model_source={model_source} (prompt_len={len(prompt)})")
     if agent == "codex":
         # Codex v0.121+ checks process.stdin.isTTY and refuses to run when stdin
         # is not a terminal.  We allocate a PTY so it believes it has one.
@@ -530,7 +599,7 @@ def main() -> int:
         max_candidates = DEFAULT_MAX_CANDIDATES
 
     prompt = _build_prompt(request)
-    output, error, cli_info = _invoke_agent(prompt, timeout_sec=timeout_sec)
+    output, error, cli_info = _invoke_agent(request, prompt, timeout_sec=timeout_sec)
     if error:
         _write_response([], error, cli_info or None)
         return 0

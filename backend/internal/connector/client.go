@@ -122,6 +122,13 @@ func (c *Client) doJSON(ctx context.Context, method, path, connectorToken string
 	if len(wrapped.Data) == 0 || string(wrapped.Data) == "null" {
 		return nil
 	}
+	// Decoder discipline (Path B S2, design §8 T-S2-8): we deliberately
+	// use json.Unmarshal here, NOT json.Decoder.DisallowUnknownFields().
+	// Unknown future fields in the server's response (e.g. a v3 cli_binding
+	// extension that today's connector doesn't understand) MUST be ignored
+	// silently so a server upgrade does not strand older connector binaries.
+	// If you ever change this to a strict decoder, you'll break backwards
+	// compatibility — add a versioned response shape first.
 	if err := json.Unmarshal(wrapped.Data, responseBody); err != nil {
 		return fmt.Errorf("decode response payload: %w", err)
 	}

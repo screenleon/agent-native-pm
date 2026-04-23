@@ -16,6 +16,17 @@ type fakePlanningRunStore struct {
 	completeErr      error
 }
 
+func (f *fakePlanningRunStore) CreateWithBinding(projectID, requirementID, requestedByUserID string, request models.CreatePlanningRunRequest, selection models.PlanningProviderSelection, snapshot *models.PlanningRunBindingSnapshot) (*models.PlanningRun, error) {
+	run, err := f.Create(projectID, requirementID, requestedByUserID, request, selection)
+	if err != nil || run == nil {
+		return run, err
+	}
+	if snapshot != nil {
+		run.ConnectorCliInfo = &models.PlanningRunCliInfo{BindingSnapshot: snapshot}
+	}
+	return run, nil
+}
+
 func (f *fakePlanningRunStore) Create(projectID, requirementID, requestedByUserID string, request models.CreatePlanningRunRequest, selection models.PlanningProviderSelection) (*models.PlanningRun, error) {
 	executionMode := models.PlanningExecutionModeDeterministic
 	if request.ExecutionMode != "" {

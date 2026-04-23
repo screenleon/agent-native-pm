@@ -123,6 +123,11 @@ func runPair(ctx context.Context, args []string, stdout io.Writer) error {
 		Platform:      strings.TrimSpace(*platform),
 		ClientVersion: strings.TrimSpace(*clientVersion),
 		Capabilities:  buildCapabilities(adapterConfig),
+		// Path B S2: declare wire-protocol awareness so the dispatcher
+		// will hand us CLI-bound runs (account_binding_id != NULL). Old
+		// connectors that don't send the field default to 0 server-side
+		// and silently skip those runs (R3 mitigation, design §6.2).
+		ProtocolVersion: ConnectorProtocolVersion,
 	})
 	if err != nil {
 		return err

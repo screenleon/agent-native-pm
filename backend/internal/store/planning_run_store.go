@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -29,6 +30,26 @@ func NewPlanningRunStore(db *sql.DB, dialect database.Dialect) *PlanningRunStore
 }
 
 func (s *PlanningRunStore) Create(projectID, requirementID, requestedByUserID string, request models.CreatePlanningRunRequest, selection models.PlanningProviderSelection) (*models.PlanningRun, error) {
+	return s.CreateWithBinding(projectID, requirementID, requestedByUserID, request, selection, nil)
+}
+
+// CreateWithBinding inserts a planning run and, when `bindingSnapshot` is
+// non-nil, persists it inside the connector_cli_info JSON column under the
+// `binding_snapshot` key. account_binding_id (migration 022) is also
+// populated when the snapshot is present. Path B S2 — see design §6.5.
+//
+// Two callers expected: the planning orchestrator (always passes nil today;
+// Path B per-run binding selection lives in the planning_runs handler), and
+// the planning_runs handler's Create path which resolves the binding inside
+// its own DB TX and wants the snapshot to land on the same INSERT (R8/R10).
+//
+// Note: this is a single INSERT, not a multi-statement TX. The "single TX"
+// requirement from §6.5 is satisfied because the caller's resolution of the
+// binding happens inside a request-scoped go routine that performs the
+// SELECT immediately before this INSERT; we do not need a multi-statement
+// transaction wrapper for snapshot atomicity (no other writer can touch
+// this row before it exists).
+func (s *PlanningRunStore) CreateWithBinding(projectID, requirementID, requestedByUserID string, request models.CreatePlanningRunRequest, selection models.PlanningProviderSelection, bindingSnapshot *models.PlanningRunBindingSnapshot) (*models.PlanningRun, error) {
 	id := uuid.New().String()
 	now := time.Now().UTC()
 	triggerSource := strings.TrimSpace(request.TriggerSource)
@@ -46,16 +67,42 @@ func (s *PlanningRunStore) Create(projectID, requirementID, requestedByUserID st
 		requestedByUser = trimmedUserID
 	}
 
+	// account_binding_id is nullable on purpose (migration 022 comment).
+	// When the request omits it, store NULL so downstream readers can
+	// distinguish "no binding" from "explicitly empty".
+	var accountBindingArg any
+	if request.AccountBindingID != nil && strings.TrimSpace(*request.AccountBindingID) != "" {
+		accountBindingArg = strings.TrimSpace(*request.AccountBindingID)
+	}
+
+	// connector_cli_info is also nullable — only emit a JSON blob when we
+	// have something to record (a binding snapshot today; the adapter's
+	// CliUsageInfo and error_kind land later via update paths in S5a/S5b).
+	//
+	// Marshal failure here MUST surface as an insert error: silently dropping
+	// the snapshot would leave account_binding_id set with no corresponding
+	// binding_snapshot, breaking claim-next-run's ability to populate
+	// cli_binding for Path-B connectors.
+	var connectorCliInfoArg any
+	if bindingSnapshot != nil {
+		envelope := models.PlanningRunCliInfo{BindingSnapshot: bindingSnapshot}
+		b, marshalErr := json.Marshal(envelope)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("marshal binding snapshot: %w", marshalErr)
+		}
+		connectorCliInfoArg = string(b)
+	}
+
 	_, err := s.db.Exec(`
 		INSERT INTO planning_runs (
 			id, project_id, requirement_id, status, trigger_source,
 			provider_id, model_id, selection_source, binding_source, binding_label,
 			requested_by_user_id, execution_mode, dispatch_status, connector_label,
 			dispatch_error, error_message, started_at, completed_at, created_at, updated_at,
-			adapter_type, model_override
+			adapter_type, model_override, account_binding_id, connector_cli_info
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, '', '', '', NULL, NULL, $14, $14, $15, $16)
-	`, id, projectID, requirementID, models.PlanningRunStatusQueued, triggerSource, selection.ProviderID, selection.ModelID, selection.SelectionSource, selection.BindingSource, selection.BindingLabel, requestedByUser, executionMode, dispatchStatus, now, strings.TrimSpace(request.AdapterType), strings.TrimSpace(request.ModelOverride))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, '', '', '', NULL, NULL, $14, $14, $15, $16, $17, $18)
+	`, id, projectID, requirementID, models.PlanningRunStatusQueued, triggerSource, selection.ProviderID, selection.ModelID, selection.SelectionSource, selection.BindingSource, selection.BindingLabel, requestedByUser, executionMode, dispatchStatus, now, strings.TrimSpace(request.AdapterType), strings.TrimSpace(request.ModelOverride), accountBindingArg, connectorCliInfoArg)
 	if err != nil {
 		if isActivePlanningRunConstraintError(err) {
 			return nil, ErrActivePlanningRunExists
@@ -198,6 +245,22 @@ func (s *PlanningRunStore) CancelIfActive(id, reason string) (*models.PlanningRu
 }
 
 func (s *PlanningRunStore) LeaseNextLocalConnectorRun(userID, connectorID, connectorLabel string, leaseDuration time.Duration) (*models.PlanningRun, error) {
+	// Backwards-compat shim. The old signature is preserved so existing
+	// callers (and the connector test fixtures) continue to work; new
+	// callers should pass the connector's protocol version explicitly via
+	// LeaseNextLocalConnectorRunForProtocol so the R3 backwards-compat
+	// dispatch rule (design §6.2) kicks in.
+	return s.LeaseNextLocalConnectorRunForProtocol(userID, connectorID, connectorLabel, leaseDuration, 0)
+}
+
+// LeaseNextLocalConnectorRunForProtocol leases the oldest queued local-
+// connector run for `userID`, refusing to hand out a run with non-NULL
+// account_binding_id when the requesting connector's protocol_version is
+// below 1 (Path B S2; design §6.2 R3 mitigation). The previous
+// `LeaseNextLocalConnectorRun(...)` shim defaults to protocolVersion=0
+// (i.e. behaves as a pre-Path-B connector that cannot be entrusted with a
+// CLI-bound run); update the connector's pair flow to send 1 to opt in.
+func (s *PlanningRunStore) LeaseNextLocalConnectorRunForProtocol(userID, connectorID, connectorLabel string, leaseDuration time.Duration, connectorProtocolVersion int) (*models.PlanningRun, error) {
 	now := time.Now().UTC()
 	leaseExpiresAt := now.Add(leaseDuration)
 
@@ -220,6 +283,16 @@ func (s *PlanningRunStore) LeaseNextLocalConnectorRun(userID, connectorID, conne
 		return nil, err
 	}
 
+	// Path B S2: pre-Path-B connectors (protocol_version < 1) cannot
+	// receive CLI-bound runs because they don't know how to read the
+	// `cli_binding` block in the claim response. Filter such runs out so
+	// the queue appears empty for the old connector; the run stays queued
+	// for an updated connector to pick up later.
+	bindingFilter := ""
+	if connectorProtocolVersion < 1 {
+		bindingFilter = " AND (account_binding_id IS NULL)"
+	}
+
 	// FOR UPDATE SKIP LOCKED is PostgreSQL row-level locking for distributed workers.
 	// SQLite serialises writes at the engine level, so the clause is both unsupported
 	// and unnecessary there.
@@ -230,7 +303,7 @@ func (s *PlanningRunStore) LeaseNextLocalConnectorRun(userID, connectorID, conne
 			WHERE requested_by_user_id = $1
 			  AND execution_mode = $2
 			  AND dispatch_status IN ($3, $4)
-			  AND status = $5
+			  AND status = $5` + bindingFilter + `
 			ORDER BY created_at ASC, id ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
@@ -243,7 +316,7 @@ func (s *PlanningRunStore) LeaseNextLocalConnectorRun(userID, connectorID, conne
 			WHERE requested_by_user_id = $1
 			  AND execution_mode = $2
 			  AND dispatch_status IN ($3, $4)
-			  AND status = $5
+			  AND status = $5` + bindingFilter + `
 			ORDER BY created_at ASC, id ASC
 			LIMIT 1
 		)`
@@ -264,7 +337,7 @@ func (s *PlanningRunStore) LeaseNextLocalConnectorRun(userID, connectorID, conne
 		          selection_source, binding_source, binding_label, requested_by_user_id,
 		          execution_mode, dispatch_status, connector_id, connector_label,
 		          lease_expires_at, dispatch_error, error_message, started_at, completed_at,
-		          created_at, updated_at, adapter_type, model_override, connector_cli_info
+		          created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info
 	`, strings.TrimSpace(userID), models.PlanningExecutionModeLocalConnector, models.PlanningDispatchStatusQueued, models.PlanningDispatchStatusExpired, models.PlanningRunStatusQueued, models.PlanningRunStatusRunning, models.PlanningDispatchStatusLeased, strings.TrimSpace(connectorID), strings.TrimSpace(connectorLabel), now, leaseExpiresAt)
 	run, err := scanOnePlanningRun(row)
 	if err != nil {
@@ -279,7 +352,7 @@ func (s *PlanningRunStore) GetLeasedLocalConnectorRun(id, connectorID string) (*
 		       selection_source, binding_source, binding_label, requested_by_user_id,
 		       execution_mode, dispatch_status, connector_id, connector_label,
 		       lease_expires_at, dispatch_error, error_message, started_at, completed_at,
-		       created_at, updated_at, adapter_type, model_override, connector_cli_info
+		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info
 		FROM planning_runs
 		WHERE id = $1
 		  AND connector_id = $2
@@ -294,9 +367,17 @@ func (s *PlanningRunStore) GetLeasedLocalConnectorRun(id, connectorID string) (*
 
 func (s *PlanningRunStore) CompleteLocalConnectorRun(id, connectorID, cliInfoJSON string) error {
 	now := time.Now().UTC()
+	// Path B S2: connector_cli_info is now an envelope that may already hold
+	// a binding_snapshot taken at run-create time. The submit-result handler
+	// passes us the adapter's CliUsageInfo; merge it into the envelope so
+	// the snapshot survives and we don't clobber an audited Path B binding.
+	mergedJSON, err := s.mergeCliInfoEnvelope(id, cliInfoJSON)
+	if err != nil {
+		return err
+	}
 	var cliInfoArg any
-	if strings.TrimSpace(cliInfoJSON) != "" {
-		cliInfoArg = cliInfoJSON
+	if strings.TrimSpace(mergedJSON) != "" {
+		cliInfoArg = mergedJSON
 	}
 	result, err := s.db.Exec(`
 		UPDATE planning_runs
@@ -327,6 +408,89 @@ func (s *PlanningRunStore) CompleteLocalConnectorRun(id, connectorID, cliInfoJSO
 		return ErrPlanningRunLeaseUnavailable
 	}
 	return nil
+}
+
+// mergeCliInfoEnvelope reads any existing PlanningRunCliInfo for `id` and
+// folds the new adapter-supplied CliUsageInfo (`adapterPayload` is the JSON
+// the submit-result handler captured) into the `cli_invocation` field. The
+// existing `binding_snapshot` and `dispatch_warning` (if any) are
+// preserved. If `adapterPayload` is empty we still flush whatever envelope
+// already exists so a successful run with no CliUsageInfo doesn't drop the
+// snapshot.
+func (s *PlanningRunStore) mergeCliInfoEnvelope(id, adapterPayload string) (string, error) {
+	var existingRaw sql.NullString
+	if err := s.db.QueryRow(`SELECT connector_cli_info FROM planning_runs WHERE id = $1`, id).Scan(&existingRaw); err != nil {
+		if err == sql.ErrNoRows {
+			return adapterPayload, nil
+		}
+		return "", err
+	}
+	envelope := models.PlanningRunCliInfo{}
+	if existingRaw.Valid && existingRaw.String != "" {
+		// Try the new envelope shape first. Note: a legacy bare CliUsageInfo
+		// payload like `{"agent":...,"model":...}` will Unmarshal into the
+		// envelope WITHOUT an error (Go's JSON decoder silently ignores
+		// unknown fields by default), but the resulting envelope will be
+		// all-zero. Mirror scanPlanningRun's check: if Unmarshal fails OR
+		// the envelope has no recognised fields set, attempt the legacy
+		// CliUsageInfo decode as a second pass so we don't lose the
+		// historical adapter info on update.
+		envelopeOK := false
+		if err := json.Unmarshal([]byte(existingRaw.String), &envelope); err == nil {
+			if envelope.BindingSnapshot != nil || envelope.Invocation != nil ||
+				envelope.ErrorKind != "" || envelope.DispatchWarning != "" {
+				envelopeOK = true
+			}
+		}
+		if !envelopeOK {
+			var legacy models.CliUsageInfo
+			if err := json.Unmarshal([]byte(existingRaw.String), &legacy); err == nil &&
+				(legacy.Agent != "" || legacy.Model != "" || legacy.ModelSource != "") {
+				envelope.Invocation = &legacy
+			}
+		}
+	}
+	if strings.TrimSpace(adapterPayload) != "" {
+		var payload models.CliUsageInfo
+		if err := json.Unmarshal([]byte(adapterPayload), &payload); err == nil {
+			envelope.Invocation = &payload
+		}
+	}
+	if envelope.BindingSnapshot == nil && envelope.Invocation == nil &&
+		envelope.ErrorKind == "" && envelope.DispatchWarning == "" {
+		return "", nil
+	}
+	merged, err := json.Marshal(envelope)
+	if err != nil {
+		return "", err
+	}
+	return string(merged), nil
+}
+
+// MarkDispatchWarning sets a one-shot dispatch_warning string inside the
+// run's connector_cli_info envelope without touching dispatch_status. Used
+// by the claim path when a CLI-bound run is skipped because the requesting
+// connector reports protocol_version < 1 (R3 mitigation, design §6.2). The
+// existing binding_snapshot is preserved.
+func (s *PlanningRunStore) MarkDispatchWarning(id, warning string) error {
+	if strings.TrimSpace(id) == "" {
+		return nil
+	}
+	var existingRaw sql.NullString
+	if err := s.db.QueryRow(`SELECT connector_cli_info FROM planning_runs WHERE id = $1`, id).Scan(&existingRaw); err != nil {
+		return err
+	}
+	envelope := models.PlanningRunCliInfo{}
+	if existingRaw.Valid && existingRaw.String != "" {
+		_ = json.Unmarshal([]byte(existingRaw.String), &envelope)
+	}
+	envelope.DispatchWarning = strings.TrimSpace(warning)
+	merged, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`UPDATE planning_runs SET connector_cli_info = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, string(merged), id)
+	return err
 }
 
 func (s *PlanningRunStore) FailLocalConnectorRun(id, connectorID, errorMessage string) error {
@@ -368,7 +532,7 @@ func (s *PlanningRunStore) GetByID(id string) (*models.PlanningRun, error) {
 		       selection_source, binding_source, binding_label, requested_by_user_id,
 		       execution_mode, dispatch_status, connector_id, connector_label,
 		       lease_expires_at, dispatch_error, error_message, started_at, completed_at,
-		       created_at, updated_at, adapter_type, model_override, connector_cli_info
+		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info
 		FROM planning_runs
 		WHERE id = $1
 	`, id)
@@ -387,7 +551,7 @@ func (s *PlanningRunStore) ListByRequirement(requirementID string, page, perPage
 		       selection_source, binding_source, binding_label, requested_by_user_id,
 		       execution_mode, dispatch_status, connector_id, connector_label,
 		       lease_expires_at, dispatch_error, error_message, started_at, completed_at,
-		       created_at, updated_at, adapter_type, model_override, connector_cli_info
+		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info
 		FROM planning_runs
 		WHERE requirement_id = $1
 		ORDER BY created_at DESC, id DESC
@@ -452,6 +616,7 @@ func scanPlanningRun(scanner planningRunScanner) (*models.PlanningRun, error) {
 	var completedAt sql.NullTime
 	var adapterType sql.NullString
 	var modelOverride sql.NullString
+	var accountBindingID sql.NullString
 	var connectorCliInfo sql.NullString
 	err := scanner.Scan(
 		&run.ID,
@@ -478,6 +643,7 @@ func scanPlanningRun(scanner planningRunScanner) (*models.PlanningRun, error) {
 		&run.UpdatedAt,
 		&adapterType,
 		&modelOverride,
+		&accountBindingID,
 		&connectorCliInfo,
 	)
 	if err != nil {
@@ -504,13 +670,82 @@ func scanPlanningRun(scanner planningRunScanner) (*models.PlanningRun, error) {
 	if modelOverride.Valid {
 		run.ModelOverride = modelOverride.String
 	}
+	if accountBindingID.Valid && accountBindingID.String != "" {
+		bid := accountBindingID.String
+		run.AccountBindingID = &bid
+	}
 	if connectorCliInfo.Valid && connectorCliInfo.String != "" {
-		var info models.CliUsageInfo
-		if err := json.Unmarshal([]byte(connectorCliInfo.String), &info); err == nil {
-			run.ConnectorCliInfo = &info
+		// Path B S2: connector_cli_info now holds a richer envelope
+		// (PlanningRunCliInfo). Older rows may contain a bare CliUsageInfo
+		// payload (`{agent, model, model_source}`); decode that as a
+		// fallback so we don't lose the historical adapter info.
+		var envelope models.PlanningRunCliInfo
+		if err := json.Unmarshal([]byte(connectorCliInfo.String), &envelope); err == nil &&
+			(envelope.BindingSnapshot != nil || envelope.Invocation != nil ||
+				envelope.ErrorKind != "" || envelope.DispatchWarning != "") {
+			run.ConnectorCliInfo = &envelope
+		} else {
+			var legacy models.CliUsageInfo
+			if err := json.Unmarshal([]byte(connectorCliInfo.String), &legacy); err == nil &&
+				(legacy.Agent != "" || legacy.Model != "" || legacy.ModelSource != "") {
+				run.ConnectorCliInfo = &models.PlanningRunCliInfo{Invocation: &legacy}
+			}
 		}
 	}
 	return &run, nil
+}
+
+// ListQueuedCliBoundRunIDsForUser returns the IDs of every queued
+// local-connector planning run with a non-NULL account_binding_id for the
+// given user. Used by the claim path so we can stamp a one-shot
+// `dispatch_warning` on each run when the requesting connector is too old
+// to handle the cli_binding block (R3 mitigation, design §6.2 step
+// "claim-next-run"). The list is ordered newest-first so callers can cap
+// the number of stamps if needed; today every queued match is stamped.
+func (s *PlanningRunStore) ListQueuedCliBoundRunIDsForUser(userID string) ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT id FROM planning_runs
+		WHERE requested_by_user_id = $1
+		  AND execution_mode = $2
+		  AND status = $3
+		  AND account_binding_id IS NOT NULL
+		ORDER BY created_at DESC
+	`, strings.TrimSpace(userID), models.PlanningExecutionModeLocalConnector, models.PlanningRunStatusQueued)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// HasQueuedCliBoundRunsForUser reports whether the user has any queued
+// local-connector planning run with a non-NULL account_binding_id. Used
+// to scope the R3 "connector outdated" warning so we only nag the user
+// when the dispatch dance actually has a CLI-bound run waiting.
+func (s *PlanningRunStore) HasQueuedCliBoundRunsForUser(userID string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM planning_runs
+		WHERE requested_by_user_id = $1
+		  AND execution_mode = $2
+		  AND status = $3
+		  AND account_binding_id IS NOT NULL
+	`, strings.TrimSpace(userID), models.PlanningExecutionModeLocalConnector, models.PlanningRunStatusQueued).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // RunStatsByUser returns planning run counts for a user across time windows.

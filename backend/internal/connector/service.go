@@ -83,12 +83,21 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 		projectLabel = claim.Project.Name
 	}
 	fmt.Fprintf(s.Stdout, "claimed planning run %s for project %q / requirement %q\n", claim.Run.ID, projectLabel, claim.Requirement.Title)
+	var cliSelection *AdapterCliSelection
+	if claim.CliBinding != nil {
+		cliSelection = &AdapterCliSelection{
+			ProviderID: claim.CliBinding.ProviderID,
+			ModelID:    claim.CliBinding.ModelID,
+			CliCommand: claim.CliBinding.CliCommand,
+		}
+	}
 	result := ExecuteExecJSON(ctx, s.State.Adapter, ExecJSONInput{
 		Run:                    claim.Run,
 		Requirement:            claim.Requirement,
 		Project:                claim.Project,
 		RequestedMaxCandidates: defaultRequestedCandidates,
 		PlanningContext:        claim.PlanningContext,
+		CliSelection:           cliSelection,
 	})
 	if _, err := s.Client.SubmitRunResult(ctx, claim.Run.ID, result); err != nil {
 		return true, fmt.Errorf("submit run result for %s: %w", claim.Run.ID, err)

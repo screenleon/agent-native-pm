@@ -28,7 +28,7 @@ func NewLocalConnectorStore(db *sql.DB, dialect database.Dialect) *LocalConnecto
 func (s *LocalConnectorStore) ListByUser(userID string) ([]models.LocalConnector, error) {
 	rows, err := s.db.Query(`
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       last_seen_at, last_error, created_at, updated_at
+		       protocol_version, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -136,10 +136,18 @@ func (s *LocalConnectorStore) ClaimPairingSession(req models.PairLocalConnectorR
 	}
 
 	connectorID := uuid.NewString()
+	// Path B S2: persist the connector's reported protocol_version so the
+	// dispatcher can refuse to hand CLI-bound runs to a connector that
+	// can't read the cli_binding response block (R3 mitigation, design
+	// §6.2). Old clients that omit the field default to 0 server-side.
+	protocolVersion := req.ProtocolVersion
+	if protocolVersion < 0 {
+		protocolVersion = 0
+	}
 	_, err = tx.Exec(`
-		INSERT INTO local_connectors (id, user_id, label, platform, client_version, status, capabilities, token_hash, last_seen_at, last_error, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, '', $9, $9)
-	`, connectorID, session.UserID, label, platform, clientVersion, models.LocalConnectorStatusPending, capabilitiesJSON, hashSecret(connectorToken), now)
+		INSERT INTO local_connectors (id, user_id, label, platform, client_version, status, capabilities, protocol_version, token_hash, last_seen_at, last_error, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, '', $10, $10)
+	`, connectorID, session.UserID, label, platform, clientVersion, models.LocalConnectorStatusPending, capabilitiesJSON, protocolVersion, hashSecret(connectorToken), now)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +241,7 @@ func (s *LocalConnectorStore) Revoke(id, userID string) error {
 func (s *LocalConnectorStore) GetByID(id, userID string) (*models.LocalConnector, error) {
 	row := s.db.QueryRow(`
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       last_seen_at, last_error, created_at, updated_at
+		       protocol_version, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE id = $1 AND user_id = $2
 	`, id, userID)
@@ -243,7 +251,7 @@ func (s *LocalConnectorStore) GetByID(id, userID string) (*models.LocalConnector
 func (s *LocalConnectorStore) GetByToken(token string) (*models.LocalConnector, error) {
 	row := s.db.QueryRow(`
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       last_seen_at, last_error, created_at, updated_at
+		       protocol_version, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE token_hash = $1
 	`, hashSecret(token))
@@ -264,7 +272,7 @@ func (s *LocalConnectorStore) GetFirstUsableByUser(userID string) (*models.Local
 		// SQLite date arithmetic: subtract seconds using datetime modifier.
 		query = `
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       last_seen_at, last_error, created_at, updated_at
+		       protocol_version, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE user_id = $1
 		  AND status = $2
@@ -275,7 +283,7 @@ func (s *LocalConnectorStore) GetFirstUsableByUser(userID string) (*models.Local
 	} else {
 		query = `
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       last_seen_at, last_error, created_at, updated_at
+		       protocol_version, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE user_id = $1
 		  AND status = $2
@@ -315,6 +323,7 @@ func scanLocalConnector(scanner localConnectorScanner) (*models.LocalConnector, 
 		&connector.ClientVersion,
 		&connector.Status,
 		&capabilitiesRaw,
+		&connector.ProtocolVersion,
 		&lastSeenAt,
 		&connector.LastError,
 		&connector.CreatedAt,

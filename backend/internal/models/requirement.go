@@ -104,6 +104,15 @@ type CreatePlanningRunRequest struct {
 	ExecutionMode string `json:"execution_mode,omitempty"`
 	AdapterType   string `json:"adapter_type,omitempty"`
 	ModelOverride string `json:"model_override,omitempty"`
+	// AccountBindingID names a personal account_bindings row to dispatch
+	// this run against. Optional. When execution_mode is local_connector
+	// and no non-empty binding ID is provided, the server may resolve the
+	// user's primary cli:* binding (Path B S2). When the user has no
+	// cli:* bindings the field stays nil on the run and the connector
+	// falls back to its env-var default (backwards compatible with
+	// pre-Path-B connectors). Explicit empty string is treated identically
+	// to absent — there is no "opt out of auto-resolution" sentinel today.
+	AccountBindingID *string `json:"account_binding_id,omitempty"`
 }
 
 type PlanningProviderModel struct {
@@ -165,11 +174,46 @@ type PlanningRun struct {
 	ErrorMessage      string     `json:"error_message"`
 	AdapterType      string        `json:"adapter_type,omitempty"`
 	ModelOverride    string        `json:"model_override,omitempty"`
-	ConnectorCliInfo *CliUsageInfo `json:"connector_cli_info,omitempty"`
-	StartedAt        *time.Time    `json:"started_at"`
-	CompletedAt      *time.Time    `json:"completed_at"`
-	CreatedAt        time.Time     `json:"created_at"`
-	UpdatedAt        time.Time     `json:"updated_at"`
+	// AccountBindingID is the account_bindings.id chosen at run-create time
+	// (Path B S2). Nullable to distinguish "no binding selected" from
+	// "explicitly empty" — exposed as a pointer so JSON omits the key when
+	// absent rather than serialising an empty string.
+	AccountBindingID *string `json:"account_binding_id,omitempty"`
+	// ConnectorCliInfo is the JSON blob backed by the planning_runs.connector_cli_info
+	// column. Holds the binding snapshot taken at run creation (Path B S2),
+	// the adapter's reported CLI invocation info (S5b), an optional error_kind
+	// (S5a), and a dispatch_warning flag the dispatcher may set if a CLI-bound
+	// run was skipped due to a pre-Path-B connector (R3 mitigation, design §6.2).
+	ConnectorCliInfo *PlanningRunCliInfo `json:"connector_cli_info,omitempty"`
+	StartedAt        *time.Time          `json:"started_at"`
+	CompletedAt      *time.Time          `json:"completed_at"`
+	CreatedAt        time.Time           `json:"created_at"`
+	UpdatedAt        time.Time           `json:"updated_at"`
+}
+
+// PlanningRunCliInfo is the wider Path-B-aware envelope serialised into the
+// planning_runs.connector_cli_info column. The previous CliUsageInfo type
+// is preserved as the embedded `Invocation` field; new sub-blocks are
+// optional so old rows decode cleanly.
+type PlanningRunCliInfo struct {
+	BindingSnapshot  *PlanningRunBindingSnapshot `json:"binding_snapshot,omitempty"`
+	Invocation       *CliUsageInfo               `json:"cli_invocation,omitempty"`
+	ErrorKind        string                      `json:"error_kind,omitempty"`
+	DispatchWarning  string                      `json:"dispatch_warning,omitempty"`
+}
+
+// PlanningRunBindingSnapshot freezes the fields of an account_bindings row
+// at planning-run creation time. Lives inside the existing
+// connector_cli_info JSON column (NOT a new column) so a binding deletion
+// after the run is queued does not lose the audit trail (R10 mitigation,
+// design §6.5). Field set per the S2 ticket: ProviderID, ModelID,
+// CliCommand, Label, IsPrimary.
+type PlanningRunBindingSnapshot struct {
+	ProviderID string `json:"provider_id"`
+	ModelID    string `json:"model_id,omitempty"`
+	CliCommand string `json:"cli_command,omitempty"`
+	Label      string `json:"label,omitempty"`
+	IsPrimary  bool   `json:"is_primary"`
 }
 
 type PlanningDocumentEvidence struct {

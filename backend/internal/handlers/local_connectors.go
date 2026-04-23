@@ -146,12 +146,23 @@ func (h *LocalConnectorHandler) ClaimNextRun(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	run, err := h.planningRuns.LeaseNextLocalConnectorRun(connector.UserID, connector.ID, connector.Label, 10*time.Minute)
+	// Path B S2: scope leasing by the connector's reported protocol_version
+	// so a pre-Path-B connector (version 0) silently skips any queued run
+	// that has a non-NULL account_binding_id (R3 mitigation; design §6.2).
+	run, err := h.planningRuns.LeaseNextLocalConnectorRunForProtocol(connector.UserID, connector.ID, connector.Label, 10*time.Minute, connector.ProtocolVersion)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to claim next planning run")
 		return
 	}
 	if run == nil {
+		// When the connector is pre-Path-B AND there is at least one CLI-
+		// bound run queued, stamp the run with a dispatch_warning flag so
+		// an updated connector picks it up immediately on its next claim
+		// (and so the UI can surface "waiting for connector update"). This
+		// is best-effort — ignore failures.
+		if connector.ProtocolVersion < 1 {
+			h.markCliBoundRunsAwaitingUpdate(connector.UserID)
+		}
 		writeSuccess(w, http.StatusOK, models.LocalConnectorClaimNextRunResponse{}, nil)
 		return
 	}
@@ -175,7 +186,44 @@ func (h *LocalConnectorHandler) ClaimNextRun(w http.ResponseWriter, r *http.Requ
 			response.PlanningContext = ctx
 		}
 	}
+	// Path B S2: populate cli_binding from the snapshot stored on the run.
+	// We never re-read the live account_bindings row because the binding
+	// could have been deleted between create and claim; the snapshot
+	// preserves the audit trail (R10 mitigation, design §6.2 / §6.5).
+	if run.AccountBindingID != nil && run.ConnectorCliInfo != nil && run.ConnectorCliInfo.BindingSnapshot != nil {
+		snap := run.ConnectorCliInfo.BindingSnapshot
+		response.CliBinding = &models.PlanningRunCliBindingPayload{
+			ID:         strings.TrimSpace(*run.AccountBindingID),
+			ProviderID: snap.ProviderID,
+			ModelID:    snap.ModelID,
+			CliCommand: snap.CliCommand,
+			Label:      snap.Label,
+		}
+	}
 	writeSuccess(w, http.StatusOK, response, nil)
+}
+
+// markCliBoundRunsAwaitingUpdate stamps a one-shot "awaiting connector
+// update" hint on every CLI-bound run currently queued for the user. The
+// stamp lives inside connector_cli_info.dispatch_warning and is
+// best-effort: errors are swallowed because the user has already received
+// the notification at run-creation time and the stamp itself is just an
+// audit / debugging breadcrumb (a future S2-aware connector picks the run
+// up on its next claim regardless).
+func (h *LocalConnectorHandler) markCliBoundRunsAwaitingUpdate(userID string) {
+	if h.planningRuns == nil {
+		return
+	}
+	ids, err := h.planningRuns.ListQueuedCliBoundRunIDsForUser(userID)
+	if err != nil || len(ids) == 0 {
+		return
+	}
+	const stamp = "awaiting connector update — pre-Path-B connector skipped this run"
+	for _, id := range ids {
+		// Best-effort. A failed stamp doesn't block other runs and doesn't
+		// re-fire the user notification (already sent at run creation).
+		_ = h.planningRuns.MarkDispatchWarning(id, stamp)
+	}
 }
 
 func (h *LocalConnectorHandler) SubmitPlanningRunResult(w http.ResponseWriter, r *http.Request) {

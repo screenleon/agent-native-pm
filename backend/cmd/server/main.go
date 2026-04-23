@@ -92,7 +92,9 @@ func main() {
 	planner := planning.NewSettingsBackedPlanner(taskStore, documentStore, driftSignalStore, syncRunStore, agentRunStore, planningSettingsStore, cfg.PlanningMaxResponseBytes)
 	planningRunHandler := handlers.NewPlanningRunHandler(planningRunStore, backlogCandidateStore, projectStore, requirementStore, agentRunStore, planner).WithPlannerFactory(func(userID string) planning.DraftPlanner {
 		return planning.NewSettingsBackedPlannerWithBindings(taskStore, documentStore, driftSignalStore, syncRunStore, agentRunStore, planningSettingsStore, accountBindingStore, userID, cfg.PlanningMaxResponseBytes)
-	}).WithLocalConnectorStore(localConnectorStore)
+	}).WithLocalConnectorStore(localConnectorStore).
+		WithAccountBindings(accountBindingStore).
+		WithNotifications(notificationStore)
 	planningSettingsHandler := handlers.NewPlanningSettingsHandler(planningSettingsStore)
 	syncHandler := handlers.NewSyncHandler(syncRunStore, syncService, projectStore)
 	agentRunHandler := handlers.NewAgentRunHandler(agentRunStore, projectStore)
