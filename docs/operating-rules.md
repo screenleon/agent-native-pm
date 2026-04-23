@@ -69,6 +69,16 @@ After every code change:
 3. Fix failures before marking complete
 4. Never skip or delete failing tests to make the suite pass
 
+## Pre-PR critic review
+
+Before calling `gh pr create` for any implementation PR, spawn a `critic` subagent against the branch diff. The critic must specifically check:
+
+1. **Incomplete call site coverage** — grep for every usage of any changed pattern, field, or method. All call sites must be updated, not just the files explicitly listed in the implementation brief.
+2. **Pattern consistency** — any new method or helper must fully replicate the established pattern in the codebase (e.g., two-pass envelope decode, error handling style, nil guard order). "Similar to X" in a brief is not sufficient; the critic must verify the implementation matches X line-for-line on the critical invariants.
+3. **Missing edge cases** — scenarios the brief did not cover but the production code path must handle.
+
+Fix all critic findings before creating the PR. Exception: documentation-only and design-only PRs may skip this step.
+
 ## Error recovery
 
 1. Read the full error message

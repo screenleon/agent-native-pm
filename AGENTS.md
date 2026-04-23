@@ -19,7 +19,9 @@ Read `docs/mvp-scope.md` when evaluating whether a feature belongs in the curren
 
 1. **Rules** — `docs/operating-rules.md` (safety, scope, validation, constraints)
 2. **Skills** — executed natively by agent tool capabilities (this project does not use a separate `skills/` directory)
-3. **Loop** — `Discover → Triage → Plan → Critique → Approve → Implement → Test → Fix → Repeat → Record → Summarize`
+3. **Loop** — `Discover → Triage → Plan → Critique → Approve → Implement → Test → Fix → Pre-PR Critic → Record → Summarize`
+
+   **Pre-PR Critic** is a mandatory `critic` subagent run after implementation passes build/test and before `gh pr create`. It checks for incomplete call site coverage, pattern consistency violations, and missing edge cases. See `docs/operating-rules.md` § "Pre-PR critic review" for the full checklist.
 
 Roles in this repository are conceptual ownership boundaries. They are implemented through `.claude/agents/*.md`, repo docs, and tool-specific instruction surfaces such as `.github/copilot-instructions.md`.
 
