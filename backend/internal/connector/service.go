@@ -117,8 +117,12 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 }
 
 func buildCapabilities(config ExecJSONAdapterConfig) map[string]interface{} {
+	adapterLabel := "builtin"
+	if strings.TrimSpace(config.Command) != "" {
+		adapterLabel = "exec-json"
+	}
 	capabilities := map[string]interface{}{
-		"adapter":           "exec-json",
+		"adapter":           adapterLabel,
 		"connector_version": Version,
 	}
 	if strings.TrimSpace(config.Command) != "" {

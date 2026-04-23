@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -84,9 +85,13 @@ func ExecuteBuiltin(ctx context.Context, input ExecJSONInput) models.LocalConnec
 	}
 	candidates := normalizeBuiltinCandidates(parsed, maxCandidates)
 	if len(candidates) == 0 {
+		label := "backlog candidates"
+		if adapterType == adapterTypeWhatsnext {
+			label = "whatsnext directions"
+		}
 		return models.LocalConnectorSubmitRunResultRequest{
 			Success:      false,
-			ErrorMessage: "agent returned no valid backlog candidates",
+			ErrorMessage: fmt.Sprintf("agent returned no valid %s", label),
 			CliInfo:      &models.CliUsageInfo{Agent: agent, Model: model, ModelSource: modelSource},
 		}
 	}
@@ -133,9 +138,25 @@ func resolveBuiltinCLI(sel *AdapterCliSelection, run *models.PlanningRun) (agent
 		}
 	}
 
-	// If agent is still empty (nil selection or empty provider_id), fall back to PATH.
+	// If agent is still empty, infer from binary filename first (handles the
+	// case where sel.CliCommand is set but sel.ProviderID is empty), then fall
+	// back to PATH lookup. This prevents PATH-found claude from overwriting a
+	// caller-supplied binary path.
 	if agent == "" {
-		if p, err := exec.LookPath("claude"); err == nil {
+		if binary != "" {
+			// Infer agent from the base name of the provided binary.
+			base := strings.ToLower(filepath.Base(binary))
+			switch {
+			case strings.HasPrefix(base, "claude"):
+				agent = "claude"
+			case strings.HasPrefix(base, "codex"):
+				agent = "codex"
+			default:
+				// Unknown binary — accept it without a recognised agent name;
+				// Claude invocation path will be used as the safest fallback.
+				agent = "claude"
+			}
+		} else if p, err := exec.LookPath("claude"); err == nil {
 			agent = "claude"
 			binary = p
 		} else if p, err := exec.LookPath("codex"); err == nil {

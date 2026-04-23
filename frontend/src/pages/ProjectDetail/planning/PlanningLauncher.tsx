@@ -248,7 +248,7 @@ export function PlanningLauncher({
         <button
           className="btn btn-primary"
           onClick={onStartRun}
-          disabled={creatingRun || !runReady || providerOptionsLoading}
+          disabled={creatingRun || !runReady || providerOptionsLoading || (usesLocalConnector && cliBindingsLoading)}
         >
           {creatingRun ? 'Starting…' : 'Start Planning Run'}
         </button>
