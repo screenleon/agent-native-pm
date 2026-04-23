@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -50,8 +52,16 @@ func ExecuteBuiltin(ctx context.Context, input ExecJSONInput) models.LocalConnec
 	// Build prompt.
 	prompt := buildBuiltinPrompt(adapterType, input)
 
+	// Respect ANPM_ADAPTER_TIMEOUT env var (same as Python reference adapters).
+	timeoutSec := builtinDefaultTimeoutSec
+	if v := strings.TrimSpace(os.Getenv("ANPM_ADAPTER_TIMEOUT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			timeoutSec = n
+		}
+	}
+
 	// Run CLI.
-	output, runErr := invokeBuiltinCLI(ctx, agent, binary, model, prompt, builtinDefaultTimeoutSec)
+	output, runErr := invokeBuiltinCLI(ctx, agent, binary, model, prompt, timeoutSec)
 	if runErr != "" {
 		return models.LocalConnectorSubmitRunResultRequest{
 			Success:      false,
@@ -104,8 +114,12 @@ func ExecuteBuiltin(ctx context.Context, input ExecJSONInput) models.LocalConnec
 }
 
 // resolveBuiltinCLI returns (agent, binary, model, modelSource, errorMessage).
-// Mirrors D4 precedence: cli_selection > PATH lookup claude, then codex.
-// modelSource values: "override" | "stdin" | "default" | "subscription"
+// Mirrors D4 precedence (same as Python reference adapter _resolve_cli_selection):
+//
+//	Agent:  cli_selection.provider_id > ANPM_ADAPTER_AGENT > binary-filename inference > PATH lookup
+//	Model:  run.ModelOverride > cli_selection.model_id > ANPM_ADAPTER_MODEL > built-in default
+//
+// modelSource values: "override" | "stdin" | "env" | "default" | "subscription"
 func resolveBuiltinCLI(sel *AdapterCliSelection, run *models.PlanningRun) (agent, binary, model, modelSource, errMsg string) {
 	// Per-run model override takes highest precedence.
 	modelOverride := ""
@@ -113,8 +127,12 @@ func resolveBuiltinCLI(sel *AdapterCliSelection, run *models.PlanningRun) (agent
 		modelOverride = strings.TrimSpace(run.ModelOverride)
 	}
 
+	// Read env-var fallbacks (same names as Python adapters).
+	envAgent := strings.TrimSpace(strings.ToLower(os.Getenv("ANPM_ADAPTER_AGENT")))
+	envModel := strings.TrimSpace(os.Getenv("ANPM_ADAPTER_MODEL"))
+
 	if sel != nil {
-		// Derive agent from provider_id ("cli:claude" -> "claude", "cli:codex" -> "codex").
+		// Derive agent from provider_id ("cli:claude" → "claude", "cli:codex" → "codex").
 		providerID := strings.TrimSpace(sel.ProviderID)
 		if strings.HasPrefix(providerID, "cli:") {
 			agent = strings.ToLower(strings.TrimSpace(providerID[4:]))
@@ -122,29 +140,36 @@ func resolveBuiltinCLI(sel *AdapterCliSelection, run *models.PlanningRun) (agent
 			agent = strings.ToLower(strings.TrimSpace(providerID))
 		}
 
-		// Resolve binary: cli_command from selection wins; fall back to PATH.
+		// Resolve binary: cli_command from selection wins.
 		binary = strings.TrimSpace(sel.CliCommand)
 		if binary == "" && agent != "" {
 			binary, _ = exec.LookPath(agent)
 		}
 
-		// Resolve model: per-run override > selection model.
+		// Resolve model: run override > selection > env > (default applied below).
 		if modelOverride != "" {
 			model = modelOverride
 			modelSource = "override"
 		} else if strings.TrimSpace(sel.ModelID) != "" {
 			model = strings.TrimSpace(sel.ModelID)
 			modelSource = "stdin"
+		} else if envModel != "" {
+			model = envModel
+			modelSource = "env"
 		}
+	} else if modelOverride != "" {
+		model = modelOverride
+		modelSource = "override"
+	} else if envModel != "" {
+		model = envModel
+		modelSource = "env"
 	}
 
-	// If agent is still empty, infer from binary filename first (handles the
-	// case where sel.CliCommand is set but sel.ProviderID is empty), then fall
-	// back to PATH lookup. This prevents PATH-found claude from overwriting a
-	// caller-supplied binary path.
+	// Resolve agent when still empty: infer from binary filename first (handles
+	// the case where sel.CliCommand is set but sel.ProviderID is empty), then
+	// env var, then PATH lookup.
 	if agent == "" {
 		if binary != "" {
-			// Infer agent from the base name of the provided binary.
 			base := strings.ToLower(filepath.Base(binary))
 			switch {
 			case strings.HasPrefix(base, "claude"):
@@ -152,10 +177,10 @@ func resolveBuiltinCLI(sel *AdapterCliSelection, run *models.PlanningRun) (agent
 			case strings.HasPrefix(base, "codex"):
 				agent = "codex"
 			default:
-				// Unknown binary — accept it without a recognised agent name;
-				// Claude invocation path will be used as the safest fallback.
-				agent = "claude"
+				agent = "claude" // safest fallback for unknown binaries
 			}
+		} else if envAgent != "" {
+			agent = envAgent
 		} else if p, err := exec.LookPath("claude"); err == nil {
 			agent = "claude"
 			binary = p
@@ -168,7 +193,7 @@ func resolveBuiltinCLI(sel *AdapterCliSelection, run *models.PlanningRun) (agent
 		}
 	}
 
-	// Validate binary is resolvable.
+	// Ensure binary is resolved when we got agent from env var or filename.
 	if binary == "" {
 		p, err := exec.LookPath(agent)
 		if err != nil {
@@ -180,10 +205,7 @@ func resolveBuiltinCLI(sel *AdapterCliSelection, run *models.PlanningRun) (agent
 
 	// Apply model defaults when still unset.
 	if model == "" {
-		if modelOverride != "" {
-			model = modelOverride
-			modelSource = "override"
-		} else if agent == "claude" {
+		if agent == "claude" {
 			model = builtinDefaultClaudeModel
 			modelSource = "default"
 		} else {

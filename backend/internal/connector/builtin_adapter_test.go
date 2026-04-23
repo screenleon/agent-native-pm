@@ -287,9 +287,10 @@ func TestNormalizeBuiltinCandidates_RespectsMaxCandidates(t *testing.T) {
 // ExecuteBuiltin integration tests with stub CLI
 // ---------------------------------------------------------------------------
 
-// makeStubCLI creates a temporary executable Go-based stub binary that writes
-// the given output to stdout and exits with the given code. Using a Go binary
-// avoids POSIX shell quoting issues with special characters in the JSON output.
+// makeStubCLI creates a temporary executable shell-script stub that writes
+// the given output to stdout and exits with the given code. To avoid POSIX
+// shell quoting issues with special characters in the JSON output, it writes
+// the payload to a temp file and has the script cat that file.
 func makeStubCLI(t *testing.T, output string, exitCode int) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
