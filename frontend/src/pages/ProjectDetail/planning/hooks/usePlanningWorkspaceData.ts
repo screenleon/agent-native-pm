@@ -7,6 +7,7 @@ import type {
   BacklogCandidate,
   PlanningProviderOptions,
   PlanningExecutionMode,
+  AccountBinding,
 } from '../../../../types'
 import {
   createRequirement,
@@ -18,6 +19,7 @@ import {
   listPlanningRunBacklogCandidates,
   updateBacklogCandidate,
   applyBacklogCandidate,
+  listAccountBindings,
 } from '../../../../api/client'
 import type { RequirementIntakeForm } from '../RequirementIntake'
 import type { CandidateReviewForm } from '../CandidateReviewPanel'
@@ -65,8 +67,9 @@ export function usePlanningWorkspaceData({
   const [planningProviderOptionsError, setPlanningProviderOptionsError] = useState<string | null>(null)
   const [planningModelOverride, setPlanningModelOverride] = useState('')
   const [planningExecutionMode, setPlanningExecutionMode] = useState<PlanningExecutionMode>('server_provider')
-  const [localAdapterType, setLocalAdapterType] = useState('backlog')
-  const [localModelOverride, setLocalModelOverride] = useState('')
+  const [cliBindings, setCliBindings] = useState<AccountBinding[]>([])
+  const [cliBindingsLoading, setCliBindingsLoading] = useState(false)
+  const [selectedCliBindingId, setSelectedCliBindingId] = useState<string | null>(null)
   const [planningCandidatesLoading, setPlanningCandidatesLoading] = useState(false)
   const [planningCandidatesError, setPlanningCandidatesError] = useState<string | null>(null)
   const [candidateReviewError, setCandidateReviewError] = useState<string | null>(null)
@@ -121,6 +124,21 @@ export function usePlanningWorkspaceData({
   useEffect(() => {
     loadProviderOptions()
   }, [loadProviderOptions])
+
+  async function loadCliBindings() {
+    setCliBindingsLoading(true)
+    try {
+      const res = await listAccountBindings()
+      const cli = res.data.filter(b => b.provider_id.startsWith('cli:') && b.is_active)
+      setCliBindings(cli)
+      const primary = cli.find(b => b.is_primary) ?? cli[0] ?? null
+      setSelectedCliBindingId(prev => prev ?? primary?.id ?? null)
+    } catch {
+      // non-critical; leave empty
+    } finally {
+      setCliBindingsLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (requirements.length === 0) {
@@ -343,6 +361,15 @@ export function usePlanningWorkspaceData({
   }, [defaultPlanningExecutionMode])
 
   useEffect(() => {
+    if (planningSelectedExecutionMode === 'local_connector') {
+      void loadCliBindings()
+    }
+  // loadCliBindings is defined in the same render scope but is not memoized.
+  // The dep array intentionally contains only the mode to avoid re-fetching on
+  // every render; the function reads current state via closure at call time.
+  }, [planningSelectedExecutionMode])
+
+  useEffect(() => {
     if (!selectedPlanningCandidate) {
       syncCandidateForm(null)
       setCandidateReviewError(null)
@@ -467,8 +494,8 @@ export function usePlanningWorkspaceData({
         trigger_source: 'manual',
         ...(requestedModelID ? { model_id: requestedModelID } : {}),
         execution_mode: planningSelectedExecutionMode,
-        ...(planningSelectedExecutionMode === 'local_connector' ? { adapter_type: localAdapterType } : {}),
-        ...(planningSelectedExecutionMode === 'local_connector' && localModelOverride.trim() ? { model_override: localModelOverride.trim() } : {}),
+        ...(planningSelectedExecutionMode === 'local_connector' ? { adapter_type: 'backlog' } : {}),
+        ...(planningSelectedExecutionMode === 'local_connector' && selectedCliBindingId ? { account_binding_id: selectedCliBindingId } : {}),
       })
       setPlanningRuns(prev => [response.data, ...prev.filter(run => run.id !== response.data.id)])
       setSelectedPlanningRunId(response.data.id)
@@ -524,7 +551,7 @@ export function usePlanningWorkspaceData({
         trigger_source: 'manual',
         execution_mode: planningSelectedExecutionMode,
         adapter_type: 'whatsnext',
-        ...(localModelOverride.trim() ? { model_override: localModelOverride.trim() } : {}),
+        ...(planningSelectedExecutionMode === 'local_connector' && selectedCliBindingId ? { account_binding_id: selectedCliBindingId } : {}),
       })
       setPlanningRuns(prev => [runRes.data, ...prev.filter(r => r.id !== runRes.data.id)])
       setSelectedPlanningRunId(runRes.data.id)
@@ -655,10 +682,10 @@ export function usePlanningWorkspaceData({
     planningProviderOptionsError,
     planningSelectedExecutionMode,
     onPlanningExecutionModeChange: setPlanningExecutionMode,
-    localAdapterType,
-    onLocalAdapterTypeChange: setLocalAdapterType,
-    localModelOverride,
-    onLocalModelOverrideChange: setLocalModelOverride,
+    cliBindings,
+    cliBindingsLoading,
+    selectedCliBindingId,
+    onCliBindingChange: setSelectedCliBindingId,
     planningModelOverride,
     onPlanningModelOverrideChange: setPlanningModelOverride,
     planningRunReady,

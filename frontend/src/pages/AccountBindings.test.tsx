@@ -202,25 +202,42 @@ describe('<AccountBindings />', () => {
     await waitFor(() => expect(checkbox.checked).toBe(false))
   })
 
-  // T-S3-10: canceling the auto-expanded form shows "+ Add CLI Binding" button instead
-  it('T-S3-10: canceling auto-expanded form shows Add button without re-expanding on next non-CLI action', async () => {
-    await renderAndWait([], true)
-    expect(screen.getByText('New CLI Binding')).toBeInTheDocument()
+  // T-S3-10: after canceling the "+ Add another" form, a subsequent load() triggered by a
+  // real UI action (e.g. "Switch to this binding") must NOT re-open the form.
+  it('T-S3-10: form stays closed after Cancel when load() is re-triggered by a UI action', async () => {
+    const nonPrimaryBinding = makeCliBinding({ id: 'cb2', is_primary: false, label: 'Old Claude' })
+    mockUpdateAccountBinding.mockResolvedValue({ data: { ...nonPrimaryBinding, is_primary: true } })
+    mockGetMeta.mockResolvedValue(localMeta())
+    mockListAccountBindings
+      .mockResolvedValueOnce({ data: [nonPrimaryBinding] })
+      .mockResolvedValue({ data: [{ ...nonPrimaryBinding, is_primary: true }] })
 
-    await userEvent.click(screen.getByRole('button', { name: /Cancel/i }))
-
+    render(<AccountBindings />)
     await waitFor(() => {
-      expect(screen.queryByText('New CLI Binding')).not.toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /\+ Add CLI Binding/i })).toBeInTheDocument()
+      expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
     })
 
-    // Simulating a non-CLI load() trigger (e.g. toggling an API binding) should NOT re-expand
-    mockListAccountBindings.mockResolvedValue({ data: [] })
-    mockGetMeta.mockResolvedValue(localMeta())
-    // Directly re-trigger load by simulating what handleToggleActive would do:
-    // We can't call load() directly from a test, but we can verify the dismissed state
-    // is preserved because the Cancel button calls handleDismissCliForm which sets the ref.
-    // The form should remain closed.
+    // One binding exists so form is collapsed; open it manually.
+    await userEvent.click(screen.getByRole('button', { name: /\+ Add another CLI binding/i }))
+    await waitFor(() => expect(screen.getByText('New CLI Binding')).toBeInTheDocument())
+
+    // Cancel — sets userDismissedCliForm.current = true.
+    await userEvent.click(screen.getByRole('button', { name: /Cancel/i }))
+    await waitFor(() => {
+      expect(screen.queryByText('New CLI Binding')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /\+ Add another CLI binding/i })).toBeInTheDocument()
+    })
+
+    // Trigger a real load() call via "Switch to this binding".
+    await userEvent.click(screen.getByRole('button', { name: /Switch to this binding/i }))
+
+    await waitFor(() => {
+      expect(mockUpdateAccountBinding).toHaveBeenCalledWith('cb2', { is_primary: true })
+      expect(mockListAccountBindings).toHaveBeenCalledTimes(2)
+    })
+
+    // Form must remain closed even after the reload triggered by the UI action.
     expect(screen.queryByText('New CLI Binding')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /\+ Add another CLI binding/i })).toBeInTheDocument()
   })
 })

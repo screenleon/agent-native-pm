@@ -492,11 +492,3 @@ export async function getConnectorRunStats() {
   return request<ConnectorRunStats>('/me/local-connectors/run-stats');
 }
 
-export interface AdapterModels {
-  claude: string[];
-  codex: string[];
-}
-
-export async function getAdapterModels() {
-  return request<AdapterModels>('/adapter-models');
-}

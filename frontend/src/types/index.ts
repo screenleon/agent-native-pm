@@ -130,6 +130,7 @@ export interface CreatePlanningRunPayload {
   execution_mode?: PlanningExecutionMode;
   adapter_type?: string;
   model_override?: string;
+  account_binding_id?: string;
 }
 
 export type PlanningExecutionMode = 'deterministic' | 'server_provider' | 'local_connector';
