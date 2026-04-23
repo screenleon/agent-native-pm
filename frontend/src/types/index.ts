@@ -173,6 +173,8 @@ export interface AccountBinding {
   configured_models: string[];
   api_key_configured: boolean;
   is_active: boolean;
+  cli_command: string;
+  is_primary: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -184,6 +186,8 @@ export interface CreateAccountBindingPayload {
   model_id: string;
   configured_models?: string[];
   api_key?: string;
+  cli_command?: string;
+  is_primary?: boolean;
 }
 
 export interface UpdateAccountBindingPayload {
@@ -194,6 +198,7 @@ export interface UpdateAccountBindingPayload {
   api_key?: string;
   clear_api_key?: boolean;
   is_active?: boolean;
+  is_primary?: boolean;
 }
 
 export interface LocalConnector {
