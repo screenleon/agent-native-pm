@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   listAccountBindings,
   createAccountBinding,
@@ -40,6 +40,10 @@ export default function AccountBindings() {
 
   // CLI binding form state
   const [showCliForm, setShowCliForm] = useState(false);
+  // Tracks explicit user dismissal so load() doesn't re-expand the auto-opened
+  // form after unrelated actions (e.g. toggling an API-key binding) trigger a reload.
+  // Reset to false after CLI deletion so the onboarding flow can re-open cleanly.
+  const userDismissedCliForm = useRef(false);
   const [cliSaving, setCliSaving] = useState(false);
   const [selectedCliPresetId, setSelectedCliPresetId] = useState<CliBindingPresetID>('claude-code');
   const [cliLabel, setCliLabel] = useState('');
@@ -60,9 +64,19 @@ export default function AccountBindings() {
         listAccountBindings(),
         getMeta(),
       ]);
-      setBindings(bindingsResp.data);
-      setIsLocalMode(metaResp.data.local_mode);
+      const allBindings = bindingsResp.data;
+      const isLocal = metaResp.data.local_mode;
+      setBindings(allBindings);
+      setIsLocalMode(isLocal);
       setError('');
+      // T-S3-3: auto-expand form when no CLI bindings exist in local mode.
+      // After a deletion that leaves 0 bindings the form re-expands too, which
+      // is the intended "first binding of a namespace" onboarding flow.
+      const hasAnyCli = allBindings.some((b: AccountBinding) => b.provider_id.startsWith('cli:'));
+      if (isLocal && !hasAnyCli && !userDismissedCliForm.current) {
+        setShowCliForm(true);
+        setCliIsPrimary(true);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load bindings');
     } finally {
@@ -206,10 +220,17 @@ export default function AccountBindings() {
     try {
       await deleteAccountBinding(id);
       setSuccess('CLI binding deleted.');
+      // Reset so load() can re-expand the form if this was the last CLI binding.
+      userDismissedCliForm.current = false;
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete CLI binding');
     }
+  }
+
+  function handleDismissCliForm() {
+    userDismissedCliForm.current = true;
+    setShowCliForm(false);
   }
 
   function handleSelectCliPreset(nextPresetId: CliBindingPresetID) {
@@ -231,6 +252,10 @@ export default function AccountBindings() {
       }
       return current;
     });
+    // Re-evaluate is_primary default: checked when no existing binding for the
+    // newly selected provider namespace (design §8 S3 "first binding of a namespace").
+    const hasForNewProvider = cliBindings.some(b => b.provider_id === nextPreset.providerId);
+    setCliIsPrimary(!hasForNewProvider);
   }
 
   function resetCliForm(presetId: CliBindingPresetID = selectedCliPresetId) {
@@ -241,9 +266,10 @@ export default function AccountBindings() {
     setCliIsPrimary(true);
   }
 
-  function handleOpenCliForm(currentCliBindings: AccountBinding[]) {
+  function handleOpenCliForm() {
     resetCliForm(selectedCliPresetId);
-    setCliIsPrimary(currentCliBindings.length === 0);
+    const preset = getCliBindingPreset(selectedCliPresetId);
+    setCliIsPrimary(!cliBindings.some(b => b.provider_id === preset.providerId));
     setShowCliForm(true);
   }
 
@@ -426,7 +452,7 @@ export default function AccountBindings() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <h2 style={{ margin: 0 }}>CLI Bindings</h2>
               {isLocalMode && !showCliForm && (
-                <button className="btn btn-primary btn-sm" onClick={() => handleOpenCliForm(cliBindings)}>
+                <button className="btn btn-primary btn-sm" onClick={() => handleOpenCliForm()}>
                   + Add CLI Binding
                 </button>
               )}
@@ -467,7 +493,7 @@ export default function AccountBindings() {
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                           {!binding.is_primary && (
                             <button className="btn btn-ghost btn-sm" onClick={() => handleSetPrimary(binding.id)}>
-                              Set as Primary
+                              Switch to this binding
                             </button>
                           )}
                           <button className="btn btn-ghost btn-sm" onClick={() => handleDeleteCli(binding.id)}>
@@ -550,7 +576,7 @@ export default function AccountBindings() {
                             onChange={e => setCliIsPrimary(e.target.checked)}
                             disabled={cliSaving}
                           />
-                          Set as primary CLI binding
+                          Make this the primary binding for this CLI
                         </label>
                       </div>
                       <div style={{ display: 'flex', gap: '0.75rem' }}>
@@ -560,7 +586,7 @@ export default function AccountBindings() {
                         <button type="button" className="btn btn-ghost" onClick={() => resetCliForm()} disabled={cliSaving}>
                           Reset
                         </button>
-                        <button type="button" className="btn btn-ghost" onClick={() => setShowCliForm(false)} disabled={cliSaving}>
+                        <button type="button" className="btn btn-ghost" onClick={handleDismissCliForm} disabled={cliSaving}>
                           Cancel
                         </button>
                       </div>
@@ -569,7 +595,7 @@ export default function AccountBindings() {
                 )}
 
                 {cliBindings.length > 0 && !showCliForm && (
-                  <button className="btn btn-ghost btn-sm" onClick={() => handleOpenCliForm(cliBindings)}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => handleOpenCliForm()}>
                     + Add another CLI binding
                   </button>
                 )}
