@@ -507,7 +507,20 @@ func (s *PlanningRunStore) MarkErrorKind(id, errorKind, remediationHint string) 
 	}
 	envelope := models.PlanningRunCliInfo{}
 	if existingRaw.Valid && existingRaw.String != "" {
-		_ = json.Unmarshal([]byte(existingRaw.String), &envelope)
+		envelopeOK := false
+		if err := json.Unmarshal([]byte(existingRaw.String), &envelope); err == nil {
+			if envelope.BindingSnapshot != nil || envelope.Invocation != nil ||
+				envelope.ErrorKind != "" || envelope.DispatchWarning != "" {
+				envelopeOK = true
+			}
+		}
+		if !envelopeOK {
+			var legacy models.CliUsageInfo
+			if err := json.Unmarshal([]byte(existingRaw.String), &legacy); err == nil &&
+				(legacy.Agent != "" || legacy.Model != "" || legacy.ModelSource != "") {
+				envelope = models.PlanningRunCliInfo{Invocation: &legacy}
+			}
+		}
 	}
 	envelope.ErrorKind = strings.TrimSpace(errorKind)
 	envelope.RemediationHint = strings.TrimSpace(remediationHint)

@@ -81,11 +81,16 @@ export function PlanningRunList({
                 <span>{planningExecutionModeLabel(run.execution_mode)}</span>
                 <span>{planningDispatchStatusLabel(run.dispatch_status)}</span>
                 {run.connector_label && <span>Connector {run.connector_label}</span>}
-                {run.connector_cli_info && (
-                  <span title={`model_source: ${run.connector_cli_info.model_source ?? '—'}`}>
-                    CLI: {run.connector_cli_info.agent}{run.connector_cli_info.model ? ` / ${run.connector_cli_info.model}` : ''}
-                  </span>
-                )}
+                {run.connector_cli_info && (() => {
+                  const info = run.connector_cli_info
+                  const inv = info.cli_invocation ?? (info.agent ? { agent: info.agent, model: info.model, model_source: info.model_source } : null)
+                  if (!inv) return null
+                  return (
+                    <span title={`model_source: ${inv.model_source ?? '—'}`}>
+                      CLI: {inv.agent}{inv.model ? ` / ${inv.model}` : ''}
+                    </span>
+                  )
+                })()}
                 <span>{providerLabel(run.provider_id)} / {modelLabel(run.provider_id, run.model_id)}</span>
                 <span>{planningBindingSourceLabel(run.binding_source)}{run.binding_label ? ` (${run.binding_label})` : ''}</span>
                 <span>{planningSelectionSourceLabel(run.selection_source)}</span>
