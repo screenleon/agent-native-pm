@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import type { Document, DriftSignal } from '../types'
+import type { Document, DriftSignal } from '../../types'
 import { DriftTab } from './DriftTab'
 
-vi.mock('../api/client', () => ({
+vi.mock('../../api/client', () => ({
   getDocumentContent: vi.fn().mockResolvedValue({ data: null }),
 }))
 

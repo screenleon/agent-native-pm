@@ -1,4 +1,4 @@
-import type { PlanningRun, Requirement } from '../types'
+import type { PlanningRun, Requirement } from '../../types'
 
 type StepState = 'done' | 'active' | 'pending' | 'attention'
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import type { Task, ProjectSummary } from '../types'
-import { createTask, updateTask, deleteTask, batchUpdateTasks } from '../api/client'
+import type { Task, ProjectSummary } from '../../types'
+import { createTask, updateTask, deleteTask, batchUpdateTasks } from '../../api/client'
 
 type TaskFilterState = { status: '' | Task['status']; priority: '' | Task['priority']; assignee: string }
 type BatchTaskFormState = { status: '' | Task['status']; priority: '' | Task['priority']; assignee: string; clearAssignee: boolean }

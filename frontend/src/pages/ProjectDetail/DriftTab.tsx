@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
-import type { DriftSignal, Document, DocumentLink, DocumentContent } from '../types'
-import { getDocumentContent } from '../api/client'
-import { formatRelativeTime } from '../utils/formatters'
+import type { DriftSignal, Document, DocumentLink, DocumentContent } from '../../types'
+import { getDocumentContent } from '../../api/client'
+import { formatRelativeTime } from '../../utils/formatters'
 
 type DriftFilter = 'open' | 'all' | 'resolved' | 'dismissed'
 type DriftSort = 'severity' | 'created_at'

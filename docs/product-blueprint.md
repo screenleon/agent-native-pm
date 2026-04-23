@@ -25,9 +25,9 @@ A tool that derives project status from git repositories and agent activity, det
 
 ## MVP scope (Phase 1)
 
-See `docs/mvp-scope.md` for the detailed feature list.
+Phase 1 shipped. The original Phase 1 checklist used to live in `docs/mvp-scope.md`; that file is now a pointer to current scope sources. For the current authoritative scope, consult `DECISIONS.md`, `docs/api-surface.md`, and `docs/data-model.md`.
 
-Summary:
+Summary of the original Phase 1 deliverables (for historical context):
 - Project CRUD with repo path registration
 - Task board with status lifecycle
 - Document registry with staleness tracking

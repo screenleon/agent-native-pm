@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import type { Document, DriftSignal, DocumentLink } from '../types'
-import { createDocument } from '../api/client'
+import type { Document, DriftSignal, DocumentLink } from '../../types'
+import { createDocument } from '../../api/client'
 
 interface DocumentsTabProps {
   projectId: string

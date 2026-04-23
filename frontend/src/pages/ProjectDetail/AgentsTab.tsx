@@ -1,4 +1,4 @@
-import type { AgentRun, SyncRun } from '../types'
+import type { AgentRun, SyncRun } from '../../types'
 
 interface AgentsTabProps {
   agentRuns: AgentRun[]

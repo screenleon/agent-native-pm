@@ -238,8 +238,8 @@ agent-native-pm/
 ├── frontend/                   # React + Vite SPA
 │   ├── src/
 │   │   ├── pages/              # Top-level routes (ProjectDetail, ProjectList, Dashboard, …)
-│   │   ├── components/         # Tab/panel components extracted from ProjectDetail
-│   │   ├── utils/              # formatters, syncGuidance, …
+│   │   │   └── ProjectDetail/  # Tab/panel siblings + planning workspace components
+│   │   ├── utils/              # formatters, syncGuidance, planningConnectionPresets, …
 │   │   ├── api/                # API client
 │   │   └── test/               # vitest setup
 │   └── dist/                   # Built static assets (copied into backend/internal/frontend/dist before go build)

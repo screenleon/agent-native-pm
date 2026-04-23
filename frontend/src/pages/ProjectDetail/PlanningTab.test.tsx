@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import type { Requirement } from '../types'
+import type { Requirement } from '../../types'
 import { PlanningTab } from './PlanningTab'
 
-vi.mock('../api/client', () => ({
+vi.mock('../../api/client', () => ({
   createRequirement: vi.fn().mockResolvedValue({ data: null }),
   getPlanningProviderOptions: vi.fn().mockResolvedValue({
     data: {
