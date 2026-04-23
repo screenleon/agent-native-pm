@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -25,10 +27,22 @@ import (
 	"github.com/screenleon/agent-native-pm/internal/store"
 )
 
+// Version is set at build time via -ldflags "-X main.Version=v1.2.3".
+var Version = "dev"
+
 func main() {
+	startedAt := time.Now()
 	cfg := config.Load()
 
-	// Early port log emitted after FindAvailablePort resolves below.
+	// Finalize port before creating the meta handler so the advertised port
+	// matches the actual bind address even when FindAvailablePort shifts it.
+	bindAddr := ":" + cfg.Port
+	if cfg.LocalMode {
+		port := config.FindAvailablePort(toInt(cfg.Port), cfg.AnpmDir)
+		cfg.Port = fmt.Sprintf("%d", port)
+		bindAddr = "127.0.0.1:" + cfg.Port
+		slog.Info("local mode starting", "port", cfg.Port, "db", cfg.DatabaseURL)
+	}
 
 	isSQLite := database.IsSQLiteDSN(cfg.DatabaseURL)
 	dialect := database.NewDialect(cfg.DatabaseURL)
@@ -63,6 +77,25 @@ func main() {
 
 	// Phase 3 stores
 	apiKeyStore := store.NewAPIKeyStore(db)
+	// Local mode: auto-generate a persistent master key if none is configured.
+	if cfg.LocalMode && cfg.AppSettingsMasterKey == "" {
+		isNew, key, err := config.EnsureLocalMasterKey(cfg.AnpmDir)
+		if err != nil {
+			slog.Error("failed to create local master key", "err", err)
+			os.Exit(1)
+		}
+		cfg.AppSettingsMasterKey = key
+		if isNew {
+			// Warn if encrypted bindings already exist — they can no longer be
+			// decrypted with the newly generated key.
+			if hasEncryptedBindings(db) {
+				slog.Warn("local mode: new master key generated but encrypted bindings already exist — " +
+					"previously saved API keys are unreadable; re-enter them in Model Providers settings")
+			} else {
+				slog.Info("local mode: generated new master key", "path", cfg.AnpmDir+"/master.key")
+			}
+		}
+	}
 	settingsBox, err := secrets.NewBox(cfg.AppSettingsMasterKey)
 	if err != nil {
 		slog.Error("failed to initialize app settings secret storage", "err", err)
@@ -122,6 +155,7 @@ func main() {
 
 	// Health handler with DB reference for diagnostics
 	healthHandler := handlers.NewHealthHandler(db)
+	remoteModelsHandler := handlers.NewRemoteModelsHandler(accountBindingStore)
 
 	// Auth middleware
 	sessionAuthMiddleware := middleware.SessionAuth(sessionStore)
@@ -131,16 +165,23 @@ func main() {
 	var metaHandler *handlers.MetaHandler
 	var localModeMiddleware func(http.Handler) http.Handler
 	if cfg.LocalMode {
+		if err := ensureLocalAdminUser(db); err != nil {
+			slog.Error("failed to ensure local admin user", "err", err)
+			os.Exit(1)
+		}
 		projectID, err := ensureLocalProject(projectStore, cfg.LocalProjectName, cfg.LocalRepoRoot)
 		if err != nil {
 			slog.Error("failed to ensure local project", "err", err)
 			os.Exit(1)
 		}
-		metaHandler = handlers.NewMetaHandler(true, projectID, cfg.LocalProjectName, cfg.Port)
+		dbPath := filepath.Join(cfg.AnpmDir, "data.db")
+		metaHandler = handlers.NewMetaHandler(true, projectID, cfg.LocalProjectName, cfg.Port,
+			Version, "sqlite", dbPath, startedAt)
 		localModeMiddleware = middleware.InjectLocalAdmin
 		slog.Info("local mode ready", "project", cfg.LocalProjectName, "id", projectID, "port", cfg.Port, "db", cfg.DatabaseURL)
 	} else {
-		metaHandler = handlers.NewMetaHandler(false, "", "", cfg.Port)
+		metaHandler = handlers.NewMetaHandler(false, "", "", cfg.Port,
+			Version, "postgres", "", startedAt)
 	}
 
 	r := router.New(router.Deps{
@@ -164,6 +205,7 @@ func main() {
 		NotificationHandler:       notificationHandler,
 		SearchHandler:             searchHandler,
 		AdapterModelsHandler:      adapterModelsHandler,
+		RemoteModelsHandler:       remoteModelsHandler,
 		MetaHandler:               metaHandler,
 		HealthHandler:             healthHandler,
 		AuthMiddleware:            sessionAuthMiddleware,
@@ -172,18 +214,6 @@ func main() {
 		FrontendDir:               cfg.FrontendDir,
 		CORSAllowedOrigins:        cfg.CORSAllowedOrigins,
 	})
-
-	// In local mode: find the first available port (starting from the hash-derived
-	// one) and persist it to .anpm/port so "anpm status" can discover it.
-	// Bind only loopback so the no-auth endpoint is unreachable from other machines.
-	bindAddr := ":" + cfg.Port
-	if cfg.LocalMode {
-		port := config.FindAvailablePort(toInt(cfg.Port), cfg.AnpmDir)
-		cfg.Port = fmt.Sprintf("%d", port)
-		bindAddr = "127.0.0.1:" + cfg.Port
-		// Re-emit port in case it changed due to collision.
-		slog.Info("local mode starting", "port", cfg.Port, "db", cfg.DatabaseURL)
-	}
 
 	srv := &http.Server{
 		Addr:    bindAddr,
@@ -231,6 +261,27 @@ func main() {
 func toInt(s string) int {
 	n, _ := strconv.Atoi(s)
 	return n
+}
+
+// hasEncryptedBindings reports whether any account_bindings row has a stored
+// (non-empty) API key ciphertext. Used to detect silent key-rotation risk.
+func hasEncryptedBindings(db *sql.DB) bool {
+	var n int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM account_bindings WHERE api_key_ciphertext != ''`).Scan(&n)
+	return n > 0
+}
+
+// ensureLocalAdminUser creates the synthetic "local-admin" row that FK
+// constraints in local_connectors and connector_pairing_sessions require.
+// Idempotent: ON CONFLICT DO NOTHING.
+func ensureLocalAdminUser(db *sql.DB) error {
+	now := time.Now().UTC()
+	_, err := db.Exec(`
+		INSERT INTO users (id, username, email, password_hash, role, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7)
+		ON CONFLICT (id) DO NOTHING
+	`, "local-admin", "local", "local@localhost", "", "admin", now, now)
+	return err
 }
 
 // ensureLocalProject returns the ID of the single local project, creating it

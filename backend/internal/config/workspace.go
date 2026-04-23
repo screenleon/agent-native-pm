@@ -1,7 +1,9 @@
 package config
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -132,6 +134,27 @@ func loadWorkspaceConfig(anpmDir string) WorkspaceConfig {
 	}
 	_ = json.Unmarshal(data, &cfg)
 	return cfg
+}
+
+// EnsureLocalMasterKey returns (isNew, key, error) where isNew is true when
+// the key was freshly generated. On first call it writes a random 32-byte
+// AES key (base64) to .anpm/master.key (mode 0600); subsequent calls read it.
+func EnsureLocalMasterKey(anpmDir string) (bool, string, error) {
+	keyFile := filepath.Join(anpmDir, "master.key")
+	if data, err := os.ReadFile(keyFile); err == nil {
+		if k := strings.TrimSpace(string(data)); k != "" {
+			return false, k, nil
+		}
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return false, "", fmt.Errorf("generate master key: %w", err)
+	}
+	key := base64.StdEncoding.EncodeToString(raw)
+	if err := os.WriteFile(keyFile, []byte(key), 0o600); err != nil {
+		return false, "", fmt.Errorf("persist master key: %w", err)
+	}
+	return true, key, nil
 }
 
 func patchGitignore(root string) {

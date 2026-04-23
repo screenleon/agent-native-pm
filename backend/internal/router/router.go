@@ -36,6 +36,7 @@ type Deps struct {
 	NotificationHandler       *handlers.NotificationHandler
 	SearchHandler             *handlers.SearchHandler
 	AdapterModelsHandler      *handlers.AdapterModelsHandler
+	RemoteModelsHandler       *handlers.RemoteModelsHandler
 	MetaHandler               *handlers.MetaHandler
 	HealthHandler             *handlers.HealthHandler
 	AuthMiddleware            func(http.Handler) http.Handler
@@ -212,6 +213,10 @@ func New(deps Deps) http.Handler {
 				r.Post("/me/local-connectors/pairing-sessions", deps.LocalConnectorHandler.CreatePairingSession)
 				r.Delete("/me/local-connectors/{id}", deps.LocalConnectorHandler.Revoke)
 				r.Get("/me/local-connectors/run-stats", deps.LocalConnectorHandler.RunStats)
+			}
+			if deps.RemoteModelsHandler != nil {
+				r.Post("/me/remote-models", deps.RemoteModelsHandler.Fetch)
+				r.Post("/me/probe-model", deps.RemoteModelsHandler.Probe)
 			}
 			if deps.NotificationHandler != nil {
 				r.Get("/notifications", deps.NotificationHandler.List)

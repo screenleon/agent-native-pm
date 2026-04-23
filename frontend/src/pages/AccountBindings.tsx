@@ -5,7 +5,10 @@ import {
   updateAccountBinding,
   deleteAccountBinding,
   getMeta,
+  fetchRemoteModels,
+  probeModel,
 } from '../api/client';
+import type { ProbeModelResult } from '../api/client';
 import type { AccountBinding, CreateAccountBindingPayload } from '../types';
 import {
   getPlanningConnectionPreset,
@@ -20,6 +23,42 @@ import {
   type CliBindingPresetID,
 } from '../utils/cliBindingPresets';
 
+function ProbeReport({ result }: { result: ProbeModelResult }) {
+  if (!result.ok) {
+    return (
+      <div style={{
+        marginTop: '0.5rem', padding: '0.5rem 0.75rem', borderRadius: '6px',
+        background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
+        fontSize: '0.85rem', color: 'var(--danger, #f87171)',
+      }}>
+        ✗ {result.error || 'Connection failed'}
+      </div>
+    );
+  }
+  return (
+    <div style={{
+      marginTop: '0.5rem', padding: '0.5rem 0.75rem', borderRadius: '6px',
+      background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)',
+      fontSize: '0.85rem',
+    }}>
+      <div style={{ color: 'var(--success, #4ade80)', fontWeight: 600 }}>
+        ✓ Connected in {result.latency_ms} ms
+        {result.model_used && <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: '0.5rem' }}>· {result.model_used}</span>}
+      </div>
+      {result.content && (
+        <div style={{ marginTop: '0.25rem', color: 'var(--text-muted)' }}>
+          Response: &ldquo;{result.content}&rdquo;
+        </div>
+      )}
+      {result.usage && (
+        <div style={{ marginTop: '0.2rem', color: 'var(--text-muted)' }}>
+          {result.usage.prompt_tokens} prompt + {result.usage.completion_tokens} completion tokens
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AccountBindings() {
   const [bindings, setBindings] = useState<AccountBinding[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,6 +69,11 @@ export default function AccountBindings() {
   // openai-compatible form state
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [formProbeResult, setFormProbeResult] = useState<ProbeModelResult | null>(null);
+  const [probingForm, setProbingForm] = useState(false);
+  const [cardProbeResults, setCardProbeResults] = useState<Record<string, ProbeModelResult>>({});
+  const [probingCardId, setProbingCardId] = useState<string | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<PlanningConnectionPresetID>('ollama-docker');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [label, setLabel] = useState('');
@@ -85,6 +129,64 @@ export default function AccountBindings() {
   }
 
   // openai-compatible handlers
+
+  async function handleFetchModels() {
+    if (!baseURL.trim()) return;
+    setFetchingModels(true);
+    setError('');
+    try {
+      const resp = await fetchRemoteModels(baseURL.trim(), apiKey.trim());
+      const all = resp.data.models;
+      const MAX = 16; // must match models.MaxAccountBindingConfiguredModels on the backend
+      const models = all.slice(0, MAX);
+      if (models.length > 0) {
+        setConfiguredModelsText(models.join(', '));
+        if (!modelId.trim()) setModelId(models[0]);
+        if (all.length > MAX) {
+          setError(`Provider returned ${all.length} models; showing the first ${MAX}. Edit the list to keep only the ones you need.`);
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch models from provider');
+    } finally {
+      setFetchingModels(false);
+    }
+  }
+
+  async function handleProbeForm() {
+    setProbingForm(true);
+    setFormProbeResult(null);
+    setError('');
+    try {
+      const resp = await probeModel({
+        base_url: baseURL.trim(),
+        api_key: apiKey.trim(),
+        model_id: modelId.trim(),
+      });
+      setFormProbeResult(resp.data);
+    } catch (err) {
+      setFormProbeResult({ ok: false, latency_ms: 0, model_used: '', content: '', error: err instanceof Error ? err.message : 'Request failed' });
+    } finally {
+      setProbingForm(false);
+    }
+  }
+
+  async function handleProbeCard(binding: AccountBinding) {
+    const modelToProbe = binding.model_id || (binding.configured_models?.[0] ?? '');
+    setProbingCardId(binding.id);
+    setCardProbeResults(prev => { const next = { ...prev }; delete next[binding.id]; return next; });
+    try {
+      const resp = await probeModel({ binding_id: binding.id, model_id: modelToProbe });
+      setCardProbeResults(prev => ({ ...prev, [binding.id]: resp.data }));
+    } catch (err) {
+      setCardProbeResults(prev => ({
+        ...prev,
+        [binding.id]: { ok: false, latency_ms: 0, model_used: '', content: '', error: err instanceof Error ? err.message : 'Request failed' },
+      }));
+    } finally {
+      setProbingCardId(null);
+    }
+  }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -172,6 +274,7 @@ export default function AccountBindings() {
     setConfiguredModelsText('');
     setApiKey('');
     setShowAdvanced(preset.advancedOnly);
+    setFormProbeResult(null);
   }
 
   function bindingPresetLabel(binding: AccountBinding) {
@@ -343,6 +446,13 @@ export default function AccountBindings() {
                     )}
                   </div>
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => handleProbeCard(binding)}
+                      disabled={probingCardId === binding.id}
+                    >
+                      {probingCardId === binding.id ? 'Testing…' : 'Test'}
+                    </button>
                     <button className="btn btn-ghost btn-sm" onClick={() => handleToggleActive(binding)}>
                       {binding.is_active ? 'Deactivate' : 'Set Active'}
                     </button>
@@ -357,6 +467,11 @@ export default function AccountBindings() {
                   <div>API key configured: {binding.api_key_configured ? 'Yes' : 'No'}</div>
                   <div>Models: {binding.configured_models?.join(', ') || binding.model_id}</div>
                 </div>
+                {cardProbeResults[binding.id] && (
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <ProbeReport result={cardProbeResults[binding.id]} />
+                  </div>
+                )}
               </div>
             ))}
 
@@ -409,7 +524,19 @@ export default function AccountBindings() {
                         <small>Leave the preset value as-is unless your local bridge or gateway listens on a different address.</small>
                       </div>
                       <div className="form-group">
-                        <label>Configured models</label>
+                        <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span>Configured models</span>
+                          {baseURL.trim() && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={handleFetchModels}
+                              disabled={fetchingModels || saving}
+                            >
+                              {fetchingModels ? 'Fetching…' : 'Fetch from API →'}
+                            </button>
+                          )}
+                        </label>
                         <input type="text" value={configuredModelsText} onChange={e => setConfiguredModelsText(e.target.value)} placeholder={selectedPreset.configuredModelsPlaceholder} disabled={saving} />
                         <small>Comma-separated. If empty, this binding will use the single model ID above.</small>
                       </div>
@@ -427,6 +554,20 @@ export default function AccountBindings() {
                             disabled={saving}
                             required={selectedPreset.apiKeyMode === 'required'}
                           />
+                        </div>
+                      )}
+                      {/* Test Connection */}
+                      {baseURL.trim() && modelId.trim() && (
+                        <div>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={handleProbeForm}
+                            disabled={probingForm || saving}
+                          >
+                            {probingForm ? 'Testing…' : 'Test Connection'}
+                          </button>
+                          {formProbeResult && <ProbeReport result={formProbeResult} />}
                         </div>
                       )}
                     </>

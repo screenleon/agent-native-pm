@@ -33,7 +33,17 @@ async function request<T>(path: string, options?: RequestInit): Promise<ApiRespo
 }
 
 export async function getMeta() {
-  return request<{ local_mode: boolean; project_id: string; project_name: string; port: string }>('/meta');
+  return request<{
+    local_mode: boolean;
+    project_id: string;
+    project_name: string;
+    port: string;
+    version: string;
+    db_type: string;
+    db_path: string;
+    db_size_bytes: number;
+    started_at: string;
+  }>('/meta');
 }
 
 export async function checkNeedsSetup() {
@@ -461,6 +471,34 @@ export async function updateAccountBinding(id: string, data: UpdateAccountBindin
 export async function deleteAccountBinding(id: string) {
   return request<null>(`/me/account-bindings/${encodeURIComponent(id)}`, {
     method: 'DELETE',
+  });
+}
+
+export async function fetchRemoteModels(baseURL: string, apiKey: string) {
+  return request<{ models: string[] }>('/me/remote-models', {
+    method: 'POST',
+    body: JSON.stringify({ base_url: baseURL, api_key: apiKey }),
+  });
+}
+
+export interface ProbeModelResult {
+  ok: boolean;
+  latency_ms: number;
+  model_used: string;
+  content: string;
+  error?: string;
+  usage?: { prompt_tokens: number; completion_tokens: number };
+}
+
+export async function probeModel(params: {
+  base_url?: string;
+  api_key?: string;
+  model_id?: string;
+  binding_id?: string;
+}) {
+  return request<ProbeModelResult>('/me/probe-model', {
+    method: 'POST',
+    body: JSON.stringify(params),
   });
 }
 

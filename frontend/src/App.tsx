@@ -9,6 +9,7 @@ import APIKeys from './pages/APIKeys'
 import ModelSettings from './pages/ModelSettings'
 import AccountBindings from './pages/AccountBindings'
 import MyConnector from './pages/MyConnector'
+import LocalServer from './pages/LocalServer'
 import type { User, Notification, SearchResult } from './types'
 import { getMe, getMeta, logout, getUnreadCount, listNotifications, markNotificationRead, markNotificationUnread, markAllNotificationsRead, search, checkNeedsSetup } from './api/client'
 import type { SearchFilters } from './api/client'
@@ -259,15 +260,24 @@ function App() {
         <header className="header">
           <div className="container header-inner">
             <div className="header-brand">
-              <h1 style={{ color: 'inherit' }}>{localMode.projectName}</h1>
+              <h1><Link to="/" style={{ color: 'inherit' }}>Agent Native PM</Link></h1>
               <span className="badge badge-low" style={{ fontSize: '0.75rem' }}>local</span>
             </div>
+            <nav className="header-primary-nav">
+              <NavLink to={`/projects/${localMode.projectId}`}>{localMode.projectName}</NavLink>
+            </nav>
           </div>
         </header>
         <main className="container">
           <Routes>
+            <Route path="/" element={<LocalServer />} />
+            <Route path="/settings/server" element={<LocalServer />} />
             <Route path="/projects/:id" element={<ProjectDetail />} />
-            <Route path="*" element={<Navigate to={`/projects/${localMode.projectId}`} replace />} />
+            <Route path="/settings/connector" element={<MyConnector />} />
+            <Route path="/settings/account-bindings" element={<AccountBindings />} />
+            <Route path="/settings/models" element={<ModelSettings canEdit={true} />} />
+            <Route path="/settings/api-keys" element={<APIKeys />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
       </>

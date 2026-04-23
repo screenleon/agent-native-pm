@@ -96,7 +96,7 @@ func (s *UserStore) Authenticate(username, password string) (*models.User, error
 func (s *UserStore) List() ([]models.User, error) {
 	rows, err := s.db.Query(`
 		SELECT id, username, email, role, is_active, created_at, updated_at
-		FROM users ORDER BY created_at ASC
+		FROM users WHERE id != 'local-admin' ORDER BY created_at ASC
 	`)
 	if err != nil {
 		return nil, err
