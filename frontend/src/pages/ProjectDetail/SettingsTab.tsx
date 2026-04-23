@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import type { Project, ProjectRepoMapping, MirrorRepoDiscovery } from '../types'
-import { createProjectRepoMapping, deleteProjectRepoMapping, updateProjectRepoMapping } from '../api/client'
+import type { Project, ProjectRepoMapping, MirrorRepoDiscovery } from '../../types'
+import { createProjectRepoMapping, deleteProjectRepoMapping, updateProjectRepoMapping } from '../../api/client'
 
 interface SettingsTabProps {
   projectId: string

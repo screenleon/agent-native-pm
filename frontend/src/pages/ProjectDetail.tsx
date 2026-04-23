@@ -26,14 +26,14 @@ import {
   refreshDocumentSummary,
 } from '../api/client'
 import { syncRunGuidance, type SyncGuidance } from '../utils/syncGuidance'
-import { SyncStatusPanel } from '../components/SyncStatusPanel'
-import { ProjectOverviewTab } from '../components/ProjectOverviewTab'
-import { TasksTab } from '../components/TasksTab'
-import { DocumentsTab } from '../components/DocumentsTab'
-import { DriftTab } from '../components/DriftTab'
-import { AgentsTab } from '../components/AgentsTab'
-import { SettingsTab } from '../components/SettingsTab'
-import { PlanningTab } from '../components/PlanningTab'
+import { SyncStatusPanel } from './ProjectDetail/SyncStatusPanel'
+import { ProjectOverviewTab } from './ProjectDetail/ProjectOverviewTab'
+import { TasksTab } from './ProjectDetail/TasksTab'
+import { DocumentsTab } from './ProjectDetail/DocumentsTab'
+import { DriftTab } from './ProjectDetail/DriftTab'
+import { AgentsTab } from './ProjectDetail/AgentsTab'
+import { SettingsTab } from './ProjectDetail/SettingsTab'
+import { PlanningTab } from './ProjectDetail/PlanningTab'
 
 type Tab = 'overview' | 'planning' | 'tasks' | 'documents' | 'drift' | 'agents' | 'settings'
 type TaskFilterState = { status: '' | Task['status']; priority: '' | Task['priority']; assignee: string }

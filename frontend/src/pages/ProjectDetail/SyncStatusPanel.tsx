@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import type { Project, ProjectRepoMapping, SyncRun } from '../types'
-import type { SyncGuidance } from '../utils/syncGuidance'
-import { syncRunGuidance } from '../utils/syncGuidance'
-import { formatDateTime, formatRelativeTime, formatSyncDuration, syncBadgeClass, guidanceBadgeClass } from '../utils/formatters'
+import type { Project, ProjectRepoMapping, SyncRun } from '../../types'
+import type { SyncGuidance } from '../../utils/syncGuidance'
+import { syncRunGuidance } from '../../utils/syncGuidance'
+import { formatDateTime, formatRelativeTime, formatSyncDuration, syncBadgeClass, guidanceBadgeClass } from '../../utils/formatters'
 
 interface SyncStatusPanelProps {
   project: Project

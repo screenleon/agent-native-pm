@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import type { Project, ProjectRepoMapping } from '../types'
+import type { Project, ProjectRepoMapping } from '../../types'
 import { SettingsTab } from './SettingsTab'
 
-vi.mock('../api/client', () => ({
+vi.mock('../../api/client', () => ({
   createProjectRepoMapping: vi.fn().mockResolvedValue({ data: null }),
   deleteProjectRepoMapping: vi.fn().mockResolvedValue({ data: null }),
   updateProjectRepoMapping: vi.fn().mockResolvedValue({ data: null }),

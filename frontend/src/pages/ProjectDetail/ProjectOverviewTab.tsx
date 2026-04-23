@@ -1,4 +1,4 @@
-import type { AgentRun, DriftSignal, ProjectSummary, Requirement } from '../types'
+import type { AgentRun, DriftSignal, ProjectSummary, Requirement } from '../../types'
 
 type Tab = 'overview' | 'planning' | 'tasks' | 'documents' | 'drift' | 'agents' | 'settings'
 

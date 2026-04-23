@@ -3,6 +3,7 @@ export type PlanningConnectionPresetID =
   | 'ollama-native'
   | 'lmstudio-docker'
   | 'lmstudio-native'
+  | 'mistral-cloud'
   | 'custom-openai-compatible'
 
 export type PlanningConnectionPreset = {
@@ -61,6 +62,17 @@ export const planningConnectionPresets: PlanningConnectionPreset[] = [
     configuredModelsPlaceholder: 'local-model',
     apiKeyMode: 'hidden',
     advancedOnly: false,
+  },
+  {
+    id: 'mistral-cloud',
+    label: 'Mistral AI (Cloud)',
+    description: 'Hosted Mistral chat completions endpoint. Requires a Mistral API key from console.mistral.ai.',
+    baseURL: 'https://api.mistral.ai/v1',
+    defaultLabel: 'My Mistral',
+    modelPlaceholder: 'mistral-small-latest',
+    configuredModelsPlaceholder: 'mistral-small-latest, mistral-medium-latest, mistral-large-latest, codestral-latest, open-mistral-7b, open-mixtral-8x7b',
+    apiKeyMode: 'optional',
+    advancedOnly: true,
   },
   {
     id: 'custom-openai-compatible',

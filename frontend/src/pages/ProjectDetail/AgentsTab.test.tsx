@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import type { AgentRun, SyncRun } from '../types'
+import type { AgentRun, SyncRun } from '../../types'
 import { AgentsTab } from './AgentsTab'
 
 function makeAgentRun(overrides: Partial<AgentRun> = {}): AgentRun {
