@@ -210,6 +210,26 @@ describe('<CandidateReviewPanel />', () => {
     expect(screen.queryByRole('heading', { name: /Suggested Backlog/i })).not.toBeInTheDocument()
   })
 
+  it('T-S5a-6: renders remediation hint banner for a failed returned run with a known error_kind, and exposes no free-text hint input', () => {
+    const failedRun = {
+      ...makeRun(),
+      status: 'failed',
+      dispatch_status: 'returned',
+      connector_cli_info: {
+        error_kind: 'session_expired',
+        remediation_hint: 'Re-authenticate your CLI (run `claude` or `codex` once interactively) then retry the planning run.',
+      },
+    } as unknown as import('../../../types').PlanningRun
+    renderPanel({ selectedRun: failedRun, candidates: [], selectedCandidate: null, selectedCandidateId: null })
+    expect(screen.getByText(/Suggested next step:/i)).toBeInTheDocument()
+    expect(screen.getByText(/Re-authenticate your CLI/i)).toBeInTheDocument()
+    // The hint must not be editable — no input or textarea for the hint text.
+    const inputs = document.querySelectorAll('input, textarea')
+    for (const el of inputs) {
+      expect(el).not.toHaveValue('Re-authenticate your CLI (run `claude` or `codex` once interactively) then retry the planning run.')
+    }
+  })
+
   it('fires onViewDriftSignal with the drift signal id when the drift evidence row is clicked', async () => {
     const onViewDriftSignal = vi.fn()
     const candidateWithDrift = makeCandidate({

@@ -199,7 +199,38 @@ type PlanningRunCliInfo struct {
 	BindingSnapshot  *PlanningRunBindingSnapshot `json:"binding_snapshot,omitempty"`
 	Invocation       *CliUsageInfo               `json:"cli_invocation,omitempty"`
 	ErrorKind        string                      `json:"error_kind,omitempty"`
+	RemediationHint  string                      `json:"remediation_hint,omitempty"`
 	DispatchWarning  string                      `json:"dispatch_warning,omitempty"`
+}
+
+const (
+	ErrorKindUnknown         = "unknown"
+	ErrorKindSessionExpired  = "session_expired"
+	ErrorKindRateLimited     = "rate_limited"
+	ErrorKindContextOverflow = "context_overflow"
+	ErrorKindAdapterTimeout  = "adapter_timeout"
+)
+
+// AllowedErrorKinds is the server-side allowlist for error_kind values
+// submitted by the adapter. Anything outside this set is normalised to
+// ErrorKindUnknown (S5a, design §5 D7).
+var AllowedErrorKinds = map[string]bool{
+	ErrorKindUnknown:         true,
+	ErrorKindSessionExpired:  true,
+	ErrorKindRateLimited:     true,
+	ErrorKindContextOverflow: true,
+	ErrorKindAdapterTimeout:  true,
+}
+
+// ErrorKindRemediations is the static server-side catalog of human-readable
+// remediation hints keyed by error_kind (S5a, design §5 D7). The server
+// computes the hint from this map and persists it alongside error_kind in
+// connector_cli_info — adapters never supply free-text hints.
+var ErrorKindRemediations = map[string]string{
+	ErrorKindSessionExpired:  "Re-authenticate your CLI (run `claude` or `codex` once interactively) then retry the planning run.",
+	ErrorKindRateLimited:     "Your CLI subscription has hit a rate limit. Wait a few minutes before retrying.",
+	ErrorKindContextOverflow: "The planning context was too large for the model. Try reducing the number of open requirements or documents in scope.",
+	ErrorKindAdapterTimeout:  "The adapter timed out waiting for the CLI. Check that your CLI is healthy (`anpm-connector doctor`) and retry.",
 }
 
 // PlanningRunBindingSnapshot freezes the fields of an account_bindings row

@@ -286,6 +286,16 @@ func (h *LocalConnectorHandler) SubmitPlanningRunResult(w http.ResponseWriter, r
 			writeError(w, http.StatusInternalServerError, "failed to mark planning run as failed")
 			return
 		}
+		// Normalize and persist error_kind (S5a). Best-effort: don't fail the
+		// entire request if envelope update fails.
+		errorKind := strings.TrimSpace(req.ErrorKind)
+		if errorKind == "" || !models.AllowedErrorKinds[errorKind] {
+			errorKind = models.ErrorKindUnknown
+		}
+		hint := models.ErrorKindRemediations[errorKind]
+		if mergeErr := h.planningRuns.MarkErrorKind(run.ID, errorKind, hint); mergeErr != nil {
+			log.Printf("submit-result: failed to persist error_kind for run %s: %v", run.ID, mergeErr)
+		}
 		h.notifyPlanningRunTerminal(connector, run, requirement, false, 0, message)
 		updatedRun, err := h.planningRuns.GetByID(run.ID)
 		if err != nil {
