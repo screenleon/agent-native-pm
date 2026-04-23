@@ -14,9 +14,13 @@ export type PlanningConnectionPreset = {
   defaultLabel: string
   modelPlaceholder: string
   configuredModelsPlaceholder: string
-  apiKeyMode: 'hidden' | 'optional'
+  apiKeyMode: 'hidden' | 'optional' | 'required'
   advancedOnly: boolean
 }
+
+export const planningConnectionFallbackPresetId: PlanningConnectionPresetID = 'ollama-docker'
+
+export const planningConnectionInferenceFallbackPresetId: PlanningConnectionPresetID = 'custom-openai-compatible'
 
 export const planningConnectionPresets: PlanningConnectionPreset[] = [
   {
@@ -71,7 +75,7 @@ export const planningConnectionPresets: PlanningConnectionPreset[] = [
     defaultLabel: 'My Mistral',
     modelPlaceholder: 'mistral-small-latest',
     configuredModelsPlaceholder: 'mistral-small-latest, mistral-medium-latest, mistral-large-latest, codestral-latest, open-mistral-7b, open-mixtral-8x7b',
-    apiKeyMode: 'optional',
+    apiKeyMode: 'required',
     advancedOnly: true,
   },
   {
@@ -88,13 +92,16 @@ export const planningConnectionPresets: PlanningConnectionPreset[] = [
 ]
 
 export function getPlanningConnectionPreset(id: PlanningConnectionPresetID): PlanningConnectionPreset {
-  return planningConnectionPresets.find(preset => preset.id === id) ?? planningConnectionPresets[0]
+  const exact = planningConnectionPresets.find(preset => preset.id === id)
+  if (exact) return exact
+  const fallback = planningConnectionPresets.find(preset => preset.id === planningConnectionFallbackPresetId)
+  return fallback ?? planningConnectionPresets[0]
 }
 
 export function inferPlanningConnectionPreset(baseURL: string): PlanningConnectionPresetID {
   const normalizedBaseURL = normalizePresetBaseURL(baseURL)
   const matchedPreset = planningConnectionPresets.find(preset => preset.baseURL !== '' && normalizePresetBaseURL(preset.baseURL) === normalizedBaseURL)
-  return matchedPreset?.id ?? 'custom-openai-compatible'
+  return matchedPreset?.id ?? planningConnectionInferenceFallbackPresetId
 }
 
 function normalizePresetBaseURL(value: string): string {

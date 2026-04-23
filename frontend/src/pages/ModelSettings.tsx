@@ -273,13 +273,25 @@ export default function ModelSettings({ canEdit }: Props) {
 								</div>
 
 								<div className="form-group">
-									<label>API key</label>
+									<label>
+										API key
+										{providerId === 'openai-compatible' && selectedPreset.apiKeyMode === 'required' && !view?.settings.api_key_configured && (
+											<span aria-label="required"> *</span>
+										)}
+									</label>
 									<input
 										type="password"
 										value={apiKey}
 										onChange={e => setAPIKey(e.target.value)}
 										disabled={saving || providerId === 'deterministic'}
-										placeholder={view?.settings.api_key_configured ? 'Stored. Enter a new key only to rotate it.' : 'Optional for LAN or local gateways'}
+										placeholder={
+											view?.settings.api_key_configured
+												? 'Stored. Enter a new key only to rotate it.'
+												: providerId === 'openai-compatible' && selectedPreset.apiKeyMode === 'required'
+													? 'Required for this hosted provider'
+													: 'Optional for LAN or local gateways'
+										}
+										required={providerId === 'openai-compatible' && selectedPreset.apiKeyMode === 'required' && !view?.settings.api_key_configured}
 									/>
 									<label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
 										<input

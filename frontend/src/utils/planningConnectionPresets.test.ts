@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   getPlanningConnectionPreset,
   inferPlanningConnectionPreset,
+  planningConnectionFallbackPresetId,
+  planningConnectionInferenceFallbackPresetId,
   planningConnectionPresets,
 } from './planningConnectionPresets'
 
@@ -25,10 +27,21 @@ describe('planningConnectionPresets', () => {
     expect(preset.advancedOnly).toBe(true)
   })
 
-  it('falls back to the first preset when id is unknown', () => {
+  it('marks the Mistral hosted preset as requiring an API key', () => {
+    const preset = getPlanningConnectionPreset('mistral-cloud')
+    expect(preset.apiKeyMode).toBe('required')
+  })
+
+  it('falls back to the documented default when id is unknown', () => {
     // @ts-expect-error intentionally pass an unknown id to verify fallback behavior
     const preset = getPlanningConnectionPreset('does-not-exist')
-    expect(preset.id).toBe('ollama-docker')
+    expect(preset.id).toBe(planningConnectionFallbackPresetId)
+  })
+
+  it('exposes a fallback id that exists in the preset list', () => {
+    const ids = planningConnectionPresets.map(preset => preset.id)
+    expect(ids).toContain(planningConnectionFallbackPresetId)
+    expect(ids).toContain(planningConnectionInferenceFallbackPresetId)
   })
 
   it('infers Mistral preset from its hosted base URL', () => {
@@ -37,8 +50,8 @@ describe('planningConnectionPresets', () => {
     expect(inferPlanningConnectionPreset('HTTPS://API.MISTRAL.AI/v1')).toBe('mistral-cloud')
   })
 
-  it('infers custom preset for unmatched URLs', () => {
-    expect(inferPlanningConnectionPreset('https://openrouter.ai/api/v1')).toBe('custom-openai-compatible')
-    expect(inferPlanningConnectionPreset('')).toBe('custom-openai-compatible')
+  it('infers the documented inference fallback for unmatched URLs', () => {
+    expect(inferPlanningConnectionPreset('https://openrouter.ai/api/v1')).toBe(planningConnectionInferenceFallbackPresetId)
+    expect(inferPlanningConnectionPreset('')).toBe(planningConnectionInferenceFallbackPresetId)
   })
 })

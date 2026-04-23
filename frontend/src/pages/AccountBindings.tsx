@@ -265,10 +265,20 @@ export default function AccountBindings() {
                       <input type="text" value={configuredModelsText} onChange={e => setConfiguredModelsText(e.target.value)} placeholder={selectedPreset.configuredModelsPlaceholder} disabled={saving} />
                       <small>Comma-separated. If empty, this binding will use the single model ID above.</small>
                     </div>
-                    {selectedPreset.apiKeyMode === 'optional' && (
+                    {selectedPreset.apiKeyMode !== 'hidden' && (
                       <div className="form-group">
-                        <label>API key</label>
-                        <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="Only needed when your remote gateway requires one" disabled={saving} />
+                        <label>
+                          API key
+                          {selectedPreset.apiKeyMode === 'required' && <span aria-label="required"> *</span>}
+                        </label>
+                        <input
+                          type="password"
+                          value={apiKey}
+                          onChange={e => setApiKey(e.target.value)}
+                          placeholder={selectedPreset.apiKeyMode === 'required' ? 'Required for this hosted provider' : 'Only needed when your remote gateway requires one'}
+                          disabled={saving}
+                          required={selectedPreset.apiKeyMode === 'required'}
+                        />
                       </div>
                     )}
                   </>
