@@ -171,20 +171,15 @@ This preserves a single JSON API surface for both humans and agents.
 
 ## Near-Term Architectural Direction
 
-With v1.post shipped, the next architectural focus is the **Planning Workspace UX consolidation** — joining up the pieces that now exist but are still surfaced piecemeal across tabs:
+Phase 2 (Planning Workspace consolidation) and Phase 3 (Local-mode completeness + evidence cross-links + Dashboard aggregation) are both shipped and merged to `main`. Phase 4 (UX debt from early-operator friction) is active — see `docs/phase4-plan.md`. Phase 4 adds:
 
-- dashboard summary
-- open tasks
-- documents and document links
-- sync status and sync runs
-- drift signals
-- recent agent activity
-- planning runs (requirement → run → candidates → applied tasks)
+- a ProjectDetail primary/secondary rail split (Workspace · Overview · Tasks · Documents primary; Drift + Activity under "More ▾"; Settings behind a gear icon),
+- a "Model Settings" hub page that disambiguates the three execution paths (hosted API, server-side CLI, local-machine CLI via connector),
+- inline edit for CLI bindings,
+- a connector-side CLI probe that exercises the CLI + model end-to-end and reports back via the existing heartbeat round-trip.
 
-That Planning Workspace must remain draft-first, traceable, and human-approved before creating tasks. Structural rule from the 2026-04-22 Tier-3 decision: new product additions to `ProjectDetail` MUST land as siblings under `frontend/src/pages/ProjectDetail/` rather than appending to the existing function.
+Structural rules from the 2026-04-22 Tier-3 decision remain in force: new product additions to `ProjectDetail` MUST land as siblings under `frontend/src/pages/ProjectDetail/` rather than appending to the existing function. The Planning Workspace must remain draft-first, traceable, and human-approved before creating tasks.
 
-The concrete scope, slice plan, and acceptance criteria for this work are in `docs/phase2-planning-workspace-design.md`. No Phase 2 code lands until that design is approved.
-
-Deferred work not on the near-term path: subscription CLI bridge (needs client-side architecture design), SSE-broker horizontal scaling (triggers only on multi-instance deployment), further `DECISIONS.md` archival (remaining entries are still load-bearing).
+Deferred work not on the near-term path: Copilot CLI adapter (contract mismatch with the current adapter assumptions), Path B server mode (needs a separate design for admin binary allowlist + interpreter denylist + sandboxing), SSE-broker horizontal scaling (triggers only on multi-instance deployment), and Phase 4 Collaboration items from `docs/product-blueprint.md` (auth/roles/search/notifications) which will form a future Phase 5.
 
 Source: `[agent:documentation-architect]`, `[agent:backend-architect]`

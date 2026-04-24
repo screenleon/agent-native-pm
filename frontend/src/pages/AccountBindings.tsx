@@ -1,4 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
+import type { CliProbeResult } from '../api/client';
+import {
+  listLocalConnectors,
+  probeBindingOnConnector,
+  getCliProbeResult,
+} from '../api/client';
 import {
   listAccountBindings,
   createAccountBinding,
@@ -113,6 +120,27 @@ export default function AccountBindings() {
   const [cliCommand, setCliCommand] = useState('');
   const [cliModelId, setCliModelId] = useState('');
   const [cliIsPrimary, setCliIsPrimary] = useState(true);
+
+  // CLI binding inline-edit state (P4-3). One editor at a time so opening
+  // Edit on a second binding cancels the first — keeps the card list simple.
+  const [editingCliId, setEditingCliId] = useState<string | null>(null);
+  const [cliEditLabel, setCliEditLabel] = useState('');
+  const [cliEditModelId, setCliEditModelId] = useState('');
+  const [cliEditCommand, setCliEditCommand] = useState('');
+  const [cliEditSaving, setCliEditSaving] = useState(false);
+  const [cliEditError, setCliEditError] = useState('');
+
+  // P4-4 probe-on-connector state. Keyed by CLI binding id so each row
+  // displays its own progress independently. `probingCliBindingId` marks the
+  // row that currently has a live poll loop attached.
+  const [probingCliBindingId, setProbingCliBindingId] = useState<string | null>(null);
+  const [cliProbeResults, setCliProbeResults] = useState<Record<string, CliProbeResult>>({});
+  const [cliProbeErrors, setCliProbeErrors] = useState<Record<string, string>>({});
+  // `probeActiveRef` is incremented on each fresh probe click; the poll loop
+  // captures its value at start and bails if it no longer matches. This
+  // cancels in-flight polls on unmount or when a new probe starts.
+  const probeActiveRef = useRef(0);
+  useEffect(() => () => { probeActiveRef.current = -1; }, []);
 
   const selectedPreset = getPlanningConnectionPreset(selectedPresetId);
   const selectedCliPreset = getCliBindingPreset(selectedCliPresetId);
@@ -395,6 +423,105 @@ export default function AccountBindings() {
     setShowCliForm(true);
   }
 
+  function handleOpenCliEdit(binding: AccountBinding) {
+    setEditingCliId(binding.id);
+    setCliEditLabel(binding.label || '');
+    setCliEditModelId(binding.model_id || '');
+    setCliEditCommand(binding.cli_command || '');
+    setCliEditError('');
+  }
+
+  function handleCancelCliEdit() {
+    setEditingCliId(null);
+    setCliEditError('');
+  }
+
+  async function handleSaveCliEdit(binding: AccountBinding) {
+    const nextModelId = cliEditModelId.trim();
+    if (!nextModelId) {
+      setCliEditError('Model ID is required.');
+      return;
+    }
+    setCliEditSaving(true);
+    setCliEditError('');
+    try {
+      // Copilot #2: the Create path normalises blank labels to "default", so
+      // Update should not persist an empty-string label here. Omit the field
+      // entirely when the user cleared it; the backend keeps the existing
+      // label value instead of overwriting it with "".
+      const nextLabel = cliEditLabel.trim();
+      const payload: import('../types').UpdateAccountBindingPayload = {
+        model_id: nextModelId,
+        cli_command: cliEditCommand.trim(),
+      };
+      if (nextLabel !== '') {
+        payload.label = nextLabel;
+      }
+      await updateAccountBinding(binding.id, payload);
+      setEditingCliId(null);
+      setSuccess('CLI binding updated.');
+      await load();
+    } catch (err) {
+      setCliEditError(err instanceof Error ? err.message : 'Failed to update CLI binding');
+    } finally {
+      setCliEditSaving(false);
+    }
+  }
+
+  // P4-4: run a probe for a CLI binding on the user's first online connector,
+  // then poll every 2s up to 30s until the connector reports back. A fresh
+  // click (or component unmount) sets probeActiveRef to a new value which the
+  // loop checks every iteration to exit cleanly.
+  async function handleProbeOnConnector(binding: AccountBinding) {
+    probeActiveRef.current += 1;
+    const myProbeToken = probeActiveRef.current;
+    setCliProbeErrors(prev => { const next = { ...prev }; delete next[binding.id]; return next; });
+    setCliProbeResults(prev => { const next = { ...prev }; delete next[binding.id]; return next; });
+    setProbingCliBindingId(binding.id);
+    const cancelled = () => probeActiveRef.current !== myProbeToken;
+    try {
+      const connectorsResp = await listLocalConnectors();
+      if (cancelled()) return;
+      const online = connectorsResp.data.find(c => c.status === 'online');
+      if (!online) {
+        setCliProbeErrors(prev => ({ ...prev, [binding.id]: 'No online connector. Start `./bin/anpm-connector serve` on your paired machine first.' }));
+        setProbingCliBindingId(null);
+        return;
+      }
+      const enqueueResp = await probeBindingOnConnector(online.id, binding.id);
+      if (cancelled()) return;
+      const probeId = enqueueResp.data.probe_id;
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 2_000));
+        if (cancelled()) return;
+        try {
+          const statusResp = await getCliProbeResult(online.id, probeId);
+          if (cancelled()) return;
+          if (statusResp.data.status === 'completed' && statusResp.data.result) {
+            setCliProbeResults(prev => ({ ...prev, [binding.id]: statusResp.data.result! }));
+            setProbingCliBindingId(null);
+            return;
+          }
+          if (statusResp.data.status === 'not_found') {
+            setCliProbeErrors(prev => ({ ...prev, [binding.id]: 'Probe record was evicted before completion.' }));
+            setProbingCliBindingId(null);
+            return;
+          }
+        } catch {
+          // Transient poll failure — try again until the deadline.
+        }
+      }
+      if (cancelled()) return;
+      setCliProbeErrors(prev => ({ ...prev, [binding.id]: 'Probe still pending after 30s. The connector may be offline or busy; check the connector log.' }));
+      setProbingCliBindingId(null);
+    } catch (err) {
+      if (cancelled()) return;
+      setCliProbeErrors(prev => ({ ...prev, [binding.id]: err instanceof Error ? err.message : 'Failed to start probe' }));
+      setProbingCliBindingId(null);
+    }
+  }
+
   const apiBindings = bindings.filter(b => !b.provider_id.startsWith('cli:'));
   const cliBindings = bindings.filter(b => b.provider_id.startsWith('cli:'));
 
@@ -409,6 +536,9 @@ export default function AccountBindings() {
           </p>
           <p style={{ margin: '0.35rem 0 0', color: 'var(--text-muted)' }}>
             Only one active binding per provider is used for automation. Activating a binding automatically deactivates the previous active binding for the same provider.
+          </p>
+          <p style={{ margin: '0.35rem 0 0', color: 'var(--text-muted)' }}>
+            For CLI-subscription bindings that run on <strong>your own machine</strong>, see <Link to="/settings/connector">My Connector</Link> instead.
           </p>
         </div>
       </div>
@@ -611,7 +741,7 @@ export default function AccountBindings() {
           {/* CLI bindings section */}
           <div className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <h2 style={{ margin: 0 }}>CLI Bindings</h2>
+              <h2 style={{ margin: 0 }}>Server-side CLI Bindings <span style={{ fontSize: '0.75rem', fontWeight: 400, color: 'var(--text-muted)', marginLeft: '0.5rem' }}>(local-mode only)</span></h2>
               {isLocalMode && !showCliForm && (
                 <button className="btn btn-primary btn-sm" onClick={() => handleOpenCliForm()}>
                   + Add CLI Binding
@@ -632,6 +762,7 @@ export default function AccountBindings() {
                 {cliBindings.map(binding => {
                   const presetId = inferCliBindingPreset(binding.provider_id);
                   const preset = getCliBindingPreset(presetId);
+                  const isEditing = editingCliId === binding.id;
                   return (
                     <div className="card" key={binding.id} style={{ opacity: binding.is_active ? 1 : 0.6 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -652,21 +783,122 @@ export default function AccountBindings() {
                           )}
                         </div>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
-                          {!binding.is_primary && (
+                          {!isEditing && (
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => handleProbeOnConnector(binding)}
+                              disabled={probingCliBindingId === binding.id}
+                            >
+                              {probingCliBindingId === binding.id ? 'Testing…' : 'Test on connector'}
+                            </button>
+                          )}
+                          {!isEditing && !binding.is_primary && (
                             <button className="btn btn-ghost btn-sm" onClick={() => handleSetPrimary(binding.id)}>
                               Switch to this binding
                             </button>
                           )}
-                          <button className="btn btn-ghost btn-sm" onClick={() => handleDeleteCli(binding.id)}>
-                            Delete
-                          </button>
+                          {!isEditing && (
+                            <button className="btn btn-ghost btn-sm" onClick={() => handleOpenCliEdit(binding)}>
+                              Edit
+                            </button>
+                          )}
+                          {!isEditing && (
+                            <button className="btn btn-ghost btn-sm" onClick={() => handleDeleteCli(binding.id)}>
+                              Delete
+                            </button>
+                          )}
                         </div>
                       </div>
-                      <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                        <div>Provider: {binding.provider_id}</div>
-                        <div>Model: {binding.model_id}</div>
-                        {binding.cli_command && <div>CLI command: {binding.cli_command}</div>}
-                      </div>
+                      {isEditing ? (
+                        <div style={{ marginTop: '0.75rem', display: 'grid', gap: '0.75rem' }}>
+                          <div className="form-group">
+                            <label>Label</label>
+                            <input
+                              type="text"
+                              value={cliEditLabel}
+                              onChange={e => setCliEditLabel(e.target.value)}
+                              placeholder={preset.defaultLabel}
+                              disabled={cliEditSaving}
+                            />
+                          </div>
+                          <div className="form-group">
+                            <label>Model ID</label>
+                            <input
+                              type="text"
+                              value={cliEditModelId}
+                              onChange={e => setCliEditModelId(e.target.value)}
+                              placeholder={preset.modelPlaceholder}
+                              disabled={cliEditSaving}
+                              required
+                            />
+                          </div>
+                          <div className="form-group">
+                            <label>CLI command (optional — leave empty for PATH lookup)</label>
+                            <input
+                              type="text"
+                              value={cliEditCommand}
+                              onChange={e => setCliEditCommand(e.target.value)}
+                              placeholder={preset.defaultCliCommand}
+                              disabled={cliEditSaving}
+                            />
+                          </div>
+                          {cliEditError && <div className="error-banner">{cliEditError}</div>}
+                          <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              onClick={() => handleSaveCliEdit(binding)}
+                              disabled={cliEditSaving}
+                            >
+                              {cliEditSaving ? 'Saving…' : 'Save'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={handleCancelCliEdit}
+                              disabled={cliEditSaving}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                          <div>Provider: {binding.provider_id}</div>
+                          <div>Model: {binding.model_id}</div>
+                          {binding.cli_command && <div>CLI command: {binding.cli_command}</div>}
+                        </div>
+                      )}
+                      {cliProbeResults[binding.id] && (
+                        <div style={{
+                          marginTop: '0.5rem', padding: '0.5rem 0.75rem', borderRadius: '6px',
+                          background: cliProbeResults[binding.id].ok ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.1)',
+                          border: `1px solid ${cliProbeResults[binding.id].ok ? 'rgba(34,197,94,0.25)' : 'rgba(239,68,68,0.3)'}`,
+                          fontSize: '0.85rem',
+                        }}>
+                          {cliProbeResults[binding.id].ok ? (
+                            <>
+                              <div style={{ color: 'var(--success, #4ade80)', fontWeight: 600 }}>
+                                ✓ Connector replied in {cliProbeResults[binding.id].latency_ms} ms
+                              </div>
+                              {cliProbeResults[binding.id].content && (
+                                <div style={{ marginTop: '0.25rem', color: 'var(--text-muted)' }}>
+                                  Response: &ldquo;{cliProbeResults[binding.id].content}&rdquo;
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <div style={{ color: 'var(--danger, #f87171)' }}>
+                              ✗ {cliProbeResults[binding.id].error_message || 'Probe failed'}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {cliProbeErrors[binding.id] && !cliProbeResults[binding.id] && (
+                        <div style={{ marginTop: '0.5rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', fontSize: '0.85rem', color: 'var(--danger, #f87171)' }}>
+                          ✗ {cliProbeErrors[binding.id]}
+                        </div>
+                      )}
                     </div>
                   );
                 })}

@@ -20,6 +20,10 @@ type AccountBindingHandler struct {
 	// subprocess-execution surface; multi-user server mode would let one
 	// user's cli_command run as the connector host's identity.
 	localMode bool
+	// connectors is optional; when set the Delete path scrubs any pending
+	// or completed CLI-binding probe entries across all user connectors.
+	// Wired in main.go via WithLocalConnectorStore. Added in Phase 4 (P4-4).
+	connectors *store.LocalConnectorStore
 }
 
 func NewAccountBindingHandler(s *store.AccountBindingStore) *AccountBindingHandler {
@@ -34,6 +38,17 @@ func (h *AccountBindingHandler) WithLocalMode(localMode bool) *AccountBindingHan
 		return nil
 	}
 	h.localMode = localMode
+	return h
+}
+
+// WithLocalConnectorStore enables cleanup of CLI-binding probe entries when a
+// binding is deleted (P4-4). Optional: without it, delete still succeeds and
+// stale probe rows are eventually GC'd by the 24h retention sweep.
+func (h *AccountBindingHandler) WithLocalConnectorStore(connectors *store.LocalConnectorStore) *AccountBindingHandler {
+	if h == nil {
+		return nil
+	}
+	h.connectors = connectors
 	return h
 }
 
@@ -150,6 +165,14 @@ func (h *AccountBindingHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.Delete(id, user.ID); err != nil {
 		writeAccountBindingError(w, err)
 		return
+	}
+	// Best-effort scrub of probe metadata referencing this binding. A failure
+	// here does not un-do the delete; the 24h retention sweep will catch
+	// leftovers.
+	if h.connectors != nil {
+		if err := h.connectors.ScrubCliProbesForBinding(user.ID, id); err != nil {
+			log.Printf("account_bindings Delete: scrub probe metadata for binding %s: %v", id, err)
+		}
 	}
 	writeSuccess(w, http.StatusOK, nil, nil)
 }

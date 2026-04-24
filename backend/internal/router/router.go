@@ -215,6 +215,8 @@ func New(deps Deps) http.Handler {
 				r.Post("/me/local-connectors/pairing-sessions", deps.LocalConnectorHandler.CreatePairingSession)
 				r.Delete("/me/local-connectors/{id}", deps.LocalConnectorHandler.Revoke)
 				r.Get("/me/local-connectors/run-stats", deps.LocalConnectorHandler.RunStats)
+				r.Post("/me/local-connectors/{id}/probe-binding", deps.LocalConnectorHandler.ProbeBinding)
+				r.Get("/me/local-connectors/{id}/probe-binding/{probe_id}", deps.LocalConnectorHandler.GetProbeResult)
 			}
 			if deps.RemoteModelsHandler != nil {
 				r.Post("/me/remote-models", deps.RemoteModelsHandler.Fetch)

@@ -1364,6 +1364,104 @@ a:hover {
   color: var(--text-muted);
 }
 
+/* P4-2: Model Settings hub card grid. */
+.model-hub-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+.model-hub-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.model-hub-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.model-hub-card-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.model-hub-card-tag {
+  align-self: flex-start;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+}
+.model-hub-mode-note {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 400;
+  margin-left: 0.25rem;
+}
+.model-hub-bullets {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.model-hub-actions {
+  margin-top: auto;
+}
+.model-hub-disabled {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+/* P4-1: "More ▾" popover grouping demoted tabs (Drift, Activity). */
+.project-rail-more {
+  display: flex;
+  flex-direction: column;
+}
+.project-rail-more-menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  padding: 0.25rem;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+.project-rail-more-menu button {
+  background: transparent;
+  border: 0;
+  text-align: left;
+  padding: 0.45rem 0.65rem;
+  border-radius: 0.3rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.project-rail-more-menu button:hover {
+  color: var(--text);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.03));
+}
+.project-rail-more-menu button.is-active {
+  background: var(--primary);
+  color: white;
+}
+
 @media (max-width: 880px) {
   .project-rail-layout {
     grid-template-columns: 1fr;
@@ -1372,6 +1470,10 @@ a:hover {
     position: static;
     flex-direction: row;
     overflow-x: auto;
+  }
+  .project-rail-more-menu {
+    position: static;
+    margin-top: 0.25rem;
   }
 }
 

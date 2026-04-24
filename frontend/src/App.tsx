@@ -7,6 +7,7 @@ import Login from './pages/Login'
 import Setup from './pages/Setup'
 import APIKeys from './pages/APIKeys'
 import ModelSettings from './pages/ModelSettings'
+import ModelSettingsHub from './pages/ModelSettingsHub'
 import AccountBindings from './pages/AccountBindings'
 import MyConnector from './pages/MyConnector'
 import LocalServer from './pages/LocalServer'
@@ -276,6 +277,7 @@ function App() {
             <Route path="/settings/connector" element={<MyConnector />} />
             <Route path="/settings/account-bindings" element={<AccountBindings />} />
             <Route path="/settings/models" element={<ModelSettings canEdit={true} />} />
+            <Route path="/settings/models-hub" element={<ModelSettingsHub />} />
             <Route path="/settings/api-keys" element={<APIKeys />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
@@ -360,12 +362,15 @@ function App() {
               </button>
               {showAccountMenu && (
                 <div className="account-dropdown" role="menu">
+                  <Link role="menuitem" to="/settings/models-hub" onClick={() => setShowAccountMenu(false)}>Model Settings</Link>
+                  <div className="account-dropdown-sep" />
                   <Link role="menuitem" to="/settings/connector" onClick={() => setShowAccountMenu(false)}>My Connector</Link>
-                  <Link role="menuitem" to="/settings/api-keys" onClick={() => setShowAccountMenu(false)}>API Keys</Link>
                   <Link role="menuitem" to="/settings/account-bindings" onClick={() => setShowAccountMenu(false)}>Account Bindings</Link>
                   {me.role === 'admin' && (
-                    <Link role="menuitem" to="/settings/models" onClick={() => setShowAccountMenu(false)}>Model Settings</Link>
+                    <Link role="menuitem" to="/settings/models" onClick={() => setShowAccountMenu(false)}>Shared API Key (admin)</Link>
                   )}
+                  <div className="account-dropdown-sep" />
+                  <Link role="menuitem" to="/settings/api-keys" onClick={() => setShowAccountMenu(false)}>API Keys</Link>
                   <div className="account-dropdown-sep" />
                   <button role="menuitem" type="button" onClick={() => { setShowAccountMenu(false); handleLogout() }}>Logout</button>
                 </div>
@@ -464,6 +469,7 @@ function App() {
           <Route path="/settings/account-bindings" element={<AccountBindings />} />
           <Route path="/settings/connector" element={<MyConnector />} />
           <Route path="/settings/models" element={<ModelSettings canEdit={me.role === 'admin'} />} />
+          <Route path="/settings/models-hub" element={<ModelSettingsHub />} />
           {/* Legacy redirects so old bookmarks keep working. */}
           <Route path="/api-keys" element={<Navigate to="/settings/api-keys" replace />} />
           <Route path="/account-bindings" element={<Navigate to="/settings/account-bindings" replace />} />

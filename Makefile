@@ -1,6 +1,6 @@
 # Agent Native PM — Makefile
 
-.PHONY: all build build-backend build-anpm build-connector test test-local lint dev serve clean release docker-build docker-up docker-down lint-governance lint-rules lint-docs budget-report validate-prompt-budget decisions-conflict-check test-frontend
+.PHONY: all build build-backend build-anpm build-connector test test-local lint dev serve clean release docker-build docker-up docker-down lint-governance lint-rules lint-docs budget-report validate-prompt-budget decisions-conflict-check test-frontend pre-pr pre-pr-fast
 
 # Default
 all: build
@@ -29,6 +29,15 @@ test-integration:
 lint:
 	cd backend && go vet ./...
 	$(MAKE) lint-frontend
+
+# Mandatory pre-PR verification. `make pre-pr` runs the full pipeline that
+# CI runs. `make pre-pr-fast` skips the PostgreSQL suite and the npm build
+# for quicker iteration — NOT a substitute before opening a PR.
+pre-pr:
+	bash scripts/pre-pr-check.sh
+
+pre-pr-fast:
+	bash scripts/pre-pr-check.sh --fast
 
 lint-backend:
 	cd backend && go vet ./...

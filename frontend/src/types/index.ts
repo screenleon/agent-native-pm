@@ -204,6 +204,7 @@ export interface UpdateAccountBindingPayload {
   clear_api_key?: boolean;
   is_active?: boolean;
   is_primary?: boolean;
+  cli_command?: string;
 }
 
 export interface LocalConnector {

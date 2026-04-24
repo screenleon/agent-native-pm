@@ -546,3 +546,37 @@ export async function getConnectorRunStats() {
   return request<ConnectorRunStats>('/me/local-connectors/run-stats');
 }
 
+// ─── P4-4 CLI-binding probe on connector ─────────────────────────────────────
+
+export interface CliProbeResult {
+  probe_id: string;
+  binding_id?: string;
+  ok: boolean;
+  latency_ms: number;
+  content?: string;
+  error_kind?: string;
+  error_message?: string;
+  completed_at: string;
+}
+
+export interface CliProbeStatusResponse {
+  status: 'pending' | 'completed' | 'not_found';
+  result?: CliProbeResult;
+}
+
+export async function probeBindingOnConnector(connectorId: string, bindingId: string) {
+  return request<{ probe_id: string }>(
+    `/me/local-connectors/${encodeURIComponent(connectorId)}/probe-binding`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ binding_id: bindingId }),
+    },
+  );
+}
+
+export async function getCliProbeResult(connectorId: string, probeId: string) {
+  return request<CliProbeStatusResponse>(
+    `/me/local-connectors/${encodeURIComponent(connectorId)}/probe-binding/${encodeURIComponent(probeId)}`,
+  );
+}
+

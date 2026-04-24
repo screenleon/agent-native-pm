@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -49,6 +50,17 @@ type Service struct {
 	mu               sync.Mutex
 	knownCliBindings map[string]knownCliBinding
 	lastCliHealthyAt *time.Time // most recent successful probe across all bindings
+	// P4-4 probe state. Pending probes received from the last heartbeat
+	// response are dispatched one at a time by a worker goroutine so they
+	// neither block heartbeats nor run concurrently (keeps load predictable
+	// on a shared subscription CLI). Completed results are buffered here
+	// until the next heartbeat picks them up.
+	pendingProbeIDs  map[string]bool
+	probeResultsOut  []models.CliProbeResult
+	probeWorkerOnce  sync.Once
+	probeWorkerWake  chan struct{}
+	probeWorkerMu    sync.Mutex
+	probeQueue       []models.PendingCliProbeRequest
 }
 
 type knownCliBinding struct {
@@ -73,6 +85,13 @@ func (s *Service) Run(ctx context.Context) error {
 		cliHealthInterval = 5 * time.Minute
 	}
 
+	// P4-4 probe worker starts at Run() time and blocks on probeWorkerWake /
+	// a 5s tick — effectively idle until a heartbeat response delivers a
+	// pending probe. Starting here (rather than lazily on first probe)
+	// keeps the heartbeat goroutine off the start-worker path and avoids a
+	// subtle race where the first heartbeat could miss the wake signal.
+	s.ensureProbeWorker(ctx)
+
 	lastError := ""
 	nextHeartbeat := time.Time{}
 	for {
@@ -87,18 +106,30 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 			s.mu.Lock()
 			healthyAt := s.lastCliHealthyAt
+			// Drain any probe results produced since the previous heartbeat.
+			probeResults := s.probeResultsOut
+			s.probeResultsOut = nil
 			s.mu.Unlock()
 			connector, err := s.Client.Heartbeat(ctx, models.LocalConnectorHeartbeatRequest{
 				Capabilities:     buildCapabilities(s.State.Adapter),
 				LastError:        lastError,
 				LastCliHealthyAt: healthyAt,
+				CliProbeResults:  probeResults,
 			})
 			if err != nil {
 				lastError = err.Error()
 				fmt.Fprintf(s.Stderr, "heartbeat failed: %s\n", lastError)
+				// On failure re-queue the results so they are sent next time.
+				if len(probeResults) > 0 {
+					s.mu.Lock()
+					s.probeResultsOut = append(probeResults, s.probeResultsOut...)
+					s.mu.Unlock()
+				}
 			} else {
 				lastError = ""
 				fmt.Fprintf(s.Stdout, "connector online: %s (%s)\n", connector.Label, connector.Status)
+				// Pick up any pending probes the server announced via metadata.
+				s.enqueuePendingProbesFromMetadata(connector)
 			}
 			nextHeartbeat = time.Now().Add(heartbeatInterval)
 		}
@@ -294,4 +325,123 @@ func filepathBase(path string) string {
 		return ""
 	}
 	return filepath.Base(path)
+}
+
+// ─── P4-4 probe pipeline ────────────────────────────────────────────────────
+
+// enqueuePendingProbesFromMetadata reads pending_cli_probe_requests out of the
+// heartbeat response's connector.metadata blob, dedups against probes that are
+// already queued or in-flight, and wakes the probe worker.
+func (s *Service) enqueuePendingProbesFromMetadata(connector *models.LocalConnector) {
+	if connector == nil || connector.Metadata == nil {
+		return
+	}
+	raw, ok := connector.Metadata["pending_cli_probe_requests"]
+	if !ok {
+		return
+	}
+	pending, ok := decodePendingProbes(raw)
+	if !ok || len(pending) == 0 {
+		return
+	}
+	s.probeWorkerMu.Lock()
+	if s.pendingProbeIDs == nil {
+		s.pendingProbeIDs = map[string]bool{}
+	}
+	added := 0
+	for _, p := range pending {
+		if p.ProbeID == "" || s.pendingProbeIDs[p.ProbeID] {
+			continue
+		}
+		s.pendingProbeIDs[p.ProbeID] = true
+		s.probeQueue = append(s.probeQueue, p)
+		added++
+	}
+	s.probeWorkerMu.Unlock()
+	if added > 0 {
+		select {
+		case s.probeWorkerWake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// ensureProbeWorker starts the background probe runner once. Subsequent Run()
+// invocations are a no-op. The worker exits when ctx is cancelled.
+func (s *Service) ensureProbeWorker(ctx context.Context) {
+	s.probeWorkerOnce.Do(func() {
+		s.probeWorkerWake = make(chan struct{}, 1)
+		go s.runProbeWorker(ctx)
+	})
+}
+
+func (s *Service) runProbeWorker(ctx context.Context) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		next, ok := s.dequeueNextProbe()
+		if !ok {
+			select {
+			case <-ctx.Done():
+				return
+			case <-s.probeWorkerWake:
+				continue
+			case <-time.After(5 * time.Second):
+				continue
+			}
+		}
+		fmt.Fprintf(s.Stdout, "cli probe [%s] binding=%s model=%s — running…\n", next.ProbeID, next.BindingID, next.ModelID)
+		result := ExecuteProbe(ctx, next)
+		if result.OK {
+			fmt.Fprintf(s.Stdout, "cli probe [%s] ok in %d ms\n", next.ProbeID, result.LatencyMS)
+		} else {
+			fmt.Fprintf(s.Stderr, "cli probe [%s] failed: %s\n", next.ProbeID, result.ErrorMessage)
+		}
+		s.mu.Lock()
+		s.probeResultsOut = append(s.probeResultsOut, result)
+		s.mu.Unlock()
+		s.probeWorkerMu.Lock()
+		delete(s.pendingProbeIDs, next.ProbeID)
+		s.probeWorkerMu.Unlock()
+	}
+}
+
+func (s *Service) dequeueNextProbe() (models.PendingCliProbeRequest, bool) {
+	s.probeWorkerMu.Lock()
+	defer s.probeWorkerMu.Unlock()
+	if len(s.probeQueue) == 0 {
+		return models.PendingCliProbeRequest{}, false
+	}
+	next := s.probeQueue[0]
+	s.probeQueue = s.probeQueue[1:]
+	return next, true
+}
+
+// decodePendingProbes round-trips the untyped metadata value through JSON
+// into the typed struct slice, matching the server-side readPendingProbes
+// pattern exactly. Returns (nil, false) on any decode failure so the caller
+// can log and retry on the next heartbeat without crashing the worker loop.
+func decodePendingProbes(raw interface{}) ([]models.PendingCliProbeRequest, bool) {
+	if raw == nil {
+		return nil, false
+	}
+	bytes, err := json.Marshal(raw)
+	if err != nil {
+		return nil, false
+	}
+	var out []models.PendingCliProbeRequest
+	if err := json.Unmarshal(bytes, &out); err != nil {
+		return nil, false
+	}
+	// Drop any entries missing the fields the worker needs so a malformed
+	// row does not loop forever.
+	filtered := out[:0]
+	for _, p := range out {
+		if strings.TrimSpace(p.ProbeID) == "" || strings.TrimSpace(p.BindingID) == "" {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+	return filtered, true
 }
