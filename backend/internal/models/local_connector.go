@@ -154,6 +154,10 @@ type ConnectorBacklogCandidateDraft struct {
 	Rank               int      `json:"rank,omitempty"`
 	Evidence           []string `json:"evidence,omitempty"`
 	DuplicateTitles    []string `json:"duplicate_titles,omitempty"`
+	// ExecutionRole is an optional hint from the planner about which
+	// specialist should execute this candidate. Phase 5 B2; planners do
+	// not populate it today. Phase 6 will.
+	ExecutionRole string `json:"execution_role,omitempty"`
 }
 
 type LocalConnectorClaimNextRunResponse struct {

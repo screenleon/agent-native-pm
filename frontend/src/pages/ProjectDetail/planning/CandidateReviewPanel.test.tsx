@@ -71,6 +71,7 @@ function makeCandidate(overrides: Partial<BacklogCandidate> = {}): BacklogCandid
       },
     },
     duplicate_titles: [],
+    execution_role: null,
     created_at: '2026-04-22T00:00:00Z',
     updated_at: '2026-04-22T00:00:00Z',
     ...(overrides as Partial<BacklogCandidate>),
@@ -259,5 +260,43 @@ describe('<CandidateReviewPanel />', () => {
     const { default: userEvent } = await import('@testing-library/user-event')
     await userEvent.click(screen.getByRole('button', { name: /Jump to drift signal API surface/i }))
     expect(onViewDriftSignal).toHaveBeenCalledWith('ds-7')
+  })
+
+  // ── Phase 5 B3 ──────────────────────────────────────────────────────────
+
+  // T-P5-B3-6: execution_role chip appears when the selected candidate
+  // has an execution_role set.
+  it('renders the execution_role chip when candidate.execution_role is set', () => {
+    const candidate = makeCandidate({ execution_role: 'backend-architect' })
+    renderPanel({ candidates: [candidate], selectedCandidate: candidate })
+    expect(screen.getByText(/Role: backend-architect/i)).toBeInTheDocument()
+  })
+
+  it('omits the execution_role chip when candidate.execution_role is null', () => {
+    renderPanel()
+    expect(screen.queryByText(/Role: /i)).not.toBeInTheDocument()
+  })
+
+  // T-P5-B3-7: Manual / Auto-dispatch radio group renders only when the
+  // onSelectedExecutionModeChange callback is provided. Auto-dispatch is
+  // disabled with the "(coming in Phase 6)" label.
+  it('renders the Manual + Auto-dispatch radio group only when onSelectedExecutionModeChange is provided', () => {
+    const onChange = vi.fn()
+    renderPanel({ selectedExecutionMode: 'manual', onSelectedExecutionModeChange: onChange })
+    expect(screen.getByLabelText(/Manual/i)).toBeInTheDocument()
+    expect(screen.getByText(/coming in Phase 6/i)).toBeInTheDocument()
+  })
+
+  it('disables the Auto-dispatch radio even when selected, reserving real dispatch for Phase 6', () => {
+    const onChange = vi.fn()
+    renderPanel({ selectedExecutionMode: 'role_dispatch', onSelectedExecutionModeChange: onChange })
+    // Query the Auto-dispatch radio specifically by its nested text label.
+    const autoRadio = screen.getByRole('radio', { name: /Auto-dispatch/i })
+    expect(autoRadio).toBeDisabled()
+  })
+
+  it('hides the execution mode radio group when onSelectedExecutionModeChange is not wired', () => {
+    renderPanel()
+    expect(screen.queryByText(/coming in Phase 6/i)).not.toBeInTheDocument()
   })
 })

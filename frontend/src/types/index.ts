@@ -416,6 +416,9 @@ export interface BacklogCandidate {
   evidence: string[];
   evidence_detail: PlanningEvidenceDetail;
   duplicate_titles: string[];
+  // Phase 5 B2: execution specialist hint (nullable). Catalog enforcement
+  // lands in Phase 6; for now any string is accepted.
+  execution_role: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -435,6 +438,10 @@ export interface UpdateBacklogCandidatePayload {
   title?: string;
   description?: string;
   status?: 'draft' | 'approved' | 'rejected';
+  // Phase 5 B2: set to a role id to earmark the candidate for auto-dispatch;
+  // empty string clears (NULL in DB). Not validated against the role catalog
+  // on the server today; see DECISIONS.md 2026-04-24 Phase 5 B2.
+  execution_role?: string;
 }
 
 export interface ApplyBacklogCandidateResponse {

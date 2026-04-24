@@ -89,6 +89,13 @@ interface CandidateReviewPanelProps {
   onApplyCandidate: () => void
   onResetCandidateForm: () => void
 
+  // Phase 5 B3: execution mode radio group. `manual` is the Phase 4
+  // behaviour; `role_dispatch` is a forward-looking marker. Both props
+  // are optional — callers that do not yet wire the radio get the
+  // pre-Phase-5 UI with no visible mode selector.
+  selectedExecutionMode?: 'manual' | 'role_dispatch'
+  onSelectedExecutionModeChange?: (mode: 'manual' | 'role_dispatch') => void
+
   /**
    * Optional evidence-link callbacks. When provided, the matching
    * evidence row becomes a clickable affordance:
@@ -132,6 +139,8 @@ export function CandidateReviewPanel({
   onPersistReview,
   onApplyCandidate,
   onResetCandidateForm,
+  selectedExecutionMode,
+  onSelectedExecutionModeChange,
   onViewDocumentById,
   onViewDriftSignal,
 }: CandidateReviewPanelProps) {
@@ -484,7 +493,67 @@ export function CandidateReviewPanel({
                   <span>Updated {formatDateTime(selectedCandidate.updated_at)}</span>
                   <span>Run {selectedRun.status}</span>
                   <span>{planningSelectionSourceLabel(selectedRun.selection_source)}</span>
+                  {selectedCandidate.execution_role && (
+                    <span
+                      title="Execution specialist earmarked for Phase 6 auto-dispatch"
+                      style={{
+                        background: 'var(--bg-hover, rgba(255, 255, 255, 0.05))',
+                        border: '1px solid var(--border)',
+                        borderRadius: '999px',
+                        padding: '0.1rem 0.5rem',
+                        fontSize: '0.78rem',
+                      }}
+                    >
+                      Role: {selectedCandidate.execution_role}
+                    </span>
+                  )}
                 </div>
+
+                {onSelectedExecutionModeChange && (
+                  <div
+                    className="planning-execution-mode"
+                    role="radiogroup"
+                    aria-labelledby="execution-mode-label"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.75rem',
+                      marginTop: '0.5rem',
+                      fontSize: '0.88rem',
+                    }}
+                  >
+                    <span id="execution-mode-label" style={{ color: 'var(--text-muted)' }}>Execution:</span>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        name="execution-mode"
+                        checked={selectedExecutionMode !== 'role_dispatch'}
+                        onChange={() => onSelectedExecutionModeChange('manual')}
+                      />
+                      Manual
+                    </label>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.3rem',
+                        cursor: 'not-allowed',
+                        color: 'var(--text-muted)',
+                      }}
+                      title="Reserved for Phase 6 — will auto-dispatch the task to the specialist named in execution_role"
+                    >
+                      <input
+                        type="radio"
+                        name="execution-mode"
+                        checked={selectedExecutionMode === 'role_dispatch'}
+                        onChange={() => onSelectedExecutionModeChange('role_dispatch')}
+                        disabled
+                        aria-disabled="true"
+                      />
+                      Auto-dispatch <span style={{ fontSize: '0.76rem' }}>(coming in Phase 6)</span>
+                    </label>
+                  </div>
+                )}
 
                 <div className="planning-candidate-actions">
                   <button className="btn btn-primary" onClick={() => onPersistReview()} disabled={savingCandidate || applyingCandidate || !candidateFormDirty || selectedCandidateApplied}>

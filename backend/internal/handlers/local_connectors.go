@@ -504,6 +504,7 @@ func connectorDraftsToBacklogCandidates(candidates []models.ConnectorBacklogCand
 			Rank:               rank,
 			Evidence:           append([]string(nil), candidate.Evidence...),
 			DuplicateTitles:    append([]string(nil), candidate.DuplicateTitles...),
+			ExecutionRole:      strings.TrimSpace(candidate.ExecutionRole),
 		})
 	}
 	return drafts, nil

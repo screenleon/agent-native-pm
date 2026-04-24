@@ -171,15 +171,16 @@ This preserves a single JSON API surface for both humans and agents.
 
 ## Near-Term Architectural Direction
 
-Phase 2 (Planning Workspace consolidation) and Phase 3 (Local-mode completeness + evidence cross-links + Dashboard aggregation) are both shipped and merged to `main`. Phase 4 (UX debt from early-operator friction) is active — see `docs/phase4-plan.md`. Phase 4 adds:
+Phase 2 (Planning Workspace consolidation), Phase 3 (Local-mode completeness + evidence cross-links + Dashboard aggregation), and Phase 4 (UX debt from early-operator friction, PR #21) are shipped and merged to `main`. Phase 5 (prompt externalization + execution role library) is active — see `docs/phase5-plan.md`. Phase 5 adds:
 
-- a ProjectDetail primary/secondary rail split (Workspace · Overview · Tasks · Documents primary; Drift + Activity under "More ▾"; Settings behind a gear icon),
-- a "Model Settings" hub page that disambiguates the three execution paths (hosted API, server-side CLI, local-machine CLI via connector),
-- inline edit for CLI bindings,
-- a connector-side CLI probe that exercises the CLI + model end-to-end and reports back via the existing heartbeat round-trip.
+- a single markdown source for every agent prompt (`backend/internal/prompts/`) consumed by both the Go built-in adapter and the Python reference adapters — ending the two-language drift risk flagged during Phase 3 S5b,
+- a role-prompt library of six execution specialists (backend / UI / DB / API / tests / code review) under `backend/internal/prompts/roles/` — the language basis for Phase 6 auto-dispatch, not invoked yet,
+- `backlog_candidates.execution_role` (nullable) and an `execution_mode` breadcrumb on the apply endpoint, so operators can earmark candidates for future auto-dispatch without changing Phase 4 behaviour today.
+
+Phase 4 was: a ProjectDetail primary/secondary rail split (Workspace · Overview · Tasks · Documents primary; Drift + Activity under "More ▾"; Settings behind a gear icon), a "Model Settings" hub page disambiguating the three execution paths, inline edit for CLI bindings, and a connector-side CLI probe that exercises the CLI + model end-to-end via the heartbeat round-trip.
 
 Structural rules from the 2026-04-22 Tier-3 decision remain in force: new product additions to `ProjectDetail` MUST land as siblings under `frontend/src/pages/ProjectDetail/` rather than appending to the existing function. The Planning Workspace must remain draft-first, traceable, and human-approved before creating tasks.
 
-Deferred work not on the near-term path: Copilot CLI adapter (contract mismatch with the current adapter assumptions), Path B server mode (needs a separate design for admin binary allowlist + interpreter denylist + sandboxing), SSE-broker horizontal scaling (triggers only on multi-instance deployment), and Phase 4 Collaboration items from `docs/product-blueprint.md` (auth/roles/search/notifications) which will form a future Phase 5.
+Deferred work not on the near-term path: Copilot CLI adapter (contract mismatch with the current adapter assumptions), Path B server mode (needs a separate design for admin binary allowlist + interpreter denylist + sandboxing), SSE-broker horizontal scaling (triggers only on multi-instance deployment), and the Collaboration items from `docs/product-blueprint.md` (auth/roles/search/notifications) which will form a future phase.
 
 Source: `[agent:documentation-architect]`, `[agent:backend-architect]`

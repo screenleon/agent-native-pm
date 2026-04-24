@@ -18,6 +18,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/planning/wire"
+	"github.com/screenleon/agent-native-pm/internal/prompts"
 )
 
 const (
@@ -230,56 +231,33 @@ func builtinAdapterType(run *models.PlanningRun) string {
 	}
 }
 
-// buildBuiltinPrompt builds the full prompt string for the chosen adapter type.
+// buildBuiltinPrompt renders the prompt for the chosen adapter type. The
+// prompt body itself lives as markdown in backend/internal/prompts/ (see
+// docs/phase5-plan.md §3 A1). This function only computes the variable
+// map the template needs and delegates rendering — both this Go path and
+// the Python reference adapters share the same canonical source files.
 func buildBuiltinPrompt(adapterType string, input ExecJSONInput) string {
-	switch adapterType {
-	case adapterTypeWhatsnext:
-		return buildWhatsnextPrompt(input)
-	default:
-		return buildBacklogPrompt(input)
+	vars := builtinPromptVars(input)
+	name := "backlog"
+	if adapterType == adapterTypeWhatsnext {
+		name = "whatsnext"
+		vars["SCOPE_SECTION"] = buildWhatsnextScopeSection(input.Requirement)
+		vars["CONTEXT"] = buildContextSnapshotWhatsnext(input.PlanningContext)
 	}
+	out, err := prompts.Render(name, vars)
+	if err != nil {
+		// The prompt files are embedded at build time so a missing file
+		// here would only fire on a broken build. Degrading to a terse
+		// fallback keeps the connector loop running rather than crashing.
+		return fmt.Sprintf("prompt render error for %q: %v", name, err)
+	}
+	return out
 }
 
-// jsonSchemaFence is the literal fenced JSON schema block included in prompts.
-// Defined as a const to avoid backtick-in-format-string issues.
-const backlogJSONSchema = "```json\n" +
-	"{\n" +
-	"  \"candidates\": [\n" +
-	"    {\n" +
-	"      \"title\": \"string (<= 120 chars)\",\n" +
-	"      \"description\": \"string\",\n" +
-	"      \"rationale\": \"string (why this is the right next step)\",\n" +
-	"      \"priority_score\": \"number between 0 and 1\",\n" +
-	"      \"confidence\": \"number between 0 and 1\",\n" +
-	"      \"rank\": \"integer starting at 1 (lower = higher priority)\",\n" +
-	"      \"evidence\": [\"string, ...\"],\n" +
-	"      \"duplicate_titles\": [\"string, ...\"]\n" +
-	"    }\n" +
-	"  ]\n" +
-	"}\n" +
-	"```"
-
-const whatsnextJSONSchema = "```json\n" +
-	"{\n" +
-	"  \"candidates\": [\n" +
-	"    {\n" +
-	"      \"title\": \"string (<= 120 chars, framed as a strategic direction)\",\n" +
-	"      \"description\": \"string (scope, expected impact)\",\n" +
-	"      \"rationale\": \"string (why NOW)\",\n" +
-	"      \"validation_criteria\": \"string (how to know if this is working in 1-4 weeks)\",\n" +
-	"      \"po_decision\": \"string (key decision or trade-off the PO must make)\",\n" +
-	"      \"priority_score\": \"number between 0 and 1\",\n" +
-	"      \"confidence\": \"number between 0 and 1\",\n" +
-	"      \"rank\": \"integer starting at 1\",\n" +
-	"      \"evidence\": [\"string, ...\"],\n" +
-	"      \"duplicate_titles\": [\"string, ...\"]\n" +
-	"    }\n" +
-	"  ]\n" +
-	"}\n" +
-	"```"
-
-// buildBacklogPrompt ports _build_prompt from backlog_adapter.py.
-func buildBacklogPrompt(input ExecJSONInput) string {
+// builtinPromptVars computes the shared variable map used by both the
+// backlog and whatsnext prompts. whatsnext overrides CONTEXT + adds
+// SCOPE_SECTION in buildBuiltinPrompt itself.
+func builtinPromptVars(input ExecJSONInput) map[string]string {
 	maxCandidates := input.RequestedMaxCandidates
 	if maxCandidates <= 0 {
 		maxCandidates = builtinDefaultMaxCandidates
@@ -294,127 +272,38 @@ func buildBacklogPrompt(input ExecJSONInput) string {
 		projectDescription = strings.TrimSpace(input.Project.Description)
 	}
 
+	// Pre-compute the Description line so the template stays branch-free.
+	descLine := ""
+	if projectDescription != "" {
+		descLine = "Description: " + projectDescription
+	}
+
 	schemaVersion := "none"
 	if input.PlanningContext != nil {
 		schemaVersion = input.PlanningContext.SchemaVersion
 	}
 
-	var sb strings.Builder
-	sb.WriteString("You are a backlog planner for the software project \"")
-	sb.WriteString(projectName)
-	sb.WriteString("\".\n\n")
-	sb.WriteString(fmt.Sprintf("Decompose the requirement below into AT MOST %d concrete backlog\n", maxCandidates))
-	sb.WriteString("candidates (tasks) scoped to THIS project. Each candidate must:\n")
-	sb.WriteString("  1. Be independently implementable within \"")
-	sb.WriteString(projectName)
-	sb.WriteString("\".\n")
-	sb.WriteString("  2. Reference specific evidence from the project context when relevant\n")
-	sb.WriteString("     (open tasks, documents, drift signals, sync failures, recent agent runs).\n")
-	sb.WriteString("     Evidence items MUST be strings of the form \"doc:<id>\", \"task:<id>\",\n")
-	sb.WriteString("     \"drift:<id>\", \"sync:<id>\", or \"agent_run:<id>\" using the exact ids from\n")
-	sb.WriteString("     the context below. Omit evidence if none applies.\n")
-	sb.WriteString("  3. Not duplicate any existing open task. If you think a candidate is close\n")
-	sb.WriteString("     to an existing task, add that task title to \"duplicate_titles\".\n\n")
-	sb.WriteString("Return STRICT JSON inside a single ")
-	sb.WriteString("```json")
-	sb.WriteString(" fenced code block with this schema:\n")
-	sb.WriteString(backlogJSONSchema)
-	sb.WriteString("\n\nDo not include any prose outside the fenced JSON block. Do not invent ids\n")
-	sb.WriteString("that are not in the context.\n\n")
-	sb.WriteString("=== Project ===\n")
-	sb.WriteString("Name: ")
-	sb.WriteString(projectName)
-	sb.WriteString("\n")
-	if projectDescription != "" {
-		sb.WriteString("Description: ")
-		sb.WriteString(projectDescription)
-		sb.WriteString("\n")
+	return map[string]string{
+		"PROJECT_NAME":             projectName,
+		"PROJECT_DESCRIPTION_LINE": descLine,
+		"REQUIREMENT":              buildRequirementSnippet(input.Requirement),
+		"MAX_CANDIDATES":           fmt.Sprintf("%d", maxCandidates),
+		"CONTEXT":                  buildContextSnippet(input.PlanningContext),
+		"SCHEMA_VERSION":           schemaVersion,
+		"SCOPE_SECTION":            "", // backlog does not use this; whatsnext overrides
 	}
-	sb.WriteString("\n=== Requirement ===\n")
-	sb.WriteString(buildRequirementSnippet(input.Requirement))
-	sb.WriteString("\n\n=== Project context (schema=")
-	sb.WriteString(schemaVersion)
-	sb.WriteString(") ===\n")
-	sb.WriteString(buildContextSnippet(input.PlanningContext))
-	sb.WriteString("\n")
-	return sb.String()
 }
 
-// buildWhatsnextPrompt ports _build_prompt from whatsnext_adapter.py.
-func buildWhatsnextPrompt(input ExecJSONInput) string {
-	maxCandidates := input.RequestedMaxCandidates
-	if maxCandidates <= 0 {
-		maxCandidates = builtinDefaultMaxCandidates
+// buildWhatsnextScopeSection wraps the requirement scope block with the
+// === Focus scope === header when a scope is present, or returns "" so
+// the markdown template's {{SCOPE_SECTION}} substitutes to an empty line
+// that the Python f-string version would also produce.
+func buildWhatsnextScopeSection(req *models.Requirement) string {
+	scope := buildScopeSnippet(req)
+	if scope == "" {
+		return ""
 	}
-
-	projectName := "(unnamed project)"
-	projectDescription := ""
-	if input.Project != nil {
-		if n := strings.TrimSpace(input.Project.Name); n != "" {
-			projectName = n
-		}
-		projectDescription = strings.TrimSpace(input.Project.Description)
-	}
-
-	schemaVersion := "none"
-	if input.PlanningContext != nil {
-		schemaVersion = input.PlanningContext.SchemaVersion
-	}
-
-	var sb strings.Builder
-	sb.WriteString("You are a strategic product advisor for \"")
-	sb.WriteString(projectName)
-	sb.WriteString("\".\n\n")
-	sb.WriteString(fmt.Sprintf("Your role is to identify the %d highest-leverage DIRECTIONS the team should pursue next ", maxCandidates))
-	sb.WriteString("-- not individual bug fixes or task lists, but strategic bets that create meaningful, measurable product or quality improvements.\n\n")
-	sb.WriteString("Think in terms of the Agent-era product cycle:\n")
-	sb.WriteString("  1. Agent proposes a direction (that is your job here)\n")
-	sb.WriteString("  2. PO decides and prioritises\n")
-	sb.WriteString("  3. Agent / Dev executes quickly\n")
-	sb.WriteString("  4. Team validates with data / UX / business signals\n")
-	sb.WriteString("  5. Direction is adjusted\n\n")
-	sb.WriteString("For each direction, answer three questions:\n")
-	sb.WriteString("  A. What is the bet? -- a clear hypothesis (\"Investing in X will achieve Y\")\n")
-	sb.WriteString("  B. How do we know it worked? -- concrete validation signals (metrics, observable outcomes, user feedback)\n")
-	sb.WriteString("  C. What must the PO decide? -- the key judgement call or trade-off the PO must make to unlock this direction\n\n")
-	sb.WriteString("Evidence signals to draw on (use these to ground each direction):\n")
-	sb.WriteString("  - Repeated failures or blocked tasks -- signal of systemic risk\n")
-	sb.WriteString("  - Stale / drifted documents -- signal of knowledge debt\n")
-	sb.WriteString("  - Gaps in recent agent runs -- signal of missing capability or tooling\n")
-	sb.WriteString("  - High-priority tasks with no owner -- signal of execution risk\n")
-	sb.WriteString("  - Sync errors -- signal of reliability risk\n\n")
-	sb.WriteString("Rules:\n")
-	sb.WriteString("  - Directions must be strategic, not tactical. \"Fix bug X\" is not a direction; \"Invest in connector reliability\" is.\n")
-	sb.WriteString("  - Every direction must be grounded in specific evidence from the context. Evidence items MUST be strings of the form\n")
-	sb.WriteString("    \"doc:<id>\", \"task:<id>\", \"drift:<id>\", \"sync:<id>\", or \"agent_run:<id>\" using exact ids from the context. Omit if none applies.\n")
-	sb.WriteString("  - Do NOT invent ids.\n")
-	sb.WriteString("  - Rank 1 = highest strategic leverage right now. Higher rank = lower urgency.\n")
-	sb.WriteString("  - If a direction is very similar to an existing open task, note it in \"duplicate_titles\".\n\n")
-	sb.WriteString("Return STRICT JSON inside a single ")
-	sb.WriteString("```json")
-	sb.WriteString(" fenced code block with this schema:\n")
-	sb.WriteString(whatsnextJSONSchema)
-	sb.WriteString("\n\nDo not include any prose outside the fenced JSON block.\n\n")
-	sb.WriteString("=== Project ===\n")
-	sb.WriteString("Name: ")
-	sb.WriteString(projectName)
-	sb.WriteString("\n")
-	if projectDescription != "" {
-		sb.WriteString("Description: ")
-		sb.WriteString(projectDescription)
-		sb.WriteString("\n")
-	}
-	if scope := buildScopeSnippet(input.Requirement); scope != "" {
-		sb.WriteString("\n=== Focus scope ===\n")
-		sb.WriteString(scope)
-		sb.WriteString("\n")
-	}
-	sb.WriteString("\n=== Current project state (schema=")
-	sb.WriteString(schemaVersion)
-	sb.WriteString(") ===\n")
-	sb.WriteString(buildContextSnapshotWhatsnext(input.PlanningContext))
-	sb.WriteString("\n")
-	return sb.String()
+	return "\n=== Focus scope ===\n" + scope + "\n"
 }
 
 // buildRequirementSnippet ports _requirement_snippet from backlog_adapter.py.
@@ -759,6 +648,11 @@ type rawJSONCandidate struct {
 	Rank               int      `json:"rank"`
 	Evidence           []string `json:"evidence"`
 	DuplicateTitles    []string `json:"duplicate_titles"`
+	// ExecutionRole is optional (Phase 5 B2). The current planner prompts
+	// do NOT ask the model to emit this field, so it will be empty in
+	// almost all cases. Kept in the wire shape now so Phase 6 can enable
+	// role-aware planners without a connector-protocol bump.
+	ExecutionRole string `json:"execution_role"`
 }
 
 // extractJSONFromOutput implements the three-strategy extraction from _extract_json.
@@ -848,6 +742,7 @@ func normalizeBuiltinCandidates(parsed map[string]json.RawMessage, maxCandidates
 			Rank:               rank,
 			Evidence:           coerceStringList(c.Evidence),
 			DuplicateTitles:    coerceStringList(c.DuplicateTitles),
+			ExecutionRole:      strings.TrimSpace(c.ExecutionRole),
 		})
 	}
 	return out

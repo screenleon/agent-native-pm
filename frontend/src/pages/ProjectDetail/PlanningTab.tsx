@@ -214,6 +214,8 @@ export function PlanningTab({
               onPersistReview={ws.onPersistCandidateReview}
               onApplyCandidate={ws.onApplyCandidate}
               onResetCandidateForm={ws.onResetCandidateForm}
+              selectedExecutionMode={ws.selectedExecutionMode}
+              onSelectedExecutionModeChange={ws.onSelectedExecutionModeChange}
               onViewDocumentById={onViewDocumentById}
               onViewDriftSignal={onViewDriftSignal}
             />

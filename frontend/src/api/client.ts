@@ -318,9 +318,22 @@ export async function updateBacklogCandidate(id: string, data: UpdateBacklogCand
   });
 }
 
-export async function applyBacklogCandidate(id: string) {
+// Phase 5 B3: apply takes an optional execution_mode. `manual` (default)
+// preserves Phase 4 behaviour; `role_dispatch` marks the created task's
+// source with the candidate's execution_role so Phase 6 auto-dispatch can
+// identify tasks it owns. Today `role_dispatch` does NOT actually dispatch.
+export type ApplyExecutionMode = 'manual' | 'role_dispatch';
+
+export async function applyBacklogCandidate(
+  id: string,
+  options: { executionMode?: ApplyExecutionMode } = {},
+) {
+  const body = options.executionMode
+    ? JSON.stringify({ execution_mode: options.executionMode })
+    : undefined;
   return request<ApplyBacklogCandidateResponse>(`/backlog-candidates/${encodeURIComponent(id)}/apply`, {
     method: 'POST',
+    ...(body ? { body } : {}),
   });
 }
 

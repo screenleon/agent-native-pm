@@ -63,7 +63,13 @@ import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
+
+# Make the sibling `_prompt_loader.py` importable when this file is run
+# directly as a script (the connector spawns it via `python3 path/to/...`).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _prompt_loader  # noqa: E402  (intentional sys.path insert above)
 
 
 # Strip ANSI escape codes from PTY output.
@@ -263,49 +269,19 @@ def _build_prompt(request: dict[str, Any]) -> str:
     project_name = str(project.get("name") or "").strip() or "(unnamed project)"
     project_description = str(project.get("description") or "").strip()
 
-    instructions = f"""You are a backlog planner for the software project "{project_name}".
-
-Decompose the requirement below into AT MOST {max_candidates} concrete backlog
-candidates (tasks) scoped to THIS project. Each candidate must:
-  1. Be independently implementable within "{project_name}".
-  2. Reference specific evidence from the project context when relevant
-     (open tasks, documents, drift signals, sync failures, recent agent runs).
-     Evidence items MUST be strings of the form "doc:<id>", "task:<id>",
-     "drift:<id>", "sync:<id>", or "agent_run:<id>" using the exact ids from
-     the context below. Omit evidence if none applies.
-  3. Not duplicate any existing open task. If you think a candidate is close
-     to an existing task, add that task title to "duplicate_titles".
-
-Return STRICT JSON inside a single ```json fenced code block with this schema:
-{{
-  "candidates": [
-    {{
-      "title": string (<= 120 chars),
-      "description": string,
-      "rationale": string (why this is the right next step),
-      "priority_score": number between 0 and 1,
-      "confidence": number between 0 and 1,
-      "rank": integer starting at 1 (lower = higher priority),
-      "evidence": [string, ...],
-      "duplicate_titles": [string, ...]
-    }}
-  ]
-}}
-
-Do not include any prose outside the fenced JSON block. Do not invent ids
-that are not in the context.
-
-=== Project ===
-Name: {project_name}
-{("Description: " + project_description) if project_description else ""}
-
-=== Requirement ===
-{_requirement_snippet(requirement)}
-
-=== Project context (schema={(context or {}).get('schema_version', 'none')}) ===
-{_context_snippet(context)}
-"""
-    return instructions
+    return _prompt_loader.render(
+        "backlog",
+        {
+            "PROJECT_NAME": project_name,
+            "PROJECT_DESCRIPTION_LINE": (
+                "Description: " + project_description if project_description else ""
+            ),
+            "REQUIREMENT": _requirement_snippet(requirement),
+            "MAX_CANDIDATES": str(max_candidates),
+            "CONTEXT": _context_snippet(context),
+            "SCHEMA_VERSION": str((context or {}).get("schema_version", "none")),
+        },
+    )
 
 
 def _run_with_pty(argv: list[str], timeout_sec: int) -> tuple[str, str]:
@@ -586,6 +562,11 @@ def _normalize_candidate(raw: dict[str, Any], default_rank: int) -> dict[str, An
         "rank": _coerce_int(raw.get("rank"), default_rank),
         "evidence": _coerce_string_list(raw.get("evidence")),
         "duplicate_titles": _coerce_string_list(raw.get("duplicate_titles")),
+        # Phase 5 B2: optional execution_role hint. The current backlog
+        # prompt does NOT ask the model to emit this field, so it will be
+        # empty in almost all cases. Carried here so a future Phase-6-aware
+        # planner can populate it without a connector-protocol bump.
+        "execution_role": str(raw.get("execution_role") or "").strip(),
     }
 
 

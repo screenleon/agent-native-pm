@@ -604,6 +604,12 @@ export function usePlanningWorkspaceData({
     }
   }
 
+  // Phase 5 B3: the panel lets the operator pick Manual or Auto-dispatch
+  // for the upcoming Apply click. Today `role_dispatch` is a no-op on the
+  // UI side (Phase 6 will dispatch). We still thread the choice through
+  // so the backend records the task's `source` correctly for audit.
+  const [selectedExecutionMode, setSelectedExecutionMode] = useState<'manual' | 'role_dispatch'>('manual')
+
   async function handleApplyPlanningCandidate() {
     if (!selectedPlanningCandidate) return
     if (candidateFormDirty) {
@@ -616,7 +622,9 @@ export function usePlanningWorkspaceData({
       setApplyingCandidate(true)
       setCandidateReviewError(null)
       setCandidateReviewMessage(null)
-      const response = await applyBacklogCandidate(selectedPlanningCandidate.id)
+      const response = await applyBacklogCandidate(selectedPlanningCandidate.id, {
+        executionMode: selectedExecutionMode,
+      })
       setPlanningCandidates(prev => prev.map(c => c.id === response.data.candidate.id ? response.data.candidate : c))
       syncCandidateForm(response.data.candidate)
       await Promise.all([
@@ -676,6 +684,10 @@ export function usePlanningWorkspaceData({
     onPersistCandidateReview: persistCandidateReview,
     onApplyCandidate: handleApplyPlanningCandidate,
     onResetCandidateForm: resetCandidateForm,
+    // Phase 5 B3: apply execution mode + setter so the panel radio group
+    // can drive the Apply request body.
+    selectedExecutionMode,
+    onSelectedExecutionModeChange: setSelectedExecutionMode,
     // provider options
     planningProviderOptions,
     planningProviderOptionsLoading,
