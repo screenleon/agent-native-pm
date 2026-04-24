@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   listConnectorCliConfigs,
   createConnectorCliConfig,
@@ -7,10 +7,14 @@ import {
   setPrimaryConnectorCliConfig,
 } from '../../api/client';
 import type { CliConfig, CreateCliConfigPayload } from '../../api/client';
+import Jargon from '../../components/Jargon';
+import { knownModelsForProvider } from '../../utils/cliBindingPresets';
 
 // Phase 6a UX-B2: inline CLI config management for one connector card.
 // Each connector owns its cli_configs[] (stored in local_connectors.metadata);
 // this component exposes Add / Edit / Delete / Set-Primary for them.
+
+const CUSTOM_MODEL_SENTINEL = '__custom__';
 
 type PresetID = 'cli:claude' | 'cli:codex';
 const PRESETS: Record<PresetID, {
@@ -18,20 +22,78 @@ const PRESETS: Record<PresetID, {
   commandPlaceholder: string;
   modelPlaceholder: string;
   defaultLabel: string;
+  defaultModelId: string;
 }> = {
   'cli:claude': {
     label: 'Claude Code',
-    commandPlaceholder: '/usr/local/bin/claude',
+    commandPlaceholder: 'claude',
     modelPlaceholder: 'claude-sonnet-4-6',
     defaultLabel: 'My Claude',
+    defaultModelId: 'claude-sonnet-4-6',
   },
   'cli:codex': {
     label: 'OpenAI Codex',
-    commandPlaceholder: '/usr/local/bin/codex',
-    modelPlaceholder: 'codex-mini-latest',
+    commandPlaceholder: 'codex',
+    modelPlaceholder: 'gpt-5.5',
     defaultLabel: 'My Codex',
+    defaultModelId: 'gpt-5.5',
   },
 };
+
+// Renders a model picker: <select> of known models + "Other" option that
+// reveals a free-text input for any model ID not in the list.
+function ModelPicker({ providerId, value, onChange, disabled }: {
+  providerId: PresetID;
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+}) {
+  const known = knownModelsForProvider(providerId);
+  // `isCustom` handles the round-trip case: existing config with an unknown model ID.
+  const isCustom = value !== '' && !known.some(m => m.id === value);
+  // `intentCustom` is a local flag that persists while the user intends to type a
+  // custom ID — we cannot derive this from `value` alone because `value` starts
+  // as '' right after the user picks "Other".
+  const intentCustomRef = useRef(isCustom);
+  if (isCustom) intentCustomRef.current = true;
+
+  const showCustomInput = intentCustomRef.current || isCustom;
+  const selectValue = showCustomInput ? CUSTOM_MODEL_SENTINEL : value;
+
+  function handleSelect(e: React.ChangeEvent<HTMLSelectElement>) {
+    const v = e.target.value;
+    if (v === CUSTOM_MODEL_SENTINEL) {
+      intentCustomRef.current = true;
+      onChange('');
+    } else {
+      intentCustomRef.current = false;
+      onChange(v);
+    }
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: '0.35rem' }}>
+      <select value={selectValue} onChange={handleSelect} disabled={disabled} required>
+        <option value="">— select a model —</option>
+        {known.map(m => (
+          <option key={m.id} value={m.id}>{m.label} ({m.id})</option>
+        ))}
+        <option value={CUSTOM_MODEL_SENTINEL}>Other (enter model ID manually)…</option>
+      </select>
+      {showCustomInput && (
+        <input
+          type="text"
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder="e.g. claude-sonnet-4-6"
+          disabled={disabled}
+          required
+          aria-label="Custom model ID"
+        />
+      )}
+    </div>
+  );
+}
 
 interface Props {
   connectorId: string;
@@ -50,6 +112,7 @@ export function ConnectorCliConfigs({ connectorId }: Props) {
   const [addModel, setAddModel] = useState('');
 
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editPreset, setEditPreset] = useState<PresetID>('cli:claude');
   const [editLabel, setEditLabel] = useState('');
   const [editCommand, setEditCommand] = useState('');
   const [editModel, setEditModel] = useState('');
@@ -77,10 +140,8 @@ export function ConnectorCliConfigs({ connectorId }: Props) {
     const p = PRESETS[preset];
     setAddLabel('');
     setAddCommand('');
-    setAddModel('');
     setAddPreset(preset);
-    // Light defaults on the model field; command stays blank so PATH lookup is the default.
-    setAddModel(p.modelPlaceholder);
+    setAddModel(p.defaultModelId);
   }
 
   function openAddForm() {
@@ -114,6 +175,7 @@ export function ConnectorCliConfigs({ connectorId }: Props) {
 
   function openEdit(c: CliConfig) {
     setEditingId(c.id);
+    setEditPreset((c.provider_id as PresetID) in PRESETS ? c.provider_id as PresetID : 'cli:claude');
     setEditLabel(c.label);
     // c.cli_command may be absent (PATH lookup) — coerce to '' so React's
     // controlled <input> never receives `undefined` (Copilot review on
@@ -166,7 +228,7 @@ export function ConnectorCliConfigs({ connectorId }: Props) {
   return (
     <div className="cli-configs-section" style={{ marginTop: '0.85rem', paddingTop: '0.85rem', borderTop: '1px dashed var(--border)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-        <strong style={{ fontSize: '0.9rem' }}>CLIs on this machine</strong>
+        <strong style={{ fontSize: '0.9rem' }}><Jargon term="CLI config">CLIs on this machine</Jargon></strong>
         {!showAddForm && (
           <button className="btn btn-ghost btn-sm" onClick={openAddForm} disabled={loading}>
             + Add CLI
@@ -185,7 +247,7 @@ export function ConnectorCliConfigs({ connectorId }: Props) {
       ) : (
         <div style={{ display: 'grid', gap: '0.5rem' }}>
           {configs.map(c => {
-            const preset = PRESETS[c.provider_id];
+            const preset = PRESETS[c.provider_id as PresetID] ?? { label: c.provider_id, defaultLabel: 'CLI' };
             const isEditing = editingId === c.id;
             return (
               <div
@@ -206,7 +268,7 @@ export function ConnectorCliConfigs({ connectorId }: Props) {
                     </div>
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label style={{ fontSize: '0.78rem' }}>Model ID</label>
-                      <input type="text" value={editModel} onChange={e => setEditModel(e.target.value)} disabled={editSaving} required />
+                      <ModelPicker providerId={editPreset} value={editModel} onChange={setEditModel} disabled={editSaving} />
                     </div>
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label style={{ fontSize: '0.78rem' }}>CLI command (optional — leave empty for PATH lookup)</label>
@@ -271,7 +333,7 @@ export function ConnectorCliConfigs({ connectorId }: Props) {
                 key={p}
                 type="button"
                 className={`btn btn-sm ${addPreset === p ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => { setAddPreset(p); setAddModel(PRESETS[p].modelPlaceholder); }}
+                onClick={() => { setAddPreset(p); setAddModel(PRESETS[p].defaultModelId); }}
                 disabled={addSaving}
               >
                 {PRESETS[p].label}
@@ -290,14 +352,7 @@ export function ConnectorCliConfigs({ connectorId }: Props) {
           </div>
           <div className="form-group" style={{ marginBottom: '0.45rem' }}>
             <label style={{ fontSize: '0.78rem' }}>Model ID</label>
-            <input
-              type="text"
-              value={addModel}
-              onChange={e => setAddModel(e.target.value)}
-              placeholder={PRESETS[addPreset].modelPlaceholder}
-              disabled={addSaving}
-              required
-            />
+            <ModelPicker providerId={addPreset} value={addModel} onChange={setAddModel} disabled={addSaving} />
           </div>
           <div className="form-group" style={{ marginBottom: '0.6rem' }}>
             <label style={{ fontSize: '0.78rem' }}>CLI command (optional — leave empty for PATH lookup)</label>

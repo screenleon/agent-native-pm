@@ -15,6 +15,8 @@ BACKLOG_FIXTURE_VARS = {
     "PROJECT_NAME": "CrossLang",
     "PROJECT_DESCRIPTION_LINE": "Description: Parity-check project.",
     "REQUIREMENT": "Requirement title: do X.\nSummary: do X better.",
+    "AUDIENCE_LINE": "",
+    "SUCCESS_LINE": "",
     "MAX_CANDIDATES": "4",
     "CONTEXT": "=== Context ===\n(no items)",
     "SCHEMA_VERSION": "context.v1",

@@ -79,22 +79,26 @@ var ValidBacklogCandidateReviewStatuses = map[string]bool{
 }
 
 type Requirement struct {
-	ID          string    `json:"id"`
-	ProjectID   string    `json:"project_id"`
-	Title       string    `json:"title"`
-	Summary     string    `json:"summary"`
-	Description string    `json:"description"`
-	Status      string    `json:"status"`
-	Source      string    `json:"source"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID              string    `json:"id"`
+	ProjectID       string    `json:"project_id"`
+	Title           string    `json:"title"`
+	Summary         string    `json:"summary"`
+	Description     string    `json:"description"`
+	Status          string    `json:"status"`
+	Source          string    `json:"source"`
+	Audience        string    `json:"audience,omitempty" db:"audience"`
+	SuccessCriteria string    `json:"success_criteria,omitempty" db:"success_criteria"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type CreateRequirementRequest struct {
-	Title       string `json:"title"`
-	Summary     string `json:"summary"`
-	Description string `json:"description"`
-	Source      string `json:"source"`
+	Title           string `json:"title"`
+	Summary         string `json:"summary"`
+	Description     string `json:"description"`
+	Source          string `json:"source"`
+	Audience        string `json:"audience,omitempty"`
+	SuccessCriteria string `json:"success_criteria,omitempty"`
 }
 
 type CreatePlanningRunRequest struct {

@@ -25,7 +25,7 @@ func (s *RequirementStore) ListByProject(projectID string, page, perPage int) ([
 
 	offset := (page - 1) * perPage
 	rows, err := s.db.Query(`
-		SELECT id, project_id, title, summary, description, status, source, created_at, updated_at
+		SELECT id, project_id, title, summary, description, status, source, audience, success_criteria, created_at, updated_at
 		FROM requirements
 		WHERE project_id = $1
 		ORDER BY created_at DESC, id DESC
@@ -47,6 +47,8 @@ func (s *RequirementStore) ListByProject(projectID string, page, perPage int) ([
 			&requirement.Description,
 			&requirement.Status,
 			&requirement.Source,
+			&requirement.Audience,
+			&requirement.SuccessCriteria,
 			&requirement.CreatedAt,
 			&requirement.UpdatedAt,
 		); err != nil {
@@ -61,7 +63,7 @@ func (s *RequirementStore) ListByProject(projectID string, page, perPage int) ([
 func (s *RequirementStore) GetByID(id string) (*models.Requirement, error) {
 	var requirement models.Requirement
 	err := s.db.QueryRow(`
-		SELECT id, project_id, title, summary, description, status, source, created_at, updated_at
+		SELECT id, project_id, title, summary, description, status, source, audience, success_criteria, created_at, updated_at
 		FROM requirements
 		WHERE id = $1
 	`, id).Scan(
@@ -72,6 +74,8 @@ func (s *RequirementStore) GetByID(id string) (*models.Requirement, error) {
 		&requirement.Description,
 		&requirement.Status,
 		&requirement.Source,
+		&requirement.Audience,
+		&requirement.SuccessCriteria,
 		&requirement.CreatedAt,
 		&requirement.UpdatedAt,
 	)
@@ -93,9 +97,9 @@ func (s *RequirementStore) Create(projectID string, req models.CreateRequirement
 	}
 
 	_, err := s.db.Exec(`
-		INSERT INTO requirements (id, project_id, title, summary, description, status, source, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, id, projectID, strings.TrimSpace(req.Title), strings.TrimSpace(req.Summary), strings.TrimSpace(req.Description), models.RequirementStatusDraft, source, now, now)
+		INSERT INTO requirements (id, project_id, title, summary, description, status, source, audience, success_criteria, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+	`, id, projectID, strings.TrimSpace(req.Title), strings.TrimSpace(req.Summary), strings.TrimSpace(req.Description), models.RequirementStatusDraft, source, strings.TrimSpace(req.Audience), strings.TrimSpace(req.SuccessCriteria), now)
 	if err != nil {
 		return nil, err
 	}

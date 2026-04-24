@@ -287,6 +287,8 @@ func builtinPromptVars(input ExecJSONInput) map[string]string {
 		"PROJECT_NAME":             projectName,
 		"PROJECT_DESCRIPTION_LINE": descLine,
 		"REQUIREMENT":              buildRequirementSnippet(input.Requirement),
+		"AUDIENCE_LINE":            buildAudienceLine(input.Requirement),
+		"SUCCESS_LINE":             buildSuccessLine(input.Requirement),
 		"MAX_CANDIDATES":           fmt.Sprintf("%d", maxCandidates),
 		"CONTEXT":                  buildContextSnippet(input.PlanningContext),
 		"SCHEMA_VERSION":           schemaVersion,
@@ -323,6 +325,27 @@ func buildRequirementSnippet(req *models.Requirement) string {
 		parts = append(parts, "Description: "+d)
 	}
 	return strings.Join(parts, "\n")
+}
+
+// buildAudienceLine returns "\n\nAudience: <value>" when the requirement
+// carries a non-empty Audience field, or "" when absent. The leading double
+// newline is intentional — in the template AUDIENCE_LINE is appended inline
+// after {{REQUIREMENT}} so the pre-computed value owns its own leading
+// whitespace (same design as PROJECT_DESCRIPTION_LINE).
+func buildAudienceLine(req *models.Requirement) string {
+	if req == nil || strings.TrimSpace(req.Audience) == "" {
+		return ""
+	}
+	return "\n\nAudience: " + strings.TrimSpace(req.Audience)
+}
+
+// buildSuccessLine returns "\n\nSuccess criteria: <value>" when the
+// requirement carries a non-empty SuccessCriteria field, or "".
+func buildSuccessLine(req *models.Requirement) string {
+	if req == nil || strings.TrimSpace(req.SuccessCriteria) == "" {
+		return ""
+	}
+	return "\n\nSuccess criteria: " + strings.TrimSpace(req.SuccessCriteria)
 }
 
 // buildContextSnippet ports _context_snippet from backlog_adapter.py.

@@ -655,3 +655,10 @@ export async function getCliProbeResult(connectorId: string, probeId: string) {
   );
 }
 
+export async function demoSeed(projectId: string) {
+  return request<{ requirement_id: string; planning_run_id: string; message: string }>(
+    `/projects/${encodeURIComponent(projectId)}/demo-seed`,
+    { method: 'POST' },
+  );
+}
+

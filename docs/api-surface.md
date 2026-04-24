@@ -226,7 +226,9 @@ Notes:
   "title": "Add planning intake foundation",
   "summary": "Capture requirements before creating tasks",
   "description": "Users should be able to submit a requirement in Project Detail before the system decomposes it into candidate backlog items.",
-  "source": "human"
+  "source": "human",
+  "audience": "Solo devs",
+  "success_criteria": "Backlog candidates are generated within 60 seconds."
 }
 ```
 
@@ -235,6 +237,7 @@ Notes:
 - `title` is required and is trimmed before validation.
 - `status` is always initialized to `draft` on create.
 - `source` defaults to `human` when omitted or blank.
+- `audience` and `success_criteria` are optional free-text fields (Phase 6a A3). When non-empty they are injected into the backlog planner prompt as `AUDIENCE_LINE` and `SUCCESS_LINE` template vars.
 - Requirement intake is additive only in this slice: there is no update, delete, or archive endpoint yet.
 
 #### Requirement response
@@ -249,6 +252,8 @@ Notes:
     "description": "Users should be able to submit a requirement in Project Detail before the system decomposes it into candidate backlog items.",
     "status": "draft",
     "source": "human",
+    "audience": "Solo devs",
+    "success_criteria": "Backlog candidates are generated within 60 seconds.",
     "created_at": "2026-04-16T15:00:00Z",
     "updated_at": "2026-04-16T15:00:00Z"
   },
@@ -256,6 +261,9 @@ Notes:
   "meta": null
 }
 ```
+
+Notes:
+- `audience` and `success_criteria` are omitted from the JSON response when empty (`omitempty`).
 
 #### List requirements query parameters
 
@@ -272,6 +280,7 @@ Behavior:
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/projects/:id/planning-provider-options` | Resolve the current caller's planning execution preview and available models |
+| POST | `/api/projects/:id/demo-seed` | Seed an empty project with one demo requirement + planning run + three draft candidates |
 | POST | `/api/requirements/:id/planning-runs` | Start a planning run for a requirement |
 | GET | `/api/requirements/:id/planning-runs` | List planning runs for a requirement |
 | GET | `/api/planning-runs/:id` | Get a planning run by ID |

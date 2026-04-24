@@ -1,4 +1,5 @@
 import type { Requirement, Task } from '../../types'
+import Jargon from '../../components/Jargon'
 import { PlanningStepper } from './PlanningStepper'
 import { AttentionRow } from './planning/AttentionRow'
 import { RequirementIntake } from './planning/RequirementIntake'
@@ -7,6 +8,7 @@ import { PlanningLauncher } from './planning/PlanningLauncher'
 import { PlanningRunList } from './planning/PlanningRunList'
 import { CandidateReviewPanel } from './planning/CandidateReviewPanel'
 import { AppliedLineage } from './planning/AppliedLineage'
+import { WorkspaceOnboardingPanel } from './planning/WorkspaceOnboardingPanel'
 import { usePlanningWorkspaceData } from './planning/hooks/usePlanningWorkspaceData'
 
 const APPLIED_TASK_SOURCE = 'agent:planning-orchestrator'
@@ -237,12 +239,19 @@ export function PlanningTab({
               onJumpToTasks={onNavigateToTasks}
             />
           </div>
+        ) : requirements.length === 0 ? (
+          <WorkspaceOnboardingPanel
+            projectId={projectId}
+            onRunCreated={(requirementId, runId) => ws.onSelectLineage(requirementId, runId)}
+            onWhatsnext={ws.onRunWhatsnext}
+            planningRunsCount={ws.planningRuns.length}
+          />
         ) : (
           <div style={{ padding: '1.5rem 0.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'flex-start' }}>
             <div>
               <h4 style={{ margin: '0 0 0.35rem' }}>Start here</h4>
               <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.88rem' }}>
-                Select a requirement above to plan a specific feature, or run a full project health check to surface the most urgent open work across tasks, drift signals, and stale docs.
+                Select a <Jargon term="requirement">requirement</Jargon> above to plan a specific feature, or run a full project health check to surface the most urgent open work across tasks, drift signals, and stale docs.
               </p>
             </div>
             {ws.planningRunReady ? (

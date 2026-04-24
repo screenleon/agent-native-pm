@@ -269,6 +269,9 @@ def _build_prompt(request: dict[str, Any]) -> str:
     project_name = str(project.get("name") or "").strip() or "(unnamed project)"
     project_description = str(project.get("description") or "").strip()
 
+    audience = str(requirement.get("audience") or "").strip()
+    success_criteria = str(requirement.get("success_criteria") or "").strip()
+
     return _prompt_loader.render(
         "backlog",
         {
@@ -277,6 +280,8 @@ def _build_prompt(request: dict[str, Any]) -> str:
                 "Description: " + project_description if project_description else ""
             ),
             "REQUIREMENT": _requirement_snippet(requirement),
+            "AUDIENCE_LINE": ("\n\nAudience: " + audience) if audience else "",
+            "SUCCESS_LINE": ("\n\nSuccess criteria: " + success_criteria) if success_criteria else "",
             "MAX_CANDIDATES": str(max_candidates),
             "CONTEXT": _context_snippet(context),
             "SCHEMA_VERSION": str((context or {}).get("schema_version", "none")),

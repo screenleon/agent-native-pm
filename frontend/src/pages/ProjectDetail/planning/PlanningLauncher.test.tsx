@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import type { AccountBinding, PlanningProviderOptions, Requirement } from '../../../types'
@@ -75,6 +75,10 @@ function renderLauncher(overrides: Partial<React.ComponentProps<typeof PlanningL
 }
 
 describe('<PlanningLauncher />', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
   it('renders the requirement header and start / refresh buttons', () => {
     renderLauncher()
     expect(screen.getByText('Improve sync failure UX')).toBeInTheDocument()
@@ -88,6 +92,7 @@ describe('<PlanningLauncher />', () => {
   })
 
   it('surfaces the connector-offline state when executionMode is local_connector without pairing', () => {
+    localStorage.setItem('anpm_launcher_advanced_open', '1')
     const providerOptions = {
       providers: [],
       default_selection: null,
@@ -173,6 +178,7 @@ describe('<PlanningLauncher />', () => {
   })
 
   it('shows "No CLI binding configured" when cliBindings is empty and connector is online', () => {
+    localStorage.setItem('anpm_launcher_advanced_open', '1')
     const providerOptions = {
       providers: [],
       default_selection: null,
@@ -192,6 +198,7 @@ describe('<PlanningLauncher />', () => {
   })
 
   it('shows CLI binding select with correct options when bindings exist', () => {
+    localStorage.setItem('anpm_launcher_advanced_open', '1')
     const providerOptions = {
       providers: [],
       default_selection: null,
@@ -207,13 +214,12 @@ describe('<PlanningLauncher />', () => {
     } as unknown as PlanningProviderOptions
     const binding = makeBinding({ id: 'b1', label: 'My Claude', model_id: 'claude-sonnet-4-6', is_primary: true })
     renderLauncher({ providerOptions, executionMode: 'local_connector', runReady: true, cliBindings: [binding], selectedCliBindingId: 'b1' })
-    // There are two selects: the execution mode selector and the CLI binding selector.
-    // The CLI binding option label is unique text we can assert on.
     expect(screen.getByText('My Claude [claude-sonnet-4-6] (primary)')).toBeInTheDocument()
     expect(screen.getByLabelText(/CLI binding for this run/i)).toBeInTheDocument()
   })
 
   it('calls onCliBindingChange when binding is changed', async () => {
+    localStorage.setItem('anpm_launcher_advanced_open', '1')
     const onCliBindingChange = vi.fn()
     const { default: userEvent } = await import('@testing-library/user-event')
     const providerOptions = {
@@ -235,5 +241,53 @@ describe('<PlanningLauncher />', () => {
     const bindingSelect = screen.getByLabelText(/CLI binding for this run/i)
     await userEvent.selectOptions(bindingSelect, 'b2')
     expect(onCliBindingChange).toHaveBeenCalledWith('b2')
+  })
+
+  it('T-6a-A2-1: default render hides advanced controls', () => {
+    renderLauncher()
+    expect(screen.queryByLabelText(/Execution mode/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/CLI binding for this run/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/Model override for this run/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Advanced/i })).toBeInTheDocument()
+  })
+
+  it('T-6a-A2-2: click Advanced shows controls and persists localStorage key', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const providerOptions = {
+      providers: [],
+      default_selection: null,
+      available_execution_modes: ['server_provider', 'local_connector'],
+      paired_connector_available: false,
+      active_connector_label: null,
+      credential_mode: 'shared',
+      allow_model_override: false,
+      can_run: true,
+      unavailable_reason: '',
+      resolved_binding_source: 'shared',
+      resolved_binding_label: '',
+    } as unknown as PlanningProviderOptions
+    renderLauncher({ providerOptions })
+    await userEvent.click(screen.getByRole('button', { name: /Advanced/i }))
+    expect(localStorage.getItem('anpm_launcher_advanced_open')).toBe('1')
+    expect(screen.getByLabelText(/Execution mode/i)).toBeInTheDocument()
+  })
+
+  it('T-6a-A2-3: re-mount with localStorage 1 shows controls', () => {
+    localStorage.setItem('anpm_launcher_advanced_open', '1')
+    const providerOptions = {
+      providers: [],
+      default_selection: null,
+      available_execution_modes: ['server_provider', 'local_connector'],
+      paired_connector_available: false,
+      active_connector_label: null,
+      credential_mode: 'shared',
+      allow_model_override: false,
+      can_run: true,
+      unavailable_reason: '',
+      resolved_binding_source: 'shared',
+      resolved_binding_label: '',
+    } as unknown as PlanningProviderOptions
+    renderLauncher({ providerOptions })
+    expect(screen.getByLabelText(/Execution mode/i)).toBeInTheDocument()
   })
 })
