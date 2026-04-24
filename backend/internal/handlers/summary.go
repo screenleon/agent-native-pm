@@ -61,6 +61,21 @@ func (h *SummaryHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, http.StatusOK, history, nil)
 }
 
+// GetPendingReviewCount returns the number of backlog candidates in draft
+// status for a project. Used by the Dashboard to show "N decisions pending".
+func (h *SummaryHandler) GetPendingReviewCount(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "id")
+	if ok := h.ensureProject(w, projectID); !ok {
+		return
+	}
+	count, err := h.store.CountPendingReviewByProject(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to count pending review")
+		return
+	}
+	writeSuccess(w, http.StatusOK, map[string]int{"count": count}, nil)
+}
+
 func (h *SummaryHandler) ensureProject(w http.ResponseWriter, projectID string) bool {
 	project, err := h.projectStore.GetByID(projectID)
 	if err != nil {

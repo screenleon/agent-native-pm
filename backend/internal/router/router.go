@@ -171,6 +171,7 @@ func New(deps Deps) http.Handler {
 			r.Get("/projects/{id}/summary", deps.SummaryHandler.GetSummary)
 			r.Get("/projects/{id}/dashboard-summary", deps.SummaryHandler.GetDashboardSummary)
 			r.Get("/projects/{id}/summary/history", deps.SummaryHandler.GetHistory)
+			r.Get("/projects/{id}/pending-review-count", deps.SummaryHandler.GetPendingReviewCount)
 
 			// Sync (Phase 2)
 			if deps.SyncHandler != nil {

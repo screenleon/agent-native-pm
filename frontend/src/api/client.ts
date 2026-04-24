@@ -217,6 +217,10 @@ export async function getSummaryHistory(projectId: string) {
   return request<ProjectSummary[]>(`/projects/${encodeURIComponent(projectId)}/summary/history`);
 }
 
+export async function getPendingReviewCount(projectId: string) {
+  return request<{ count: number }>(`/projects/${encodeURIComponent(projectId)}/pending-review-count`);
+}
+
 export async function batchUpdateTasks(projectId: string, taskIds: string[], changes: BatchUpdateTaskChanges) {
   return request<BatchUpdateTaskResponse>(`/projects/${encodeURIComponent(projectId)}/tasks/batch-update`, {
     method: 'POST',

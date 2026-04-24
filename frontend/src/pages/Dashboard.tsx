@@ -4,6 +4,7 @@ import {
   listProjects,
   listLocalConnectors,
   listNotifications,
+  getPendingReviewCount,
 } from '../api/client'
 import type { Project, LocalConnector, Notification, User } from '../types'
 
@@ -44,6 +45,7 @@ export default function Dashboard({ me }: DashboardProps) {
   const [projects, setProjects] = useState<Project[]>([])
   const [connectors, setConnectors] = useState<LocalConnector[]>([])
   const [notifications, setNotifications] = useState<Notification[]>([])
+  const [pendingCounts, setPendingCounts] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -59,9 +61,20 @@ export default function Dashboard({ me }: DashboardProps) {
           listNotifications(false).catch(() => ({ data: [] as Notification[] })),
         ])
         if (cancelled) return
-        setProjects(projResp.data ?? [])
+        const loadedProjects = projResp.data ?? []
+        setProjects(loadedProjects)
         setConnectors(connResp.data ?? [])
         setNotifications(notifResp.data ?? [])
+
+        const countResults = await Promise.allSettled(
+          loadedProjects.map(p => getPendingReviewCount(p.id).then(r => ({ id: p.id, count: r.data?.count ?? 0 })))
+        )
+        if (cancelled) return
+        const counts: Record<string, number> = {}
+        for (const result of countResults) {
+          if (result.status === 'fulfilled') counts[result.value.id] = result.value.count
+        }
+        setPendingCounts(counts)
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load dashboard')
       } finally {
@@ -196,14 +209,27 @@ export default function Dashboard({ me }: DashboardProps) {
             <p style={{ color: 'var(--text-muted)' }}>You have no projects yet.</p>
           ) : (
             <ul className="dashboard-list">
-              {recentProjects.map(p => (
-                <li key={p.id}>
-                  <Link className="dashboard-list-main" to={`/projects/${p.id}`}>{p.name}</Link>
-                  <span className="dashboard-list-meta">
-                    {p.description ? p.description.slice(0, 64) : 'No description'}
-                  </span>
-                </li>
-              ))}
+              {recentProjects.map(p => {
+                const pending = pendingCounts[p.id] ?? 0
+                return (
+                  <li key={p.id}>
+                    <Link className="dashboard-list-main" to={`/projects/${p.id}`}>{p.name}</Link>
+                    <span className="dashboard-list-meta">
+                      {p.description ? p.description.slice(0, 64) : 'No description'}
+                    </span>
+                    {pending > 0 && (
+                      <Link
+                        to={`/projects/${p.id}?tab=planning`}
+                        className="badge badge-todo"
+                        style={{ fontSize: '0.75rem', marginLeft: 'auto', flexShrink: 0 }}
+                        title={`${pending} draft candidate${pending === 1 ? '' : 's'} pending review`}
+                      >
+                        {pending} pending
+                      </Link>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
           )}
         </section>
