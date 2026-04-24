@@ -3,7 +3,7 @@ import type {
   SyncRun, AgentRun, DriftSignal, DocumentLink, DocumentContent,
   APIKey, APIKeyWithSecret, User, Notification, SearchResult, ProjectRepoMapping,
   CreateProjectPayload, MirrorRepoDiscovery, ProjectDashboardSummary,
-  BatchUpdateTaskChanges, BatchUpdateTaskResponse, Requirement, CreateRequirementPayload, PlanningRun, BacklogCandidate, UpdateBacklogCandidatePayload, ApplyBacklogCandidateResponse, CreatePlanningRunPayload, PlanningProviderOptions,
+  BatchUpdateTaskChanges, BatchUpdateTaskResponse, Requirement, CreateRequirementPayload, PlanningRun, BacklogCandidate, UpdateBacklogCandidatePayload, ApplyBacklogCandidateResponse, CreatePlanningRunPayload, PlanningProviderOptions, CandidateEvidenceSummary,
   PlanningSettingsView, UpdatePlanningSettingsPayload,
   AccountBinding, CreateAccountBindingPayload, UpdateAccountBindingPayload,
   LocalConnector, CreateLocalConnectorPairingSessionPayload, CreateLocalConnectorPairingSessionResponse,
@@ -322,6 +322,18 @@ export async function applyBacklogCandidate(id: string) {
   return request<ApplyBacklogCandidateResponse>(`/backlog-candidates/${encodeURIComponent(id)}/apply`, {
     method: 'POST',
   });
+}
+
+export async function listCandidatesByEvidenceDocument(projectId: string, documentId: string) {
+  return request<CandidateEvidenceSummary[]>(
+    `/projects/${encodeURIComponent(projectId)}/backlog-candidates/by-evidence?document_id=${encodeURIComponent(documentId)}`
+  );
+}
+
+export async function listCandidatesByEvidenceDriftSignal(projectId: string, driftSignalId: string) {
+  return request<CandidateEvidenceSummary[]>(
+    `/projects/${encodeURIComponent(projectId)}/backlog-candidates/by-evidence?drift_signal_id=${encodeURIComponent(driftSignalId)}`
+  );
 }
 
 // ─── Phase 2: Sync ──────────────────────────────────────────────────────────

@@ -125,6 +125,7 @@ func New(deps Deps) http.Handler {
 			if deps.PlanningRunHandler != nil {
 				r.Get("/projects/{id}/planning-provider-options", deps.PlanningRunHandler.ProviderOptions)
 				r.Get("/projects/{id}/task-lineage", deps.PlanningRunHandler.ListAppliedLineage)
+				r.Get("/projects/{id}/backlog-candidates/by-evidence", deps.PlanningRunHandler.ListByEvidence)
 				r.Post("/requirements/{id}/planning-runs", deps.PlanningRunHandler.Create)
 				r.Get("/requirements/{id}/planning-runs", deps.PlanningRunHandler.ListByRequirement)
 				r.Get("/planning-runs/{id}", deps.PlanningRunHandler.Get)

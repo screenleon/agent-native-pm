@@ -440,6 +440,15 @@ export interface ApplyBacklogCandidateResponse {
   already_applied: boolean;
 }
 
+export interface CandidateEvidenceSummary {
+  id: string;
+  title: string;
+  status: BacklogCandidate['status'];
+  planning_run_id: string;
+  requirement_id: string;
+  requirement_title: string;
+}
+
 export interface BatchUpdateTaskChanges {
   status?: Task['status'];
   priority?: Task['priority'];

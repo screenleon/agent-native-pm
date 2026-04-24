@@ -648,6 +648,47 @@ func (h *PlanningRunHandler) UpdateBacklogCandidate(w http.ResponseWriter, r *ht
 	writeSuccess(w, http.StatusOK, updated, nil)
 }
 
+// ListByEvidence returns candidate summaries that reference a given document
+// or drift signal in their evidence_detail.
+// Exactly one of ?document_id or ?drift_signal_id must be supplied.
+func (h *PlanningRunHandler) ListByEvidence(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "id")
+
+	project, err := h.projectStore.GetByID(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to verify project")
+		return
+	}
+	if project == nil {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	q := r.URL.Query()
+	docID := q.Get("document_id")
+	driftID := q.Get("drift_signal_id")
+
+	if (docID == "") == (driftID == "") {
+		writeError(w, http.StatusBadRequest, "exactly one of document_id or drift_signal_id is required")
+		return
+	}
+
+	var summaries []models.CandidateEvidenceSummary
+	if docID != "" {
+		summaries, err = h.candidateStore.ListByEvidenceDocument(projectID, docID)
+	} else {
+		summaries, err = h.candidateStore.ListByEvidenceDriftSignal(projectID, driftID)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to query evidence links")
+		return
+	}
+	if summaries == nil {
+		summaries = []models.CandidateEvidenceSummary{}
+	}
+	writeSuccess(w, http.StatusOK, summaries, nil)
+}
+
 func (h *PlanningRunHandler) ApplyBacklogCandidate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	candidate, err := h.candidateStore.GetByID(id)

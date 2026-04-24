@@ -759,3 +759,73 @@ func updateBacklogCandidateStatus(tx *sql.Tx, id, status string, updatedAt time.
 	`, status, updatedAt, id)
 	return err
 }
+
+// ListByEvidenceDocument returns lightweight summaries of backlog candidates
+// belonging to projectID whose evidence_detail references documentID.
+// Matching is done in Go after loading all candidates for the project to
+// stay compatible with both SQLite and Postgres without JSON operator
+// differences.
+func (s *BacklogCandidateStore) ListByEvidenceDocument(projectID, documentID string) ([]models.CandidateEvidenceSummary, error) {
+	return s.listByEvidencePredicate(projectID, func(ed models.PlanningEvidenceDetail) bool {
+		for _, doc := range ed.Documents {
+			if doc.DocumentID == documentID {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// ListByEvidenceDriftSignal returns lightweight summaries of backlog
+// candidates belonging to projectID whose evidence_detail references
+// driftSignalID.
+func (s *BacklogCandidateStore) ListByEvidenceDriftSignal(projectID, driftSignalID string) ([]models.CandidateEvidenceSummary, error) {
+	return s.listByEvidencePredicate(projectID, func(ed models.PlanningEvidenceDetail) bool {
+		for _, ds := range ed.DriftSignals {
+			if ds.DriftSignalID == driftSignalID {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func (s *BacklogCandidateStore) listByEvidencePredicate(
+	projectID string,
+	match func(models.PlanningEvidenceDetail) bool,
+) ([]models.CandidateEvidenceSummary, error) {
+	rows, err := s.db.Query(`
+		SELECT bc.id, bc.title, bc.status, bc.planning_run_id, bc.requirement_id,
+		       bc.evidence_detail, COALESCE(r.title, '')
+		FROM backlog_candidates bc
+		LEFT JOIN requirements r ON r.id = bc.requirement_id
+		WHERE bc.project_id = $1
+		ORDER BY bc.rank ASC, bc.priority_score DESC, bc.created_at ASC
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]models.CandidateEvidenceSummary, 0)
+	for rows.Next() {
+		var cs models.CandidateEvidenceSummary
+		var evidenceDetailJSON []byte
+		if err := rows.Scan(
+			&cs.ID,
+			&cs.Title,
+			&cs.Status,
+			&cs.PlanningRunID,
+			&cs.RequirementID,
+			&evidenceDetailJSON,
+			&cs.RequirementTitle,
+		); err != nil {
+			return nil, err
+		}
+		ed := unmarshalEvidenceDetail(evidenceDetailJSON)
+		if match(ed) {
+			out = append(out, cs)
+		}
+	}
+	return out, rows.Err()
+}

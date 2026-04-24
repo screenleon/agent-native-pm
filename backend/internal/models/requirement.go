@@ -378,6 +378,18 @@ type ApplyBacklogCandidateResponse struct {
 	AlreadyApplied bool             `json:"already_applied"`
 }
 
+// CandidateEvidenceSummary is a lightweight view of a backlog candidate
+// returned by ListByEvidenceDocument / ListByEvidenceDriftSignal.
+// Used by DocumentsTab and DriftTab to render "N candidates" chips.
+type CandidateEvidenceSummary struct {
+	ID               string `json:"id"`
+	Title            string `json:"title"`
+	Status           string `json:"status"`
+	PlanningRunID    string `json:"planning_run_id"`
+	RequirementID    string `json:"requirement_id"`
+	RequirementTitle string `json:"requirement_title"`
+}
+
 // AppliedLineageEntry denormalises task_lineage rows with the headings the
 // Planning Workspace applied-lineage lane needs to render the
 // requirement → run → candidate → task chain. Populated by

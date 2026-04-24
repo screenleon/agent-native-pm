@@ -5,6 +5,7 @@ import { DriftTab } from './DriftTab'
 
 vi.mock('../../api/client', () => ({
   getDocumentContent: vi.fn().mockResolvedValue({ data: null }),
+  listCandidatesByEvidenceDriftSignal: vi.fn().mockResolvedValue({ data: [] }),
 }))
 
 function makeSignal(overrides: Partial<DriftSignal> = {}): DriftSignal {
@@ -25,6 +26,7 @@ function makeSignal(overrides: Partial<DriftSignal> = {}): DriftSignal {
 }
 
 const baseProps = {
+  projectId: 'p1',
   documents: [] as Document[],
   documentLinksByDocumentId: {} as Record<string, never>,
   documentLinkLoadErrors: {} as Record<string, boolean>,

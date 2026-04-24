@@ -647,6 +647,7 @@ function ProjectDetail() {
 
           {tab === 'drift' && (
             <DriftTab
+              projectId={id!}
               driftSignals={driftSignals}
               documents={documents}
               documentLinksByDocumentId={documentLinksByDocumentId}
