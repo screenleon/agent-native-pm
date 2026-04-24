@@ -789,23 +789,17 @@ func (h *PlanningRunHandler) DemoSeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Guard: project must be empty (check requirements).
-	requirements, _, err := h.requirementStore.ListByProject(projectID, 1, 1)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check project")
-		return
-	}
-	if len(requirements) > 0 {
-		writeError(w, http.StatusConflict, "project is not empty; demo seed only works on empty projects")
-		return
-	}
-
-	// Create demo requirement.
-	req, err := h.requirementStore.Create(projectID, models.CreateRequirementRequest{
+	// Atomically guard + create the demo requirement so concurrent requests
+	// cannot both pass the emptiness check.
+	req, err := h.requirementStore.CreateIfProjectEmpty(projectID, models.CreateRequirementRequest{
 		Title:       "Demo: Build a task-tracker SaaS",
 		Source:      "demo",
 		Description: "A lightweight SaaS that lets small teams track tasks, deadlines, and progress without the overhead of enterprise PM tools.",
 	})
+	if errors.Is(err, store.ErrProjectNotEmpty) {
+		writeError(w, http.StatusConflict, "project is not empty; demo seed only works on empty projects")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create demo requirement")
 		return

@@ -24,7 +24,7 @@ export function WorkspaceOnboardingPanel({ projectId, onRunCreated, onWhatsnext,
   const showDemoBanner = planningRunsCount === 0 && !demoDismissed
 
   async function startPlanning(title: string, audience?: string, successCriteria?: string) {
-    if (!title.trim()) return
+    if (!title.trim() || busy) return
     setBusy(true)
     setError(null)
     setNoProvider(false)
@@ -110,7 +110,7 @@ export function WorkspaceOnboardingPanel({ projectId, onRunCreated, onWhatsnext,
             onChange={e => setInput(e.target.value)}
             placeholder="Describe your goal or feature…"
             style={{ width: '100%', boxSizing: 'border-box' }}
-            onKeyDown={e => { if (e.key === 'Enter') void startPlanning(input) }}
+            onKeyDown={e => { if (e.key === 'Enter' && !busy) void startPlanning(input) }}
           />
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>

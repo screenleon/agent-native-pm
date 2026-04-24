@@ -2,12 +2,17 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/screenleon/agent-native-pm/internal/models"
 )
+
+// ErrProjectNotEmpty is returned by CreateIfProjectEmpty when the project
+// already has at least one requirement.
+var ErrProjectNotEmpty = errors.New("project already has requirements")
 
 type RequirementStore struct {
 	db *sql.DB
@@ -114,6 +119,46 @@ func (s *RequirementStore) UpdateStatus(id, status string) (*models.Requirement,
 	if err != nil {
 		return nil, err
 	}
+	return s.GetByID(id)
+}
+
+// CreateIfProjectEmpty atomically checks that the project has no existing
+// requirements and then inserts the new one. Returns ErrProjectNotEmpty if the
+// project is not empty. The check and insert share a single transaction so
+// concurrent calls cannot both pass the emptiness guard.
+func (s *RequirementStore) CreateIfProjectEmpty(projectID string, req models.CreateRequirementRequest) (*models.Requirement, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var count int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM requirements WHERE project_id = $1`, projectID).Scan(&count); err != nil {
+		return nil, err
+	}
+	if count > 0 {
+		return nil, ErrProjectNotEmpty
+	}
+
+	id := uuid.New().String()
+	now := time.Now().UTC()
+	source := strings.TrimSpace(req.Source)
+	if source == "" {
+		source = "human"
+	}
+	_, err = tx.Exec(`
+		INSERT INTO requirements (id, project_id, title, summary, description, status, source, audience, success_criteria, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+	`, id, projectID, strings.TrimSpace(req.Title), strings.TrimSpace(req.Summary), strings.TrimSpace(req.Description),
+		models.RequirementStatusDraft, source, strings.TrimSpace(req.Audience), strings.TrimSpace(req.SuccessCriteria), now)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
 	return s.GetByID(id)
 }
 

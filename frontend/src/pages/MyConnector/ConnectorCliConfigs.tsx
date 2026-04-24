@@ -268,7 +268,7 @@ export function ConnectorCliConfigs({ connectorId }: Props) {
                     </div>
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label style={{ fontSize: '0.78rem' }}>Model ID</label>
-                      <ModelPicker providerId={editPreset} value={editModel} onChange={setEditModel} disabled={editSaving} />
+                      <ModelPicker key={editPreset} providerId={editPreset} value={editModel} onChange={setEditModel} disabled={editSaving} />
                     </div>
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label style={{ fontSize: '0.78rem' }}>CLI command (optional — leave empty for PATH lookup)</label>
@@ -352,7 +352,7 @@ export function ConnectorCliConfigs({ connectorId }: Props) {
           </div>
           <div className="form-group" style={{ marginBottom: '0.45rem' }}>
             <label style={{ fontSize: '0.78rem' }}>Model ID</label>
-            <ModelPicker providerId={addPreset} value={addModel} onChange={setAddModel} disabled={addSaving} />
+            <ModelPicker key={addPreset} providerId={addPreset} value={addModel} onChange={setAddModel} disabled={addSaving} />
           </div>
           <div className="form-group" style={{ marginBottom: '0.6rem' }}>
             <label style={{ fontSize: '0.78rem' }}>CLI command (optional — leave empty for PATH lookup)</label>

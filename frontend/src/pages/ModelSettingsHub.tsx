@@ -75,9 +75,13 @@ export default function ModelSettingsHub() {
   }, []);
 
   async function makePrimary(id: string) {
-    await updateAccountBinding(id, { is_primary: true });
-    const resp = await listAccountBindings();
-    setBindings(resp.data);
+    try {
+      await updateAccountBinding(id, { is_primary: true });
+      const resp = await listAccountBindings();
+      setBindings(resp.data);
+    } catch (err) {
+      console.error('Failed to set primary binding', err);
+    }
   }
 
   // Derive setup status: option-c > option-a > none
@@ -202,7 +206,7 @@ export default function ModelSettingsHub() {
                     {b.is_primary ? (
                       <span className="badge"><Jargon term="primary binding">Primary</Jargon></span>
                     ) : (
-                      <button className="btn btn-secondary btn-sm" onClick={() => makePrimary(b.id)}>Make primary</button>
+                      <button className="btn btn-secondary btn-sm" onClick={() => void makePrimary(b.id)}>Make primary</button>
                     )}
                   </div>
                 ))}
@@ -241,7 +245,7 @@ export default function ModelSettingsHub() {
                       {b.is_primary ? (
                         <span className="badge"><Jargon term="primary binding">Primary</Jargon></span>
                       ) : (
-                        <button className="btn btn-secondary btn-sm" onClick={() => makePrimary(b.id)}>Make primary</button>
+                        <button className="btn btn-secondary btn-sm" onClick={() => void makePrimary(b.id)}>Make primary</button>
                       )}
                     </div>
                   ))}
