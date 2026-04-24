@@ -77,4 +77,9 @@ func TestLocalConnectorStorePairHeartbeatAndRevoke(t *testing.T) {
 	if revoked == nil || revoked.Status != models.LocalConnectorStatusRevoked {
 		t.Fatalf("expected revoked connector, got %+v", revoked)
 	}
+
+	// Second revoke must be idempotent — return nil, not "not found".
+	if err := connectorStore.Revoke(claim.Connector.ID, user.ID); err != nil {
+		t.Fatalf("second revoke should be idempotent, got: %v", err)
+	}
 }

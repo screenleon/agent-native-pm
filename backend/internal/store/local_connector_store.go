@@ -360,7 +360,9 @@ func (s *LocalConnectorStore) Revoke(id, userID string) error {
 		return fmt.Errorf("local connector not found")
 	}
 	if connector.Status == models.LocalConnectorStatusRevoked {
-		return fmt.Errorf("local connector not found")
+		// Already revoked — nothing to do. Return nil so callers are
+		// idempotent and HTTP DELETE retries get 200, not 404.
+		return nil
 	}
 
 	metadata := cloneMetadata(connector.Metadata)
