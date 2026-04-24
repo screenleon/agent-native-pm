@@ -23,7 +23,7 @@ describe('planningConnectionPresets', () => {
   it('returns the matching preset by id', () => {
     const preset = getPlanningConnectionPreset('mistral-cloud')
     expect(preset.baseURL).toBe('https://api.mistral.ai/v1')
-    expect(preset.modelPlaceholder).toBe('mistral-small-latest')
+    expect(preset.modelPlaceholder).toBe('mistral-large-latest')
     expect(preset.advancedOnly).toBe(true)
   })
 
