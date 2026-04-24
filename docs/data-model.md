@@ -7,7 +7,7 @@ This file is the canonical schema reference for the current backend database.
 - Runtime database: PostgreSQL
 - SQL semantics: PostgreSQL placeholders, `TIMESTAMPTZ`, `BOOLEAN`, `JSONB`, partial indexes, and GIN full-text indexes
 - Migrations: forward-only numbered SQL files in `backend/db/migrations/`
-- Migration set currently applied through `017_local_connector_dispatch.sql`
+- Migration set currently applied through `026_backlog_candidate_execution_role.sql`
 
 ## Current Entity Relationships
 
@@ -247,6 +247,7 @@ Notes:
 | `evidence` | JSONB | NOT NULL DEFAULT '[]' | Structured evidence snippets shown in review UI |
 | `evidence_detail` | JSONB | NOT NULL DEFAULT '{}' | Typed context evidence grouped by documents, drift, sync, agent runs, duplicates, and score breakdown |
 | `duplicate_titles` | JSONB | NOT NULL DEFAULT '[]' | Exact-title duplicate signals from current open work |
+| `execution_role` | TEXT | | (Phase 5 B2, migration 026) nullable hint naming the execution specialist from `backend/internal/prompts/roles/` that should run this candidate under Phase-6 auto-dispatch. Not enforced against the catalog today. |
 | `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 

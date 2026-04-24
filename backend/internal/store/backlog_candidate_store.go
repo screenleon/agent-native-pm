@@ -18,7 +18,8 @@ var (
 	ErrBacklogCandidateNoChanges   = errors.New("no backlog candidate changes requested")
 	ErrBacklogCandidateBlankTitle  = errors.New("backlog candidate title cannot be blank")
 	ErrBacklogCandidateBadStatus   = errors.New("invalid backlog candidate status")
-	ErrBacklogCandidateNotApproved = errors.New("backlog candidate must be approved before applying")
+	ErrBacklogCandidateNotApproved         = errors.New("backlog candidate must be approved before applying")
+	ErrBacklogCandidateInvalidExecutionMode = errors.New("invalid execution_mode (expected 'manual' or 'role_dispatch')")
 )
 
 const appliedCandidateTaskSource = "agent:planning-orchestrator"
@@ -101,15 +102,21 @@ func (s *BacklogCandidateStore) CreateDraftsForPlanningRun(requirement *models.R
 			parentCandidateID = candidate.ParentCandidateID
 		}
 
+		var executionRole any
+		if er := strings.TrimSpace(draft.ExecutionRole); er != "" {
+			executionRole = er
+			candidate.ExecutionRole = &er
+		}
+
 		_, err = tx.Exec(`
 			INSERT INTO backlog_candidates (
 				id, project_id, requirement_id, planning_run_id, parent_candidate_id,
 				suggestion_type, title, description, status, rationale, validation_criteria, po_decision,
 				priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles,
-				created_at, updated_at
+				execution_role, created_at, updated_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $19)
-		`, candidate.ID, candidate.ProjectID, candidate.RequirementID, candidate.PlanningRunID, parentCandidateID, candidate.SuggestionType, candidate.Title, candidate.Description, candidate.Status, candidate.Rationale, candidate.ValidationCriteria, candidate.PODecision, candidate.PriorityScore, candidate.Confidence, candidate.Rank, evidenceJSON, evidenceDetailJSON, duplicateJSON, candidate.CreatedAt)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $20)
+		`, candidate.ID, candidate.ProjectID, candidate.RequirementID, candidate.PlanningRunID, parentCandidateID, candidate.SuggestionType, candidate.Title, candidate.Description, candidate.Status, candidate.Rationale, candidate.ValidationCriteria, candidate.PODecision, candidate.PriorityScore, candidate.Confidence, candidate.Rank, evidenceJSON, evidenceDetailJSON, duplicateJSON, executionRole, candidate.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -126,7 +133,7 @@ func (s *BacklogCandidateStore) CreateDraftsForPlanningRun(requirement *models.R
 func (s *BacklogCandidateStore) GetByID(id string) (*models.BacklogCandidate, error) {
 	return scanBacklogCandidate(
 		s.db.QueryRow(`
-			SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, created_at, updated_at
+			SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, execution_role, created_at, updated_at
 			FROM backlog_candidates
 			WHERE id = $1
 		`, id),
@@ -141,7 +148,7 @@ func (s *BacklogCandidateStore) ListByPlanningRun(planningRunID string, page, pe
 
 	offset := (page - 1) * perPage
 	rows, err := s.db.Query(`
-		SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, created_at, updated_at
+		SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, execution_role, created_at, updated_at
 		FROM backlog_candidates
 		WHERE planning_run_id = $1
 		ORDER BY rank ASC, priority_score DESC, created_at ASC, id ASC
@@ -156,6 +163,7 @@ func (s *BacklogCandidateStore) ListByPlanningRun(planningRunID string, page, pe
 	for rows.Next() {
 		var candidate models.BacklogCandidate
 		var parentCandidateID sql.NullString
+		var executionRole sql.NullString
 		var evidenceJSON []byte
 		var evidenceDetailJSON []byte
 		var duplicateJSON []byte
@@ -178,6 +186,7 @@ func (s *BacklogCandidateStore) ListByPlanningRun(planningRunID string, page, pe
 			&evidenceJSON,
 			&evidenceDetailJSON,
 			&duplicateJSON,
+			&executionRole,
 			&candidate.CreatedAt,
 			&candidate.UpdatedAt,
 		); err != nil {
@@ -185,6 +194,10 @@ func (s *BacklogCandidateStore) ListByPlanningRun(planningRunID string, page, pe
 		}
 		if parentCandidateID.Valid {
 			candidate.ParentCandidateID = parentCandidateID.String
+		}
+		if executionRole.Valid {
+			v := executionRole.String
+			candidate.ExecutionRole = &v
 		}
 		candidate.Evidence = unmarshalStringList(evidenceJSON)
 		candidate.EvidenceDetail = unmarshalEvidenceDetail(evidenceDetailJSON)
@@ -215,6 +228,11 @@ func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandid
 	title := candidate.Title
 	description := candidate.Description
 	status := candidate.Status
+	// Carry the current value (or "") so a partial patch leaves it alone.
+	var executionRoleValue any
+	if candidate.ExecutionRole != nil {
+		executionRoleValue = *candidate.ExecutionRole
+	}
 	changed := false
 
 	if req.Title != nil {
@@ -246,6 +264,24 @@ func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandid
 		}
 	}
 
+	if req.ExecutionRole != nil {
+		trimmed := strings.TrimSpace(*req.ExecutionRole)
+		// Empty string clears the column (NULL). Non-empty sets it.
+		// Catalog validation is deliberately deferred to Phase 6 (see
+		// docs/phase5-plan.md §8 Q2).
+		if trimmed == "" {
+			if candidate.ExecutionRole != nil {
+				executionRoleValue = nil
+				changed = true
+			}
+		} else {
+			if candidate.ExecutionRole == nil || *candidate.ExecutionRole != trimmed {
+				executionRoleValue = trimmed
+				changed = true
+			}
+		}
+	}
+
 	if !changed {
 		return nil, ErrBacklogCandidateNoChanges
 	}
@@ -256,9 +292,10 @@ func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandid
 		SET title = $1,
 		    description = $2,
 		    status = $3,
-		    updated_at = $4
-		WHERE id = $5
-	`, title, description, status, now, id)
+		    execution_role = $4,
+		    updated_at = $5
+		WHERE id = $6
+	`, title, description, status, executionRoleValue, now, id)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +303,26 @@ func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandid
 	return s.GetByID(id)
 }
 
+// ApplyToTask is the Phase-4-and-earlier entry point: always applies with
+// execution mode "manual". Kept as a shim so existing call sites compile
+// without change. New callers should use ApplyToTaskWithMode.
 func (s *BacklogCandidateStore) ApplyToTask(id string) (*models.ApplyBacklogCandidateResponse, error) {
+	return s.ApplyToTaskWithMode(id, models.ApplyExecutionModeManual)
+}
+
+// ApplyToTaskWithMode (Phase 5 B3) applies the candidate with an explicit
+// execution mode. "manual" behaves identically to the pre-Phase-5 flow.
+// "role_dispatch" marks the created task's `source` with the candidate's
+// execution_role so the audit trail distinguishes dispatch-earmarked
+// tasks; actual dispatch is Phase 6.
+func (s *BacklogCandidateStore) ApplyToTaskWithMode(id, executionMode string) (*models.ApplyBacklogCandidateResponse, error) {
+	if executionMode == "" {
+		executionMode = models.ApplyExecutionModeManual
+	}
+	if !models.ValidApplyExecutionModes[executionMode] {
+		return nil, ErrBacklogCandidateInvalidExecutionMode
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -336,7 +392,21 @@ func (s *BacklogCandidateStore) ApplyToTask(id string) (*models.ApplyBacklogCand
 		return nil, &BacklogCandidateTaskConflictError{Task: duplicateTask}
 	}
 
-	task, err := createAppliedCandidateTask(tx, candidate.ProjectID, candidate.Title, candidate.Description)
+	// Compute the task source. Manual = the pre-Phase-5 constant.
+	// role_dispatch = append the candidate's execution_role (if any) so
+	// the audit trail reflects the dispatch intent.
+	source := appliedCandidateTaskSource
+	if executionMode == models.ApplyExecutionModeRoleDispatch {
+		if candidate.ExecutionRole != nil && strings.TrimSpace(*candidate.ExecutionRole) != "" {
+			source = "role_dispatch:" + strings.TrimSpace(*candidate.ExecutionRole)
+		} else {
+			source = "role_dispatch"
+		}
+		if len(source) > 80 {
+			source = source[:80]
+		}
+	}
+	task, err := createAppliedCandidateTaskWithSource(tx, candidate.ProjectID, candidate.Title, candidate.Description, source)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +438,7 @@ func (s *BacklogCandidateStore) getByIDForUpdate(tx *sql.Tx, id string) (*models
 	// FOR UPDATE is Postgres row-level locking; SQLite's single-writer model
 	// already serialises writes so the clause must be omitted.
 	query := `
-		SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, created_at, updated_at
+		SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, execution_role, created_at, updated_at
 		FROM backlog_candidates
 		WHERE id = $1 ` + s.dialect.ForUpdate()
 	return scanBacklogCandidate(tx.QueryRow(query, id))
@@ -381,6 +451,7 @@ type rowScanner interface {
 func scanBacklogCandidate(row rowScanner) (*models.BacklogCandidate, error) {
 	var candidate models.BacklogCandidate
 	var parentCandidateID sql.NullString
+	var executionRole sql.NullString
 	var evidenceJSON []byte
 	var evidenceDetailJSON []byte
 	var duplicateJSON []byte
@@ -403,6 +474,7 @@ func scanBacklogCandidate(row rowScanner) (*models.BacklogCandidate, error) {
 		&evidenceJSON,
 		&evidenceDetailJSON,
 		&duplicateJSON,
+		&executionRole,
 		&candidate.CreatedAt,
 		&candidate.UpdatedAt,
 	)
@@ -414,6 +486,10 @@ func scanBacklogCandidate(row rowScanner) (*models.BacklogCandidate, error) {
 	}
 	if parentCandidateID.Valid {
 		candidate.ParentCandidateID = parentCandidateID.String
+	}
+	if executionRole.Valid {
+		v := executionRole.String
+		candidate.ExecutionRole = &v
 	}
 	candidate.Evidence = unmarshalStringList(evidenceJSON)
 	candidate.EvidenceDetail = unmarshalEvidenceDetail(evidenceDetailJSON)
@@ -699,15 +775,26 @@ func findOpenTaskByNormalizedTitle(tx *sql.Tx, projectID, normalizedTitle string
 }
 
 func createAppliedCandidateTask(tx *sql.Tx, projectID, title, description string) (*models.Task, error) {
+	return createAppliedCandidateTaskWithSource(tx, projectID, title, description, appliedCandidateTaskSource)
+}
+
+// createAppliedCandidateTaskWithSource is the Phase-5-aware variant.
+// Phase 4 callers go through createAppliedCandidateTask which pins the
+// source to the pre-existing AppliedCandidateTaskSource sentinel.
+func createAppliedCandidateTaskWithSource(tx *sql.Tx, projectID, title, description, source string) (*models.Task, error) {
 	id := uuid.New().String()
 	now := time.Now().UTC()
 	trimmedTitle := strings.TrimSpace(title)
 	trimmedDescription := strings.TrimSpace(description)
+	trimmedSource := strings.TrimSpace(source)
+	if trimmedSource == "" {
+		trimmedSource = appliedCandidateTaskSource
+	}
 
 	_, err := tx.Exec(`
 		INSERT INTO tasks (id, project_id, title, description, status, priority, assignee, source, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-	`, id, projectID, trimmedTitle, trimmedDescription, "todo", "medium", "", appliedCandidateTaskSource, now)
+	`, id, projectID, trimmedTitle, trimmedDescription, "todo", "medium", "", trimmedSource, now)
 	if err != nil {
 		return nil, err
 	}
@@ -720,7 +807,7 @@ func createAppliedCandidateTask(tx *sql.Tx, projectID, title, description string
 		Status:      "todo",
 		Priority:    "medium",
 		Assignee:    "",
-		Source:      appliedCandidateTaskSource,
+		Source:      trimmedSource,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}, nil

@@ -74,7 +74,13 @@ import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
+
+# Make the sibling `_prompt_loader.py` importable when this file is run
+# directly as a script (the connector spawns it via `python3 path/to/...`).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _prompt_loader  # noqa: E402  (intentional sys.path insert above)
 
 
 # Strip ANSI escape codes from PTY output.
@@ -272,64 +278,23 @@ def _build_prompt(request: dict[str, Any]) -> str:
     scope_block = _scope_snippet(requirement)
     scope_section = f"\n=== Focus scope ===\n{scope_block}\n" if scope_block else ""
 
-    instructions = f"""You are a strategic product advisor for "{project_name}".
-
-Your role is to identify the {max_candidates} highest-leverage DIRECTIONS the team should pursue next — not individual bug fixes or task lists, but strategic bets that create meaningful, measurable product or quality improvements.
-
-Think in terms of the Agent-era product cycle:
-  1. Agent proposes a direction (← that is your job here)
-  2. PO decides and prioritises
-  3. Agent / Dev executes quickly
-  4. Team validates with data / UX / business signals
-  5. Direction is adjusted
-
-For each direction, answer three questions:
-  A. What is the bet? — a clear hypothesis ("Investing in X will achieve Y")
-  B. How do we know it worked? — concrete validation signals (metrics, observable outcomes, user feedback)
-  C. What must the PO decide? — the key judgement call or trade-off the PO must make to unlock this direction
-
-Evidence signals to draw on (use these to ground each direction):
-  - Repeated failures or blocked tasks → signal of systemic risk
-  - Stale / drifted documents → signal of knowledge debt
-  - Gaps in recent agent runs → signal of missing capability or tooling
-  - High-priority tasks with no owner → signal of execution risk
-  - Sync errors → signal of reliability risk
-
-Rules:
-  - Directions must be strategic, not tactical. "Fix bug X" is not a direction; "Invest in connector reliability" is.
-  - Every direction must be grounded in specific evidence from the context. Evidence items MUST be strings of the form "doc:<id>", "task:<id>", "drift:<id>", "sync:<id>", or "agent_run:<id>" using exact ids from the context. Omit if none applies.
-  - Do NOT invent ids.
-  - Rank 1 = highest strategic leverage right now. Higher rank = lower urgency.
-  - If a direction is very similar to an existing open task, note it in "duplicate_titles".
-
-Return STRICT JSON inside a single ```json fenced code block with this schema:
-{{
-  "candidates": [
-    {{
-      "title": string (<= 120 chars, framed as a strategic direction, e.g. "Invest in X", "Shift focus to Y", "Establish Z capability"),
-      "description": string (what this direction means concretely — scope, expected impact),
-      "rationale": string (why NOW — what evidence or signals make this the right bet at this moment),
-      "validation_criteria": string (how to know if this direction is working within 1–4 weeks: specific metrics, observable outcomes, or feedback signals),
-      "po_decision": string (the key decision or trade-off the PO must make to pursue this direction),
-      "priority_score": number between 0 and 1,
-      "confidence": number between 0 and 1,
-      "rank": integer starting at 1,
-      "evidence": [string, ...],
-      "duplicate_titles": [string, ...]
-    }}
-  ]
-}}
-
-Do not include any prose outside the fenced JSON block.
-
-=== Project ===
-Name: {project_name}
-{("Description: " + project_description) if project_description else ""}
-{scope_section}
-=== Current project state (schema={(context or {}).get('schema_version', 'none')}) ===
-{_context_snapshot(context)}
-"""
-    return instructions
+    return _prompt_loader.render(
+        "whatsnext",
+        {
+            "PROJECT_NAME": project_name,
+            "PROJECT_DESCRIPTION_LINE": (
+                "Description: " + project_description if project_description else ""
+            ),
+            "SCOPE_SECTION": scope_section,
+            "MAX_CANDIDATES": str(max_candidates),
+            "CONTEXT": _context_snapshot(context),
+            "SCHEMA_VERSION": str((context or {}).get("schema_version", "none")),
+            # Whatsnext does not substitute REQUIREMENT directly — the scope
+            # section already carries it — but the shared variable contract
+            # exposes it for consistency with other prompts.
+            "REQUIREMENT": "",
+        },
+    )
 
 
 def _run_with_pty(argv: list[str], timeout_sec: int) -> tuple[str, str]:

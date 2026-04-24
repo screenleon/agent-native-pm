@@ -709,10 +709,27 @@ func (h *PlanningRunHandler) ApplyBacklogCandidate(w http.ResponseWriter, r *htt
 		return
 	}
 
-	result, err := h.candidateStore.ApplyToTask(id)
+	// Phase 5 B3: optional request body carries execution_mode.
+	// Missing body / empty field = "manual" (back-compat with Phase 4
+	// and earlier callers that send no body at all).
+	executionMode := models.ApplyExecutionModeManual
+	if r.ContentLength != 0 {
+		var req models.ApplyBacklogCandidateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if strings.TrimSpace(req.ExecutionMode) != "" {
+			executionMode = req.ExecutionMode
+		}
+	}
+
+	result, err := h.candidateStore.ApplyToTaskWithMode(id, executionMode)
 	if err != nil {
 		var conflictErr *store.BacklogCandidateTaskConflictError
 		switch {
+		case errors.Is(err, store.ErrBacklogCandidateInvalidExecutionMode):
+			writeError(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, store.ErrBacklogCandidateNotApproved):
 			writeError(w, http.StatusBadRequest, "only approved backlog candidates can be applied to tasks")
 		case errors.Is(err, store.ErrBacklogCandidateBlankTitle):

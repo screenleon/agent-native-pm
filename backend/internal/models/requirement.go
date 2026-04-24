@@ -346,8 +346,13 @@ type BacklogCandidate struct {
 	Evidence            []string               `json:"evidence"`
 	EvidenceDetail      PlanningEvidenceDetail `json:"evidence_detail"`
 	DuplicateTitles     []string               `json:"duplicate_titles"`
-	CreatedAt           time.Time              `json:"created_at"`
-	UpdatedAt           time.Time              `json:"updated_at"`
+	// ExecutionRole names the specialist that should execute this
+	// candidate if apply is dispatched via role_dispatch (Phase 5 B2).
+	// Nullable and unenforced by the DB today; catalog enforcement is a
+	// Phase 6 concern.
+	ExecutionRole *string   `json:"execution_role"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type BacklogCandidateDraft struct {
@@ -364,12 +369,14 @@ type BacklogCandidateDraft struct {
 	Evidence           []string
 	EvidenceDetail     PlanningEvidenceDetail
 	DuplicateTitles    []string
+	ExecutionRole      string // Phase 5 B2; empty string = NULL in DB
 }
 
 type UpdateBacklogCandidateRequest struct {
-	Title       *string `json:"title,omitempty"`
-	Description *string `json:"description,omitempty"`
-	Status      *string `json:"status,omitempty"`
+	Title         *string `json:"title,omitempty"`
+	Description   *string `json:"description,omitempty"`
+	Status        *string `json:"status,omitempty"`
+	ExecutionRole *string `json:"execution_role,omitempty"` // Phase 5 B2; "" to clear
 }
 
 type TaskLineage struct {
@@ -388,6 +395,29 @@ type ApplyBacklogCandidateResponse struct {
 	Candidate      BacklogCandidate `json:"candidate"`
 	Lineage        TaskLineage      `json:"lineage"`
 	AlreadyApplied bool             `json:"already_applied"`
+}
+
+// Apply execution modes (Phase 5 B3). `manual` preserves pre-Phase-5
+// behaviour exactly — the created task's `source` is the pre-existing
+// AppliedCandidateTaskSource constant. `role_dispatch` is a forward-
+// looking marker: today it only changes the task's `source` to
+// "role_dispatch:<execution_role>" so the audit trail distinguishes
+// candidates earmarked for future auto-execution. Phase 6 will introduce
+// the actual dispatcher.
+const (
+	ApplyExecutionModeManual       = "manual"
+	ApplyExecutionModeRoleDispatch = "role_dispatch"
+)
+
+var ValidApplyExecutionModes = map[string]bool{
+	ApplyExecutionModeManual:       true,
+	ApplyExecutionModeRoleDispatch: true,
+}
+
+type ApplyBacklogCandidateRequest struct {
+	// ExecutionMode selects how the applied task is marked.
+	// Empty or omitted = "manual" (back-compat).
+	ExecutionMode string `json:"execution_mode,omitempty"`
 }
 
 // CandidateEvidenceSummary is a lightweight view of a backlog candidate

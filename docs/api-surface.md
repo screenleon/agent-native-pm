@@ -279,6 +279,13 @@ Behavior:
 | PATCH | `/api/backlog-candidates/:id` | Review and update a persisted backlog candidate |
 | POST | `/api/backlog-candidates/:id/apply` | Apply one approved backlog candidate into the task workflow |
 
+Behavior:
+
+- `PATCH /api/backlog-candidates/:id` accepts `title`, `description`, `status`, and (Phase 5 B2) `execution_role`. The `execution_role` field is an optional free-form string — empty string clears the column (NULL in DB). The server does NOT validate the value against the role catalog in this phase; catalog enforcement is Phase 6.
+- Candidate responses always include `execution_role` (nullable JSON string). Pre-Phase-5 clients can ignore the field.
+- `POST /api/backlog-candidates/:id/apply` accepts an optional JSON body `{ "execution_mode": "manual" \| "role_dispatch" }`. Missing body or `execution_mode` omitted = `"manual"` (back-compat with Phase 4 and earlier callers that send no body). `"manual"` produces the pre-existing `AppliedCandidateTaskSource` task source. `"role_dispatch"` sets the created task's `source` to `"role_dispatch:<execution_role>"` (or bare `"role_dispatch"` when the candidate has no role set) — an audit breadcrumb for Phase 6 auto-dispatch. Unknown values return 400.
+- `"role_dispatch"` does NOT actually dispatch the task in Phase 5; the dispatcher lands in Phase 6. UI surfaces the option as `"Auto-dispatch (coming in Phase 6)"`, disabled.
+
 ### Personal Account Bindings
 
 | Method | Path | Description |
