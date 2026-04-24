@@ -7,14 +7,25 @@ import { getMeta } from '../api/client';
 // a CLI on the operator's own machine through the connector. The three cards
 // below each link into the pre-existing settings surfaces instead of
 // duplicating their forms.
+// Tri-state: 'unknown' while getMeta() is in-flight or if it failed (so a
+// transient network blip does not wrongly downgrade Option B to disabled),
+// true if the server reports local mode, false otherwise. Copilot #8/#10.
+type LocalModeState = 'unknown' | 'local' | 'server';
+
 export default function ModelSettingsHub() {
-  const [isLocalMode, setIsLocalMode] = useState<boolean | null>(null);
+  const [localModeState, setLocalModeState] = useState<LocalModeState>('unknown');
 
   useEffect(() => {
     let mounted = true;
     getMeta()
-      .then(resp => { if (mounted) setIsLocalMode(Boolean(resp.data.local_mode)); })
-      .catch(() => { if (mounted) setIsLocalMode(false); });
+      .then(resp => {
+        if (mounted) setLocalModeState(resp.data.local_mode ? 'local' : 'server');
+      })
+      .catch(() => {
+        // Leave the state as 'unknown' on transient failure; the UI renders
+        // Option B as "loading / unable to determine" rather than "disabled".
+        if (mounted) setLocalModeState('unknown');
+      });
     return () => { mounted = false; };
   }, []);
 
@@ -60,10 +71,14 @@ export default function ModelSettingsHub() {
             <li>No API key needed — the CLI brings its own authenticated session.</li>
           </ul>
           <div className="model-hub-actions">
-            {isLocalMode === false ? (
-              <span className="model-hub-disabled">Switch the server to local mode to enable this option.</span>
-            ) : (
+            {localModeState === 'local' && (
               <Link to="/settings/account-bindings" className="btn btn-primary btn-sm">Configure server-side CLI bindings →</Link>
+            )}
+            {localModeState === 'server' && (
+              <span className="model-hub-disabled">Switch the server to local mode to enable this option.</span>
+            )}
+            {localModeState === 'unknown' && (
+              <span className="model-hub-disabled">Checking server mode…</span>
             )}
           </div>
         </section>

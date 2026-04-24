@@ -90,13 +90,14 @@ func (fx connectorProbeFixture) seedCliBinding(t *testing.T, userID, label strin
 
 func (fx connectorProbeFixture) seedApiKeyBinding(t *testing.T, userID string) *models.AccountBinding {
 	t.Helper()
-	apiKey := "sk-test"
+	// APIKey intentionally nil: the binding is only used to exercise the
+	// cli:* gate in the probe handler. The encryption path would require
+	// APP_SETTINGS_MASTER_KEY env wiring that CI does not set.
 	binding, err := fx.bindingStore.Create(userID, models.CreateAccountBindingRequest{
 		ProviderID: "openai-compatible",
 		Label:      "Shared",
 		ModelID:    "gpt-4",
 		BaseURL:    "https://api.openai.com/v1",
-		APIKey:     &apiKey,
 	})
 	if err != nil {
 		t.Fatalf("create openai binding: %v", err)

@@ -1,7 +1,7 @@
 # Phase 4 plan — UX debt from early-operator friction
 
-**Status**: draft · 2026-04-24 · `[agent:feature-planner]`
-**Gates**: no Phase 4 coding lands until this doc is approved by the owner.
+**Status**: approved · implementation shipped in PR #21 · 2026-04-24 · `[agent:feature-planner]`
+**Gates**: owner approval satisfied at the time PR #21 was opened. This document now serves as the reference for what landed and what is deferred; it is no longer a pre-implementation gate.
 **Precondition**: Phase 3 (PR #20) is merged. All five Phase 3 slices shipped 2026-04-24.
 
 ---

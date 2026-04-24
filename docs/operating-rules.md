@@ -69,15 +69,51 @@ After every code change:
 3. Fix failures before marking complete
 4. Never skip or delete failing tests to make the suite pass
 
-## Pre-PR critic review
+## Pre-PR verification (mandatory before `gh pr create`)
 
-Before calling `gh pr create` for any implementation PR, spawn a `critic` subagent against the branch diff. The critic must specifically check:
+Implementation PRs (anything that changes code, not docs-only) must pass all three phases **in order**. Skipping a phase or opening a PR on a red pipeline is a workflow violation. Documentation-only and design-only PRs may skip Phase 1 and Phase 3 but still require Phase 2 governance lints.
+
+### Phase 1 — Local verification pipeline
+
+Run `make pre-pr` (or `bash scripts/pre-pr-check.sh`) before `gh pr create`. The script is the single authoritative list of checks; it must exit 0. Stages, in order:
+
+1. `make lint-governance` — layered rule structure, docs consistency, prompt-budget schema
+2. `make lint` — `go vet` and frontend `eslint`
+3. `go build ./...` in `backend/`
+4. `npx tsc --noEmit` in `frontend/`
+5. `npm test -- --run` in `frontend/`
+6. `bash scripts/test-with-sqlite.sh` — full Go suite against the local-mode driver
+7. `bash scripts/test-with-postgres.sh` — full Go suite against PostgreSQL (skippable with `--skip-postgres` only when Docker is not installed locally; CI always runs it)
+8. `npm run build` in `frontend/` — catches bundler-only regressions
+
+`make pre-pr-fast` skips stages 7 and 8 for quicker iteration during implementation. It is NOT a substitute for `make pre-pr` before opening a PR.
+
+Adding, removing, or reordering a stage above without updating `scripts/pre-pr-check.sh` (or vice-versa) is a drift signal — both surfaces must move together.
+
+### Phase 2 — Pre-PR critic review (subagent)
+
+After Phase 1 is green, spawn a `critic` subagent against the branch diff. The critic must specifically check:
 
 1. **Incomplete call site coverage** — grep for every usage of any changed pattern, field, or method. All call sites must be updated, not just the files explicitly listed in the implementation brief.
 2. **Pattern consistency** — any new method or helper must fully replicate the established pattern in the codebase (e.g., two-pass envelope decode, error handling style, nil guard order). "Similar to X" in a brief is not sufficient; the critic must verify the implementation matches X line-for-line on the critical invariants.
 3. **Missing edge cases** — scenarios the brief did not cover but the production code path must handle.
 
-Fix all critic findings before creating the PR. Exception: documentation-only and design-only PRs may skip this step.
+Fix all critic findings before moving to Phase 3. If a finding must be deferred (e.g., scope creep), document it explicitly in the PR description as a known follow-up.
+
+### Phase 3 — Risk + security coverage
+
+Depending on the touched surface, also run:
+
+- `/security-review` skill — mandatory when the diff touches authentication, authorization, subprocess execution, connector protocol, user-uploaded content, or any new HTTP endpoint.
+- `risk-reviewer` subagent — mandatory when the diff introduces new state machines, cross-tenant boundaries, schema changes, or declares DoD test matrices the critic did not verify.
+
+Fix must-fix findings before `gh pr create`. Should-fix and nits may ship in the same PR or be explicitly deferred in the PR description with a follow-up reference.
+
+### Exemptions
+
+- Docs-only changes to `docs/`, `DECISIONS.md`, `ARCHITECTURE.md`, `README*.md`, or `*.md` under `rules/` skip Phase 1 stages 2-8 and Phase 3. They still must pass Phase 1 stage 1 (`make lint-governance`).
+- Design-only changes (new plan documents, ADR drafts) also skip Phase 2 critic review.
+- Emergency hotfixes may waive Phase 3 with explicit owner approval noted in the PR description.
 
 ## Error recovery
 

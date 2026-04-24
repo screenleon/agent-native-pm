@@ -445,11 +445,19 @@ export default function AccountBindings() {
     setCliEditSaving(true);
     setCliEditError('');
     try {
-      await updateAccountBinding(binding.id, {
-        label: cliEditLabel.trim(),
+      // Copilot #2: the Create path normalises blank labels to "default", so
+      // Update should not persist an empty-string label here. Omit the field
+      // entirely when the user cleared it; the backend keeps the existing
+      // label value instead of overwriting it with "".
+      const nextLabel = cliEditLabel.trim();
+      const payload: import('../types').UpdateAccountBindingPayload = {
         model_id: nextModelId,
         cli_command: cliEditCommand.trim(),
-      });
+      };
+      if (nextLabel !== '') {
+        payload.label = nextLabel;
+      }
+      await updateAccountBinding(binding.id, payload);
       setEditingCliId(null);
       setSuccess('CLI binding updated.');
       await load();

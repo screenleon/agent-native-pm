@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -558,11 +559,19 @@ func (h *LocalConnectorHandler) ProbeBinding(w http.ResponseWriter, r *http.Requ
 		RequestedAt: time.Now().UTC(),
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrPendingProbeCapReached) {
+		// Copilot #6: distinguish "connector does not belong to this user"
+		// (sql.ErrNoRows) from true server errors (DB begin/commit, JSON
+		// marshal, lock timeout). The prior "always 404" was misleading and
+		// masked real failures.
+		switch {
+		case errors.Is(err, store.ErrPendingProbeCapReached):
 			writeError(w, http.StatusTooManyRequests, "too many pending probes on this connector; wait for one to finish before starting another")
-			return
+		case errors.Is(err, sql.ErrNoRows):
+			writeError(w, http.StatusNotFound, "connector not found")
+		default:
+			log.Printf("probe-binding enqueue failed: connector=%s user=%s err=%v", connectorID, user.ID, err)
+			writeError(w, http.StatusInternalServerError, "failed to enqueue probe")
 		}
-		writeError(w, http.StatusNotFound, "connector not found")
 		return
 	}
 	writeSuccess(w, http.StatusOK, models.ProbeBindingOnConnectorResponse{ProbeID: probeID}, nil)

@@ -85,8 +85,11 @@ func (s *Service) Run(ctx context.Context) error {
 		cliHealthInterval = 5 * time.Minute
 	}
 
-	// P4-4 probe worker starts lazily on first heartbeat that carries a
-	// pending probe request. Keeps the no-probes path unchanged.
+	// P4-4 probe worker starts at Run() time and blocks on probeWorkerWake /
+	// a 5s tick — effectively idle until a heartbeat response delivers a
+	// pending probe. Starting here (rather than lazily on first probe)
+	// keeps the heartbeat goroutine off the start-worker path and avoids a
+	// subtle race where the first heartbeat could miss the wake signal.
 	s.ensureProbeWorker(ctx)
 
 	lastError := ""

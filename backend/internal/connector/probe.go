@@ -63,30 +63,39 @@ func ExecuteProbe(ctx context.Context, req models.PendingCliProbeRequest) models
 		}
 	}
 
-	content := stripANSI(output)
-	content = strings.TrimSpace(content)
+	content := strings.TrimSpace(stripANSI(output))
 	if len(content) > 320 {
 		content = content[:320] + "…"
 	}
-	if content == "" {
-		return models.CliProbeResult{
-			ProbeID:      req.ProbeID,
-			BindingID:    req.BindingID,
-			OK:           false,
-			LatencyMS:    latency,
-			ErrorKind:    models.ErrorKindUnknown,
-			ErrorMessage: "CLI returned empty output",
-			CompletedAt:  time.Now().UTC(),
-		}
-	}
+	ok, errKind, errMsg := evaluateProbeOutput(content)
 	return models.CliProbeResult{
-		ProbeID:     req.ProbeID,
-		BindingID:   req.BindingID,
-		OK:          true,
-		LatencyMS:   latency,
-		Content:     content,
-		CompletedAt: time.Now().UTC(),
+		ProbeID:      req.ProbeID,
+		BindingID:    req.BindingID,
+		OK:           ok,
+		LatencyMS:    latency,
+		Content:      content,
+		ErrorKind:    errKind,
+		ErrorMessage: errMsg,
+		CompletedAt:  time.Now().UTC(),
 	}
+}
+
+// evaluateProbeOutput decides whether the trimmed CLI stdout counts as a
+// successful probe. The prompt asks the CLI to reply with the word "ok", so
+// we require the word "ok" (case-insensitive substring) to appear. Non-empty
+// output that omits the token is reported as a failure with the actual
+// content in error_message so operators can see what the CLI actually said.
+// Substring match (rather than strict equality) tolerates preambles that
+// Codex-style CLIs sometimes emit (e.g. "Sure — ok."), while still rejecting
+// clearly-off responses like "error: session expired".
+func evaluateProbeOutput(content string) (ok bool, errKind string, errMsg string) {
+	if content == "" {
+		return false, models.ErrorKindUnknown, "CLI returned empty output"
+	}
+	if !strings.Contains(strings.ToLower(content), "ok") {
+		return false, models.ErrorKindUnknown, "CLI responded but did not include the expected acknowledgement token"
+	}
+	return true, "", ""
 }
 
 // classifyProbeResolveError maps the free-text resolveBuiltinCLI error into
