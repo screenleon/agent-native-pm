@@ -138,7 +138,9 @@ func main() {
 	// Phase 3 handlers
 	apiKeyHandler := handlers.NewAPIKeyHandler(apiKeyStore)
 	documentRefreshHandler := handlers.NewDocumentRefreshHandler(documentStore, driftSignalStore)
-	accountBindingHandler := handlers.NewAccountBindingHandler(accountBindingStore).WithLocalMode(cfg.LocalMode)
+	accountBindingHandler := handlers.NewAccountBindingHandler(accountBindingStore).
+		WithLocalMode(cfg.LocalMode).
+		WithLocalConnectorStore(localConnectorStore)
 	localConnectorHandler := handlers.NewLocalConnectorHandler(localConnectorStore, planningRunStore, requirementStore, backlogCandidateStore, agentRunStore).
 		WithProjectStore(projectStore).
 		WithNotificationStore(notificationStore).

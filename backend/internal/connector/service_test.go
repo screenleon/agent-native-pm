@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/planning/wire"
@@ -128,5 +130,131 @@ func TestServiceRunOncePropagatesProjectAndPlanningContext(t *testing.T) {
 	}
 	if len(got.PlanningContext.Sources.OpenTasks) != 1 {
 		t.Fatalf("context sources mangled: %+v", got.PlanningContext.Sources)
+	}
+}
+
+// T-S5b-3: RunOnce tracks CliBinding.ID when the claim response includes a
+// cli_binding block, so the health probe loop can probe it at the next heartbeat.
+func TestServiceRunOnceTracksCliBinding(t *testing.T) {
+	tempDir := t.TempDir()
+	scriptPath := filepath.Join(tempDir, "adapter.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf '{\"candidates\":[]}'\n"), 0o755); err != nil {
+		t.Fatalf("write adapter: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/connector/claim-next-run":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": models.LocalConnectorClaimNextRunResponse{
+				Run:         &models.PlanningRun{ID: "run-x"},
+				Requirement: &models.Requirement{ID: "req-x", Title: "Track"},
+				CliBinding:  &models.PlanningRunCliBindingPayload{ID: "bind-1", CliCommand: "claude", ProviderID: "cli:claude"},
+			}, "error": nil})
+		case "/api/connector/planning-runs/run-x/result":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": models.PlanningRun{ID: "run-x", Status: "completed"}, "error": nil})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	svc := &Service{
+		Client: NewClient(server.URL, "tok"),
+		State: &State{Adapter: ExecJSONAdapterConfig{
+			Command:        scriptPath,
+			WorkingDir:     tempDir,
+			TimeoutSeconds: 5,
+		}},
+		Stdout: io.Discard,
+		Stderr: io.Discard,
+	}
+	if _, err := svc.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	svc.mu.Lock()
+	b, ok := svc.knownCliBindings["bind-1"]
+	svc.mu.Unlock()
+	if !ok {
+		t.Fatal("expected bind-1 to be tracked after RunOnce")
+	}
+	if b.command != "claude" {
+		t.Fatalf("unexpected command %q", b.command)
+	}
+}
+
+// T-S5b-5: probeCliHealth must skip interpreter commands and return status "unknown".
+func TestProbeCliHealthBlocklistInterpreters(t *testing.T) {
+	svc := &Service{Stdout: io.Discard, Stderr: io.Discard}
+	for _, cmd := range []string{"python3", "python", "node", "ruby"} {
+		result := svc.probeCliHealth(context.Background(), cmd)
+		if result.Status != "unknown" {
+			t.Errorf("cmd %q: expected unknown, got %q", cmd, result.Status)
+		}
+		if !strings.Contains(result.ProbeErrorMessage, "interpreter") {
+			t.Errorf("cmd %q: expected interpreter skip message, got %q", cmd, result.ProbeErrorMessage)
+		}
+	}
+}
+
+// T-S5b-5b: probeCliHealth returns cli_not_found for a non-existent command.
+func TestProbeCliHealthNotFound(t *testing.T) {
+	svc := &Service{Stdout: io.Discard, Stderr: io.Discard}
+	result := svc.probeCliHealth(context.Background(), "this-binary-does-not-exist-anpm-test")
+	if result.Status != "cli_not_found" {
+		t.Fatalf("expected cli_not_found, got %q (msg: %s)", result.Status, result.ProbeErrorMessage)
+	}
+}
+
+// T-S5b-3b: collectDueProbes only re-probes bindings whose last probe is past
+// the interval; recently-probed bindings are skipped.
+func TestCollectDueProbesRespectsCooldown(t *testing.T) {
+	svc := &Service{Stdout: io.Discard, Stderr: io.Discard, knownCliBindings: map[string]knownCliBinding{
+		"fresh": {command: "this-binary-does-not-exist", lastProbedAt: time.Now()},
+		"stale": {command: "this-binary-does-not-exist", lastProbedAt: time.Now().Add(-10 * time.Minute)},
+	}}
+	results := svc.collectDueProbes(context.Background(), 5*time.Minute)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 probe result (stale only), got %d", len(results))
+	}
+	if results[0].BindingID != "stale" {
+		t.Fatalf("expected stale binding to be probed, got %q", results[0].BindingID)
+	}
+}
+
+// T-S5b-4: heartbeat carries cli_health entries when probes are due.
+func TestServiceHeartbeatCarriesCliHealth(t *testing.T) {
+	var capturedHB models.LocalConnectorHeartbeatRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/connector/heartbeat":
+			if err := json.NewDecoder(r.Body).Decode(&capturedHB); err != nil {
+				t.Errorf("decode heartbeat: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": models.LocalConnector{Status: "online"}, "error": nil})
+		case "/api/connector/claim-next-run":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": nil, "error": nil})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	svc := &Service{
+		Client:            NewClient(server.URL, "tok"),
+		State:             &State{},
+		HeartbeatInterval: 10 * time.Millisecond,
+		PollInterval:      5 * time.Millisecond,
+		CliHealthInterval: 0,
+		Stdout:            io.Discard,
+		Stderr:            io.Discard,
+		knownCliBindings: map[string]knownCliBinding{
+			"bind-a": {command: "this-binary-does-not-exist-for-s5b-test"},
+		},
+	}
+	_ = svc.Run(ctx)
+	if len(capturedHB.CliHealth) == 0 {
+		t.Fatal("expected heartbeat to carry cli_health entries")
+	}
+	if capturedHB.CliHealth[0].BindingID != "bind-a" {
+		t.Fatalf("unexpected binding_id %q", capturedHB.CliHealth[0].BindingID)
 	}
 }

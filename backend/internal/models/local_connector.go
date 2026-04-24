@@ -18,6 +18,15 @@ const (
 	ConnectorPairingStatusCancelled = "cancelled"
 )
 
+// CliHealthEntry records the result of one `<cli_command> --version` probe.
+// Stored in local_connectors.metadata.cli_health.<binding_id> (migration 025).
+type CliHealthEntry struct {
+	Status            string    `json:"status"`             // "healthy", "cli_not_found", "unknown"
+	VersionString     string    `json:"version_string"`     // e.g. "claude 1.5.0"; empty on failure
+	CheckedAt         time.Time `json:"checked_at"`         // UTC wall-clock time of the probe
+	ProbeErrorMessage string    `json:"probe_error_message"` // non-empty only on failure
+}
+
 type LocalConnector struct {
 	ID            string                 `json:"id"`
 	UserID        string                 `json:"user_id"`
@@ -31,6 +40,9 @@ type LocalConnector struct {
 	// response). 1 = Path B / S2-aware. Set by the connector at pair time
 	// (Path B S2). See migration 023 and design §6.2 / §6.5 R3.
 	ProtocolVersion int                    `json:"protocol_version"`
+	// Metadata holds operational data such as CLI health probe results
+	// (path: metadata.cli_health.<binding_id>). Added in migration 025.
+	Metadata        map[string]interface{} `json:"metadata"`
 	LastSeenAt      *time.Time             `json:"last_seen_at"`
 	LastError       string                 `json:"last_error"`
 	CreatedAt       time.Time              `json:"created_at"`
@@ -75,9 +87,21 @@ type PairLocalConnectorResponse struct {
 	ConnectorToken string         `json:"connector_token"`
 }
 
+// LocalConnectorHeartbeatCliHealth pairs a binding_id with its probe result.
+type LocalConnectorHeartbeatCliHealth struct {
+	BindingID         string    `json:"binding_id"`
+	Status            string    `json:"status"`
+	VersionString     string    `json:"version_string,omitempty"`
+	CheckedAt         time.Time `json:"checked_at"`
+	ProbeErrorMessage string    `json:"probe_error_message,omitempty"`
+}
+
 type LocalConnectorHeartbeatRequest struct {
-	Capabilities map[string]interface{} `json:"capabilities,omitempty"`
-	LastError    string                 `json:"last_error,omitempty"`
+	Capabilities map[string]interface{}              `json:"capabilities,omitempty"`
+	LastError    string                              `json:"last_error,omitempty"`
+	// CliHealth reports health probe results for CLI bindings used by this
+	// connector. Optional; added in Path B S5b.
+	CliHealth    []LocalConnectorHeartbeatCliHealth  `json:"cli_health,omitempty"`
 }
 
 type ConnectorBacklogCandidateDraft struct {

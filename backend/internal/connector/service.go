@@ -4,20 +4,56 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/screenleon/agent-native-pm/internal/models"
 )
+
+// cliInterpreterBlocklist is the set of bare command names that must NOT be
+// probed with `<cmd> --version` as a health check. These are generic language
+// runtimes whose `--version` output does not reflect whether the intended CLI
+// agent is installed and working correctly (T-S5b-5 / R12 mitigation).
+var cliInterpreterBlocklist = map[string]bool{
+	"python":  true,
+	"python3": true,
+	"python2": true,
+	"node":    true,
+	"nodejs":  true,
+	"ruby":    true,
+	"perl":    true,
+	"php":     true,
+	"bash":    true,
+	"sh":      true,
+	"zsh":     true,
+}
 
 type Service struct {
 	Client            *Client
 	State             *State
 	HeartbeatInterval time.Duration
 	PollInterval      time.Duration
+	// CliHealthInterval controls how often CLI bindings are re-probed.
+	// Zero means use the default (5 minutes). Set to a negative value or
+	// enable CliHealthDisabled to disable probing entirely.
+	CliHealthInterval time.Duration
+	// CliHealthDisabled suppresses the health probe loop entirely.
+	CliHealthDisabled bool
 	Stdout            io.Writer
 	Stderr            io.Writer
+
+	// knownCliBindings tracks binding_id → (command, last_probe_time).
+	// Populated lazily from ClaimNextRun responses.
+	mu               sync.Mutex
+	knownCliBindings map[string]knownCliBinding
+}
+
+type knownCliBinding struct {
+	command     string
+	lastProbedAt time.Time
 }
 
 func (s *Service) Run(ctx context.Context) error {
@@ -32,6 +68,11 @@ func (s *Service) Run(ctx context.Context) error {
 	if pollInterval <= 0 {
 		pollInterval = 5 * time.Second
 	}
+	cliHealthInterval := s.CliHealthInterval
+	if cliHealthInterval <= 0 {
+		cliHealthInterval = 5 * time.Minute
+	}
+
 	lastError := ""
 	nextHeartbeat := time.Time{}
 	for {
@@ -39,10 +80,14 @@ func (s *Service) Run(ctx context.Context) error {
 			return err
 		}
 		if time.Now().After(nextHeartbeat) {
-			connector, err := s.Client.Heartbeat(ctx, models.LocalConnectorHeartbeatRequest{
+			hbReq := models.LocalConnectorHeartbeatRequest{
 				Capabilities: buildCapabilities(s.State.Adapter),
 				LastError:    lastError,
-			})
+			}
+			if !s.CliHealthDisabled {
+				hbReq.CliHealth = s.collectDueProbes(ctx, cliHealthInterval)
+			}
+			connector, err := s.Client.Heartbeat(ctx, hbReq)
 			if err != nil {
 				lastError = err.Error()
 				fmt.Fprintf(s.Stderr, "heartbeat failed: %s\n", lastError)
@@ -90,6 +135,11 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 			ModelID:    claim.CliBinding.ModelID,
 			CliCommand: claim.CliBinding.CliCommand,
 		}
+		// Track this binding so the health probe loop can probe it at the
+		// next heartbeat cycle (Path B S5b).
+		if !s.CliHealthDisabled {
+			s.trackCliBinding(claim.CliBinding.ID, claim.CliBinding.CliCommand)
+		}
 	}
 	execInput := ExecJSONInput{
 		Run:                    claim.Run,
@@ -114,6 +164,107 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 	}
 	fmt.Fprintf(s.Stderr, "planning run %s (project %q) failed locally: %s\n", claim.Run.ID, projectLabel, strings.TrimSpace(result.ErrorMessage))
 	return true, nil
+}
+
+// trackCliBinding registers a binding_id → command mapping. If the command
+// is empty (binding used the PATH-resolved default), we still record an entry
+// so we can probe it later once the effective command is known.
+func (s *Service) trackCliBinding(bindingID, command string) {
+	if strings.TrimSpace(bindingID) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.knownCliBindings == nil {
+		s.knownCliBindings = make(map[string]knownCliBinding)
+	}
+	existing, ok := s.knownCliBindings[bindingID]
+	if !ok {
+		s.knownCliBindings[bindingID] = knownCliBinding{command: command}
+		return
+	}
+	// Update the command if it changed (e.g. binding was patched between runs).
+	if existing.command != command {
+		s.knownCliBindings[bindingID] = knownCliBinding{command: command, lastProbedAt: existing.lastProbedAt}
+	}
+}
+
+// collectDueProbes runs the CLI health probe for every known binding whose
+// last probe is older than the given interval. Returns entries for all probed
+// bindings (the heartbeat handler merges them into the connector's metadata).
+func (s *Service) collectDueProbes(ctx context.Context, interval time.Duration) []models.LocalConnectorHeartbeatCliHealth {
+	s.mu.Lock()
+	due := make(map[string]knownCliBinding)
+	for id, b := range s.knownCliBindings {
+		if time.Since(b.lastProbedAt) >= interval {
+			due[id] = b
+		}
+	}
+	s.mu.Unlock()
+
+	if len(due) == 0 {
+		return nil
+	}
+
+	var results []models.LocalConnectorHeartbeatCliHealth
+	for id, b := range due {
+		entry := s.probeCliHealth(ctx, b.command)
+		entry.BindingID = id
+		results = append(results, entry)
+		s.mu.Lock()
+		if existing, ok := s.knownCliBindings[id]; ok {
+			s.knownCliBindings[id] = knownCliBinding{command: existing.command, lastProbedAt: time.Now()}
+		}
+		s.mu.Unlock()
+	}
+	return results
+}
+
+// probeCliHealth runs `<command> --version` and classifies the result.
+// Commands on the interpreter blocklist are skipped with status "unknown".
+func (s *Service) probeCliHealth(ctx context.Context, command string) models.LocalConnectorHeartbeatCliHealth {
+	now := time.Now().UTC()
+	cmd := strings.TrimSpace(command)
+	if cmd == "" {
+		return models.LocalConnectorHeartbeatCliHealth{
+			Status:            "unknown",
+			ProbeErrorMessage: "cli_command not configured",
+			CheckedAt:         now,
+		}
+	}
+	// Blocklist: skip interpreters whose --version output doesn't reflect CLI health.
+	base := strings.ToLower(filepath.Base(cmd))
+	// Strip extension (e.g. python3.exe on Windows).
+	if idx := strings.LastIndex(base, "."); idx > 0 {
+		base = base[:idx]
+	}
+	if cliInterpreterBlocklist[base] {
+		return models.LocalConnectorHeartbeatCliHealth{
+			Status:            "unknown",
+			ProbeErrorMessage: "skipped: interpreter command",
+			CheckedAt:         now,
+		}
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(probeCtx, cmd, "--version").CombinedOutput()
+	if err != nil {
+		status := "cli_not_found"
+		if probeCtx.Err() != nil {
+			status = "cli_timeout"
+		}
+		return models.LocalConnectorHeartbeatCliHealth{
+			Status:            status,
+			ProbeErrorMessage: err.Error(),
+			CheckedAt:         now,
+		}
+	}
+	return models.LocalConnectorHeartbeatCliHealth{
+		Status:        "healthy",
+		VersionString: strings.TrimSpace(string(out)),
+		CheckedAt:     now,
+	}
 }
 
 func buildCapabilities(config ExecJSONAdapterConfig) map[string]interface{} {

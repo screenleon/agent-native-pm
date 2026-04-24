@@ -19,7 +19,8 @@ type AccountBindingHandler struct {
 	// Slice S1, design §5 D8 / §6.2 rule 2). The CLI bridge is a
 	// subprocess-execution surface; multi-user server mode would let one
 	// user's cli_command run as the connector host's identity.
-	localMode bool
+	localMode          bool
+	localConnectorStore *store.LocalConnectorStore
 }
 
 func NewAccountBindingHandler(s *store.AccountBindingStore) *AccountBindingHandler {
@@ -34,6 +35,16 @@ func (h *AccountBindingHandler) WithLocalMode(localMode bool) *AccountBindingHan
 		return nil
 	}
 	h.localMode = localMode
+	return h
+}
+
+// WithLocalConnectorStore wires the connector store so the handler can scrub
+// stale cli_health metadata when a binding is deleted (R12 / D3, Path B S5b).
+func (h *AccountBindingHandler) WithLocalConnectorStore(lcs *store.LocalConnectorStore) *AccountBindingHandler {
+	if h == nil {
+		return nil
+	}
+	h.localConnectorStore = lcs
 	return h
 }
 
@@ -150,6 +161,14 @@ func (h *AccountBindingHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.Delete(id, user.ID); err != nil {
 		writeAccountBindingError(w, err)
 		return
+	}
+	// R12 / D3 (Path B S5b): scrub stale cli_health entries for this binding
+	// from all connectors so a future binding that reuses the same ID cannot
+	// pick up health state from a different, now-deleted binding.
+	if h.localConnectorStore != nil {
+		if err := h.localConnectorStore.ScrubCliHealthKey(user.ID, id); err != nil {
+			log.Printf("account_bindings handler: scrub cli_health for %s: %v", id, err)
+		}
 	}
 	writeSuccess(w, http.StatusOK, nil, nil)
 }

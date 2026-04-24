@@ -28,7 +28,7 @@ func NewLocalConnectorStore(db *sql.DB, dialect database.Dialect) *LocalConnecto
 func (s *LocalConnectorStore) ListByUser(userID string) ([]models.LocalConnector, error) {
 	rows, err := s.db.Query(`
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       protocol_version, last_seen_at, last_error, created_at, updated_at
+		       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -204,14 +204,43 @@ func (s *LocalConnectorStore) HeartbeatByToken(token string, req models.LocalCon
 	if err != nil {
 		return nil, fmt.Errorf("encode capabilities: %w", err)
 	}
+
+	// Merge cli_health entries into existing metadata (D3: non-destructive merge).
+	metadata := connector.Metadata
+	if metadata == nil {
+		metadata = map[string]interface{}{}
+	}
+	if len(req.CliHealth) > 0 {
+		existing, _ := metadata["cli_health"].(map[string]interface{})
+		if existing == nil {
+			existing = map[string]interface{}{}
+		}
+		for _, entry := range req.CliHealth {
+			if strings.TrimSpace(entry.BindingID) == "" {
+				continue
+			}
+			existing[entry.BindingID] = map[string]interface{}{
+				"status":              entry.Status,
+				"version_string":      entry.VersionString,
+				"checked_at":          entry.CheckedAt.UTC().Format(time.RFC3339),
+				"probe_error_message": entry.ProbeErrorMessage,
+			}
+		}
+		metadata["cli_health"] = existing
+	}
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, fmt.Errorf("encode metadata: %w", err)
+	}
+
 	now := time.Now().UTC()
 	lastError := strings.TrimSpace(req.LastError)
 
 	_, err = s.db.Exec(`
 		UPDATE local_connectors
-		SET status = $1, capabilities = $2, last_seen_at = $3, last_error = $4, updated_at = $3
-		WHERE id = $5
-	`, models.LocalConnectorStatusOnline, capabilitiesJSON, now, lastError, connector.ID)
+		SET status = $1, capabilities = $2, metadata = $3, last_seen_at = $4, last_error = $5, updated_at = $4
+		WHERE id = $6
+	`, models.LocalConnectorStatusOnline, capabilitiesJSON, metadataJSON, now, lastError, connector.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +270,7 @@ func (s *LocalConnectorStore) Revoke(id, userID string) error {
 func (s *LocalConnectorStore) GetByID(id, userID string) (*models.LocalConnector, error) {
 	row := s.db.QueryRow(`
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       protocol_version, last_seen_at, last_error, created_at, updated_at
+		       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE id = $1 AND user_id = $2
 	`, id, userID)
@@ -251,7 +280,7 @@ func (s *LocalConnectorStore) GetByID(id, userID string) (*models.LocalConnector
 func (s *LocalConnectorStore) GetByToken(token string) (*models.LocalConnector, error) {
 	row := s.db.QueryRow(`
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       protocol_version, last_seen_at, last_error, created_at, updated_at
+		       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE token_hash = $1
 	`, hashSecret(token))
@@ -272,7 +301,7 @@ func (s *LocalConnectorStore) GetFirstUsableByUser(userID string) (*models.Local
 		// SQLite date arithmetic: subtract seconds using datetime modifier.
 		query = `
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       protocol_version, last_seen_at, last_error, created_at, updated_at
+		       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE user_id = $1
 		  AND status = $2
@@ -283,7 +312,7 @@ func (s *LocalConnectorStore) GetFirstUsableByUser(userID string) (*models.Local
 	} else {
 		query = `
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       protocol_version, last_seen_at, last_error, created_at, updated_at
+		       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE user_id = $1
 		  AND status = $2
@@ -314,6 +343,7 @@ func scanOneLocalConnector(row localConnectorScanner) (*models.LocalConnector, e
 func scanLocalConnector(scanner localConnectorScanner) (*models.LocalConnector, error) {
 	var connector models.LocalConnector
 	var capabilitiesRaw []byte
+	var metadataRaw []byte
 	var lastSeenAt sql.NullTime
 	err := scanner.Scan(
 		&connector.ID,
@@ -324,6 +354,7 @@ func scanLocalConnector(scanner localConnectorScanner) (*models.LocalConnector, 
 		&connector.Status,
 		&capabilitiesRaw,
 		&connector.ProtocolVersion,
+		&metadataRaw,
 		&lastSeenAt,
 		&connector.LastError,
 		&connector.CreatedAt,
@@ -336,6 +367,12 @@ func scanLocalConnector(scanner localConnectorScanner) (*models.LocalConnector, 
 	if len(capabilitiesRaw) > 0 {
 		if err := json.Unmarshal(capabilitiesRaw, &connector.Capabilities); err != nil {
 			return nil, fmt.Errorf("decode local connector capabilities: %w", err)
+		}
+	}
+	connector.Metadata = map[string]interface{}{}
+	if len(metadataRaw) > 0 {
+		if err := json.Unmarshal(metadataRaw, &connector.Metadata); err != nil {
+			return nil, fmt.Errorf("decode local connector metadata: %w", err)
 		}
 	}
 	if lastSeenAt.Valid {
@@ -371,4 +408,59 @@ func generateReadableSecret(byteLength int) (string, error) {
 		return encoded[:len(encoded)/2] + "-" + encoded[len(encoded)/2:], nil
 	}
 	return encoded, nil
+}
+
+// ScrubCliHealthKey removes the given bindingID from metadata.cli_health in
+// all connectors belonging to userID. Called when an account binding is
+// deleted to prevent stale health data from re-aliasing a future binding
+// that reuses the same ID (R12 / D3).
+func (s *LocalConnectorStore) ScrubCliHealthKey(userID, bindingID string) error {
+	rows, err := s.db.Query(`
+		SELECT id, metadata FROM local_connectors WHERE user_id = $1
+	`, userID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type row struct {
+		id       string
+		metadata []byte
+	}
+	var connectors []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.metadata); err != nil {
+			return err
+		}
+		connectors = append(connectors, r)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, c := range connectors {
+		meta := map[string]interface{}{}
+		if len(c.metadata) > 0 {
+			if err := json.Unmarshal(c.metadata, &meta); err != nil {
+				continue
+			}
+		}
+		health, ok := meta["cli_health"].(map[string]interface{})
+		if !ok || health == nil {
+			continue
+		}
+		if _, found := health[bindingID]; !found {
+			continue
+		}
+		delete(health, bindingID)
+		meta["cli_health"] = health
+		updated, err := json.Marshal(meta)
+		if err != nil {
+			continue
+		}
+		_, _ = s.db.Exec(`UPDATE local_connectors SET metadata = $1, updated_at = $2 WHERE id = $3`,
+			updated, time.Now().UTC(), c.id)
+	}
+	return nil
 }

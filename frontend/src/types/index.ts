@@ -206,6 +206,13 @@ export interface UpdateAccountBindingPayload {
   is_primary?: boolean;
 }
 
+export interface CliHealthEntry {
+  status: 'healthy' | 'cli_not_found' | 'cli_timeout' | 'unknown';
+  version_string?: string;
+  checked_at: string;
+  probe_error_message?: string;
+}
+
 export interface LocalConnector {
   id: string;
   user_id: string;
@@ -214,6 +221,9 @@ export interface LocalConnector {
   client_version: string;
   status: 'pending' | 'online' | 'offline' | 'revoked';
   capabilities: Record<string, unknown>;
+  metadata?: {
+    cli_health?: Record<string, CliHealthEntry>;
+  };
   last_seen_at: string | null;
   last_error: string;
   created_at: string;

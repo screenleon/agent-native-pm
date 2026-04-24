@@ -98,11 +98,38 @@ def _read_request() -> dict[str, Any]:
     return json.loads(raw)
 
 
+# Ordered pattern list for error_kind classification.
+# Earlier entries win. Patterns are matched case-insensitively against the
+# full error message (including any embedded stderr excerpt).
+_ERROR_KIND_PATTERNS: list[tuple[str, str]] = [
+    (r"session.?expired|not logged in|authentication.?expired|login.*required", "session_expired"),
+    (r"rate.?limit|too many request|quota.?exceeded|429", "rate_limited"),
+    (r"model.?not.?found|model.?not.?available|no such model|invalid model|unknown model", "model_not_available"),
+    (r"not found on path|no such file|command not found|cannot find.*cli|cli not found", "cli_not_found"),
+    (r"timed? ?out|timeout", "cli_timeout"),
+    (r"adapter.*error|protocol.?error|parse.*agent.?output|invalid.*json|unexpected.*output", "adapter_protocol_error"),
+]
+
+_VALID_ERROR_KINDS = frozenset([
+    "session_expired", "rate_limited", "model_not_available",
+    "cli_not_found", "cli_timeout", "adapter_protocol_error", "unknown",
+])
+
+
+def _classify_error_kind(error_message: str) -> str:
+    msg = (error_message or "").lower()
+    for pattern, kind in _ERROR_KIND_PATTERNS:
+        if re.search(pattern, msg):
+            return kind
+    return "unknown"
+
+
 def _write_response(candidates: list[dict[str, Any]], error_message: str = "",
                     cli_info: dict[str, Any] | None = None) -> None:
     payload: dict[str, Any] = {"candidates": candidates}
     if error_message:
         payload["error_message"] = error_message
+        payload["error_kind"] = _classify_error_kind(error_message)
     if cli_info:
         payload["cli_info"] = cli_info
     json.dump(payload, sys.stdout, ensure_ascii=False)
