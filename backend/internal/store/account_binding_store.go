@@ -186,7 +186,8 @@ func countActiveByNamespace(exec interface {
 func (s *AccountBindingStore) ListByUser(userID string) ([]models.AccountBinding, error) {
 	rows, err := s.db.Query(`
 		SELECT id, user_id, provider_id, label, base_url, model_id, configured_models,
-		       api_key_configured, is_active, cli_command, is_primary, created_at, updated_at
+		       api_key_configured, is_active, cli_command, is_primary, created_at, updated_at,
+		       last_probe_at, last_probe_ok, last_probe_ms
 		FROM account_bindings
 		WHERE user_id = $1
 		ORDER BY created_at ASC
@@ -200,10 +201,14 @@ func (s *AccountBindingStore) ListByUser(userID string) ([]models.AccountBinding
 	for rows.Next() {
 		var b models.AccountBinding
 		var configuredModelsRaw []byte
+		var lastProbeAt sql.NullTime
+		var lastProbeOk sql.NullBool
+		var lastProbeMs sql.NullInt32
 		if err := rows.Scan(
 			&b.ID, &b.UserID, &b.ProviderID, &b.Label, &b.BaseURL, &b.ModelID,
 			&configuredModelsRaw, &b.APIKeyConfigured, &b.IsActive,
 			&b.CliCommand, &b.IsPrimary, &b.CreatedAt, &b.UpdatedAt,
+			&lastProbeAt, &lastProbeOk, &lastProbeMs,
 		); err != nil {
 			return nil, err
 		}
@@ -215,12 +220,38 @@ func (s *AccountBindingStore) ListByUser(userID string) ([]models.AccountBinding
 		if b.ConfiguredModels == nil {
 			b.ConfiguredModels = []string{}
 		}
+		if lastProbeAt.Valid {
+			t := lastProbeAt.Time
+			b.LastProbeAt = &t
+		}
+		if lastProbeOk.Valid {
+			v := lastProbeOk.Bool
+			b.LastProbeOk = &v
+		}
+		if lastProbeMs.Valid {
+			v := int(lastProbeMs.Int32)
+			b.LastProbeMs = &v
+		}
 		bindings = append(bindings, b)
 	}
 	if bindings == nil {
 		bindings = []models.AccountBinding{}
 	}
 	return bindings, rows.Err()
+}
+
+// RecordProbe writes the result of a connection probe back to the binding row.
+// Called best-effort after POST /api/me/probe-model; failures are logged by
+// the caller but do not affect the HTTP response already in flight.
+func (s *AccountBindingStore) RecordProbe(id, userID string, ok bool, latencyMS int64) error {
+	now := time.Now().UTC()
+	ms := int(latencyMS)
+	_, err := s.db.Exec(`
+		UPDATE account_bindings
+		SET last_probe_at = $1, last_probe_ok = $2, last_probe_ms = $3, updated_at = $4
+		WHERE id = $5 AND user_id = $6
+	`, now, ok, ms, now, id, userID)
+	return err
 }
 
 func (s *AccountBindingStore) GetByID(id, userID string) (*models.StoredAccountBinding, error) {

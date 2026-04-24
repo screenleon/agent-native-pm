@@ -178,6 +178,10 @@ export interface AccountBinding {
   is_primary: boolean;
   created_at: string;
   updated_at: string;
+  // Probe history (migration 024); null until first probe.
+  last_probe_at: string | null;
+  last_probe_ok: boolean | null;
+  last_probe_ms: number | null;
 }
 
 export interface CreateAccountBindingPayload {

@@ -23,6 +23,34 @@ import {
   type CliBindingPresetID,
 } from '../utils/cliBindingPresets';
 
+function formatRelativeTime(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const diffMin = Math.floor(diffMs / 60_000);
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin} min ago`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `${diffH}h ago`;
+  return `${Math.floor(diffH / 24)}d ago`;
+}
+
+function PersistentProbeStatus({ binding }: { binding: { last_probe_at: string | null; last_probe_ok: boolean | null; last_probe_ms: number | null } }) {
+  if (!binding.last_probe_at) return null;
+  const ok = binding.last_probe_ok;
+  return (
+    <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+      Last tested: {formatRelativeTime(binding.last_probe_at)}{' '}
+      {ok === true && (
+        <span style={{ color: 'var(--success, #4ade80)' }}>
+          ✓{binding.last_probe_ms != null ? ` ${binding.last_probe_ms} ms` : ''}
+        </span>
+      )}
+      {ok === false && (
+        <span style={{ color: 'var(--danger, #f87171)' }}>✗ failed</span>
+      )}
+    </div>
+  );
+}
+
 function ProbeReport({ result }: { result: ProbeModelResult }) {
   if (!result.ok) {
     return (
@@ -467,6 +495,7 @@ export default function AccountBindings() {
                   <div>API key configured: {binding.api_key_configured ? 'Yes' : 'No'}</div>
                   <div>Models: {binding.configured_models?.join(', ') || binding.model_id}</div>
                 </div>
+                <PersistentProbeStatus binding={binding} />
                 {cardProbeResults[binding.id] && (
                   <div style={{ marginTop: '0.5rem' }}>
                     <ProbeReport result={cardProbeResults[binding.id]} />
