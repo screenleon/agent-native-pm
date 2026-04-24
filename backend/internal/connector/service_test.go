@@ -180,47 +180,65 @@ func TestServiceRunOnceTracksCliBinding(t *testing.T) {
 	}
 }
 
-// T-S5b-5: probeCliHealth must skip interpreter commands and return status "unknown".
-func TestProbeCliHealthBlocklistInterpreters(t *testing.T) {
+// T-S5b-5: probeCliCommand must skip interpreter commands (blocklist).
+func TestProbeCliCommandBlocklistInterpreters(t *testing.T) {
 	svc := &Service{Stdout: io.Discard, Stderr: io.Discard}
 	for _, cmd := range []string{"python3", "python", "node", "ruby"} {
-		result := svc.probeCliHealth(context.Background(), cmd)
-		if result.Status != "unknown" {
-			t.Errorf("cmd %q: expected unknown, got %q", cmd, result.Status)
+		healthy, _, errMsg := svc.probeCliCommand(context.Background(), cmd)
+		if healthy {
+			t.Errorf("cmd %q: expected blocklist skip, got healthy=true", cmd)
 		}
-		if !strings.Contains(result.ProbeErrorMessage, "interpreter") {
-			t.Errorf("cmd %q: expected interpreter skip message, got %q", cmd, result.ProbeErrorMessage)
+		if !strings.Contains(errMsg, "interpreter") {
+			t.Errorf("cmd %q: expected interpreter skip message, got %q", cmd, errMsg)
 		}
 	}
 }
 
-// T-S5b-5b: probeCliHealth returns cli_not_found for a non-existent command.
-func TestProbeCliHealthNotFound(t *testing.T) {
+// T-S5b-5b: probeCliCommand returns unhealthy for a non-existent command.
+func TestProbeCliCommandNotFound(t *testing.T) {
 	svc := &Service{Stdout: io.Discard, Stderr: io.Discard}
-	result := svc.probeCliHealth(context.Background(), "this-binary-does-not-exist-anpm-test")
-	if result.Status != "cli_not_found" {
-		t.Fatalf("expected cli_not_found, got %q (msg: %s)", result.Status, result.ProbeErrorMessage)
+	healthy, _, errMsg := svc.probeCliCommand(context.Background(), "this-binary-does-not-exist-anpm-test")
+	if healthy {
+		t.Fatalf("expected unhealthy for missing binary, got healthy=true")
+	}
+	if errMsg == "" {
+		t.Fatal("expected non-empty error message")
 	}
 }
 
-// T-S5b-3b: collectDueProbes only re-probes bindings whose last probe is past
-// the interval; recently-probed bindings are skipped.
-func TestCollectDueProbesRespectsCooldown(t *testing.T) {
-	svc := &Service{Stdout: io.Discard, Stderr: io.Discard, knownCliBindings: map[string]knownCliBinding{
-		"fresh": {command: "this-binary-does-not-exist", lastProbedAt: time.Now()},
-		"stale": {command: "this-binary-does-not-exist", lastProbedAt: time.Now().Add(-10 * time.Minute)},
-	}}
-	results := svc.collectDueProbes(context.Background(), 5*time.Minute)
-	if len(results) != 1 {
-		t.Fatalf("expected 1 probe result (stale only), got %d", len(results))
+// T-S5b-3b: runDueProbes only probes bindings whose last probe is past the interval.
+func TestRunDueProbesRespectsCooldown(t *testing.T) {
+	var probeCount int
+	// Use a write-to-buffer stdout so we can verify log lines were emitted.
+	var logBuf strings.Builder
+	svc := &Service{
+		Stdout: &logBuf,
+		Stderr: &logBuf,
+		knownCliBindings: map[string]knownCliBinding{
+			"fresh": {command: "this-binary-does-not-exist", lastProbedAt: time.Now()},
+			"stale": {command: "this-binary-does-not-exist", lastProbedAt: time.Now().Add(-10 * time.Minute)},
+		},
 	}
-	if results[0].BindingID != "stale" {
-		t.Fatalf("expected stale binding to be probed, got %q", results[0].BindingID)
+	// Instrument: count how many probes actually run.
+	before := logBuf.Len()
+	svc.runDueProbes(context.Background(), 5*time.Minute)
+	_ = before
+	probeCount = 0
+	for _, line := range strings.Split(logBuf.String(), "\n") {
+		if strings.Contains(line, "cli health probe") && strings.Contains(line, "stale") {
+			probeCount++
+		}
+		if strings.Contains(line, "cli health probe") && strings.Contains(line, "fresh") {
+			t.Errorf("fresh binding should NOT have been probed")
+		}
+	}
+	if probeCount == 0 {
+		t.Fatal("expected at least one log line for the stale binding")
 	}
 }
 
-// T-S5b-4: heartbeat carries cli_health entries when probes are due.
-func TestServiceHeartbeatCarriesCliHealth(t *testing.T) {
+// T-S5b-4: heartbeat carries last_cli_healthy_at when a prior probe succeeded.
+func TestServiceHeartbeatCarriesLastHealthyAt(t *testing.T) {
 	var capturedHB models.LocalConnectorHeartbeatRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -238,23 +256,19 @@ func TestServiceHeartbeatCarriesCliHealth(t *testing.T) {
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	healthyAt := time.Now().UTC().Add(-30 * time.Second)
 	svc := &Service{
 		Client:            NewClient(server.URL, "tok"),
 		State:             &State{},
 		HeartbeatInterval: 10 * time.Millisecond,
 		PollInterval:      5 * time.Millisecond,
-		CliHealthInterval: 0,
+		CliHealthDisabled: true, // probe loop off; we pre-seed lastCliHealthyAt
 		Stdout:            io.Discard,
 		Stderr:            io.Discard,
-		knownCliBindings: map[string]knownCliBinding{
-			"bind-a": {command: "this-binary-does-not-exist-for-s5b-test"},
-		},
+		lastCliHealthyAt:  &healthyAt,
 	}
 	_ = svc.Run(ctx)
-	if len(capturedHB.CliHealth) == 0 {
-		t.Fatal("expected heartbeat to carry cli_health entries")
-	}
-	if capturedHB.CliHealth[0].BindingID != "bind-a" {
-		t.Fatalf("unexpected binding_id %q", capturedHB.CliHealth[0].BindingID)
+	if capturedHB.LastCliHealthyAt == nil {
+		t.Fatal("expected heartbeat to carry last_cli_healthy_at")
 	}
 }

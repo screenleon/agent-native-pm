@@ -205,28 +205,14 @@ func (s *LocalConnectorStore) HeartbeatByToken(token string, req models.LocalCon
 		return nil, fmt.Errorf("encode capabilities: %w", err)
 	}
 
-	// Merge cli_health entries into existing metadata (D3: non-destructive merge).
+	// Write at most one timestamp to metadata (no per-binding accumulation).
+	// cli_last_healthy_at is overwritten on every heartbeat that carries it.
 	metadata := connector.Metadata
 	if metadata == nil {
 		metadata = map[string]interface{}{}
 	}
-	if len(req.CliHealth) > 0 {
-		existing, _ := metadata["cli_health"].(map[string]interface{})
-		if existing == nil {
-			existing = map[string]interface{}{}
-		}
-		for _, entry := range req.CliHealth {
-			if strings.TrimSpace(entry.BindingID) == "" {
-				continue
-			}
-			existing[entry.BindingID] = map[string]interface{}{
-				"status":              entry.Status,
-				"version_string":      entry.VersionString,
-				"checked_at":          entry.CheckedAt.UTC().Format(time.RFC3339),
-				"probe_error_message": entry.ProbeErrorMessage,
-			}
-		}
-		metadata["cli_health"] = existing
+	if req.LastCliHealthyAt != nil {
+		metadata["cli_last_healthy_at"] = req.LastCliHealthyAt.UTC().Format(time.RFC3339)
 	}
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
@@ -410,57 +396,3 @@ func generateReadableSecret(byteLength int) (string, error) {
 	return encoded, nil
 }
 
-// ScrubCliHealthKey removes the given bindingID from metadata.cli_health in
-// all connectors belonging to userID. Called when an account binding is
-// deleted to prevent stale health data from re-aliasing a future binding
-// that reuses the same ID (R12 / D3).
-func (s *LocalConnectorStore) ScrubCliHealthKey(userID, bindingID string) error {
-	rows, err := s.db.Query(`
-		SELECT id, metadata FROM local_connectors WHERE user_id = $1
-	`, userID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	type row struct {
-		id       string
-		metadata []byte
-	}
-	var connectors []row
-	for rows.Next() {
-		var r row
-		if err := rows.Scan(&r.id, &r.metadata); err != nil {
-			return err
-		}
-		connectors = append(connectors, r)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	for _, c := range connectors {
-		meta := map[string]interface{}{}
-		if len(c.metadata) > 0 {
-			if err := json.Unmarshal(c.metadata, &meta); err != nil {
-				continue
-			}
-		}
-		health, ok := meta["cli_health"].(map[string]interface{})
-		if !ok || health == nil {
-			continue
-		}
-		if _, found := health[bindingID]; !found {
-			continue
-		}
-		delete(health, bindingID)
-		meta["cli_health"] = health
-		updated, err := json.Marshal(meta)
-		if err != nil {
-			continue
-		}
-		_, _ = s.db.Exec(`UPDATE local_connectors SET metadata = $1, updated_at = $2 WHERE id = $3`,
-			updated, time.Now().UTC(), c.id)
-	}
-	return nil
-}

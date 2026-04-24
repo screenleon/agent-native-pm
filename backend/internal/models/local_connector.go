@@ -18,14 +18,6 @@ const (
 	ConnectorPairingStatusCancelled = "cancelled"
 )
 
-// CliHealthEntry records the result of one `<cli_command> --version` probe.
-// Stored in local_connectors.metadata.cli_health.<binding_id> (migration 025).
-type CliHealthEntry struct {
-	Status            string    `json:"status"`             // "healthy", "cli_not_found", "unknown"
-	VersionString     string    `json:"version_string"`     // e.g. "claude 1.5.0"; empty on failure
-	CheckedAt         time.Time `json:"checked_at"`         // UTC wall-clock time of the probe
-	ProbeErrorMessage string    `json:"probe_error_message"` // non-empty only on failure
-}
 
 type LocalConnector struct {
 	ID            string                 `json:"id"`
@@ -87,21 +79,14 @@ type PairLocalConnectorResponse struct {
 	ConnectorToken string         `json:"connector_token"`
 }
 
-// LocalConnectorHeartbeatCliHealth pairs a binding_id with its probe result.
-type LocalConnectorHeartbeatCliHealth struct {
-	BindingID         string    `json:"binding_id"`
-	Status            string    `json:"status"`
-	VersionString     string    `json:"version_string,omitempty"`
-	CheckedAt         time.Time `json:"checked_at"`
-	ProbeErrorMessage string    `json:"probe_error_message,omitempty"`
-}
-
 type LocalConnectorHeartbeatRequest struct {
-	Capabilities map[string]interface{}              `json:"capabilities,omitempty"`
-	LastError    string                              `json:"last_error,omitempty"`
-	// CliHealth reports health probe results for CLI bindings used by this
-	// connector. Optional; added in Path B S5b.
-	CliHealth    []LocalConnectorHeartbeatCliHealth  `json:"cli_health,omitempty"`
+	Capabilities     map[string]interface{} `json:"capabilities,omitempty"`
+	LastError        string                 `json:"last_error,omitempty"`
+	// LastCliHealthyAt is set by the connector when a CLI health probe
+	// succeeded since the previous heartbeat. The server overwrites
+	// metadata.cli_last_healthy_at with this value (single timestamp,
+	// no per-binding accumulation). Path B S5b.
+	LastCliHealthyAt *time.Time `json:"last_cli_healthy_at,omitempty"`
 }
 
 type ConnectorBacklogCandidateDraft struct {

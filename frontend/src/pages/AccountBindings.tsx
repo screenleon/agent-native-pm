@@ -7,10 +7,9 @@ import {
   getMeta,
   fetchRemoteModels,
   probeModel,
-  listLocalConnectors,
 } from '../api/client';
 import type { ProbeModelResult } from '../api/client';
-import type { AccountBinding, CliHealthEntry, CreateAccountBindingPayload, LocalConnector } from '../types';
+import type { AccountBinding, CreateAccountBindingPayload } from '../types';
 import {
   getPlanningConnectionPreset,
   inferPlanningConnectionPreset,
@@ -23,54 +22,6 @@ import {
   inferCliBindingPreset,
   type CliBindingPresetID,
 } from '../utils/cliBindingPresets';
-
-function getBindingCliHealth(connectors: LocalConnector[], bindingId: string): CliHealthEntry | null {
-  let best: CliHealthEntry | null = null;
-  for (const c of connectors) {
-    const entry = c.metadata?.cli_health?.[bindingId];
-    if (!entry) continue;
-    if (!best || new Date(entry.checked_at) > new Date(best.checked_at)) {
-      best = entry;
-    }
-  }
-  return best;
-}
-
-function CliHealthBadge({ health }: { health: CliHealthEntry | null }) {
-  if (!health) return null;
-  const { status, version_string, checked_at, probe_error_message } = health;
-  const relTime = formatRelativeTime(checked_at);
-  if (status === 'healthy') {
-    return (
-      <span title={`${version_string || 'ok'} — probed ${relTime}`}
-        style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: 'var(--success, #4ade80)', fontWeight: 500 }}>
-        ✓ CLI healthy
-      </span>
-    );
-  }
-  if (status === 'cli_not_found') {
-    return (
-      <span title={`CLI not found — probed ${relTime}${probe_error_message ? ': ' + probe_error_message : ''}`}
-        style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: 'var(--danger, #f87171)', fontWeight: 500 }}>
-        ✗ CLI not found
-      </span>
-    );
-  }
-  if (status === 'cli_timeout') {
-    return (
-      <span title={`CLI timed out — probed ${relTime}`}
-        style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: 'var(--warning, #fb923c)', fontWeight: 500 }}>
-        ⚠ CLI timeout
-      </span>
-    );
-  }
-  return (
-    <span title={`CLI status unknown — probed ${relTime}`}
-      style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 500 }}>
-      ? CLI unknown
-    </span>
-  );
-}
 
 function formatRelativeTime(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -138,7 +89,6 @@ function ProbeReport({ result }: { result: ProbeModelResult }) {
 
 export default function AccountBindings() {
   const [bindings, setBindings] = useState<AccountBinding[]>([]);
-  const [connectors, setConnectors] = useState<LocalConnector[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -198,15 +148,6 @@ export default function AccountBindings() {
       if (isLocal && !hasAnyCli && !userDismissedCliForm.current) {
         setShowCliForm(true);
         setCliIsPrimary(true);
-      }
-      // Load connector health data (local mode only). Failure is non-fatal.
-      if (isLocal) {
-        try {
-          const connResp = await listLocalConnectors();
-          setConnectors(connResp.data);
-        } catch {
-          setConnectors([]);
-        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load bindings');
@@ -700,7 +641,6 @@ export default function AccountBindings() {
                 {cliBindings.map(binding => {
                   const presetId = inferCliBindingPreset(binding.provider_id);
                   const preset = getCliBindingPreset(presetId);
-                  const cliHealth = getBindingCliHealth(connectors, binding.id);
                   return (
                     <div className="card" key={binding.id} style={{ opacity: binding.is_active ? 1 : 0.6 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -719,7 +659,6 @@ export default function AccountBindings() {
                               (inactive)
                             </span>
                           )}
-                          <CliHealthBadge health={cliHealth} />
                         </div>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                           {!binding.is_primary && (
