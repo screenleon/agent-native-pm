@@ -553,7 +553,11 @@ export async function revokeLocalConnector(id: string) {
 export interface CliConfig {
   id: string;
   provider_id: 'cli:claude' | 'cli:codex';
-  cli_command: string;
+  // Optional because the API omits the field (`omitempty` on the Go side)
+  // when the user left it blank to use PATH lookup. Keep it optional in the
+  // client type so call sites do not push `undefined` into controlled
+  // inputs (Copilot review on PR #23).
+  cli_command?: string;
   model_id: string;
   label: string;
   is_primary: boolean;

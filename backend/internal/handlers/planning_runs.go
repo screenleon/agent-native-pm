@@ -244,12 +244,34 @@ func (h *PlanningRunHandler) resolvePathBBinding(w http.ResponseWriter, r *http.
 			Label:      cfg.Label,
 			IsPrimary:  cfg.IsPrimary,
 		}
-		if strings.TrimSpace(req.AdapterType) == "" {
-			req.AdapterType = cfg.ProviderID
+		// Reject mismatched adapter_type / model_override rather than
+		// silently overwriting them. A row that says
+		// "adapter_type=whatsnext" but persists a binding_snapshot with
+		// provider_id=cli:claude is internally inconsistent and confuses
+		// downstream auditing (Critic SHOULD-FIX #3 / Copilot review on
+		// PR #23).
+		if at := strings.TrimSpace(req.AdapterType); at != "" && at != cfg.ProviderID {
+			writeError(w, http.StatusBadRequest, "adapter_type does not match the cli_config provider_id")
+			return nil, nil, false
 		}
-		if strings.TrimSpace(req.ModelOverride) == "" {
-			req.ModelOverride = cfg.ModelID
+		if mo := strings.TrimSpace(req.ModelOverride); mo != "" && cfg.ModelID != "" && mo != cfg.ModelID {
+			writeError(w, http.StatusBadRequest, "model_override does not match the cli_config model_id")
+			return nil, nil, false
 		}
+		req.AdapterType = cfg.ProviderID
+		req.ModelOverride = cfg.ModelID
+		// Clear any caller-supplied account_binding_id so it does not get
+		// persisted alongside the cli_config snapshot — otherwise the
+		// resulting row points at two different authoring sources at
+		// once (Critic SHOULD-FIX #2 / Copilot review on PR #23).
+		req.AccountBindingID = nil
+		// Pin the run to the chosen connector so any other online
+		// connector belonging to the same user cannot claim it (the
+		// chosen cli_command + provider_id only exist on this connector;
+		// Copilot review on PR #23). Stored on the run so the lease
+		// query can filter on it.
+		pinned := strings.TrimSpace(connectorID)
+		req.TargetConnectorID = &pinned
 		return snapshot, warnings, true
 	}
 

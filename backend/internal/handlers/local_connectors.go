@@ -712,6 +712,8 @@ func writeCliConfigError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, store.ErrCliConfigCapReached):
 		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, store.ErrCliConfigConnectorRevoked):
+		writeError(w, http.StatusConflict, err.Error())
 	default:
 		log.Printf("cli_config handler: unmapped error: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal server error")

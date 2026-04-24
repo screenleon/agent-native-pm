@@ -115,7 +115,10 @@ export function ConnectorCliConfigs({ connectorId }: Props) {
   function openEdit(c: CliConfig) {
     setEditingId(c.id);
     setEditLabel(c.label);
-    setEditCommand(c.cli_command);
+    // c.cli_command may be absent (PATH lookup) — coerce to '' so React's
+    // controlled <input> never receives `undefined` (Copilot review on
+    // PR #23).
+    setEditCommand(c.cli_command ?? '');
     setEditModel(c.model_id);
   }
 

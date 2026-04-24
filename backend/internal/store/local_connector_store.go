@@ -342,22 +342,41 @@ func txSelectConnectorByIDForUpdate(tx *sql.Tx, dialect database.Dialect, connec
 }
 
 func (s *LocalConnectorStore) Revoke(id, userID string) error {
-	result, err := s.db.Exec(`
-		UPDATE local_connectors
-		SET status = $1, updated_at = CURRENT_TIMESTAMP
-		WHERE id = $2 AND user_id = $3 AND status <> $1
-	`, models.LocalConnectorStatusRevoked, id, userID)
+	// Scrub cli_configs on revoke so a re-paired connector does not
+	// inherit the previous owner's CLI list (Phase 6a, Copilot review on
+	// PR #23). Done in the same transaction as the status flip so a
+	// failure half-way leaves the row in its previous state.
+	tx, err := s.beginWriteTx()
 	if err != nil {
 		return err
 	}
-	affected, err := result.RowsAffected()
+	defer tx.Rollback()
+
+	connector, err := txSelectConnectorByIDForUpdate(tx, s.dialect, id, userID)
 	if err != nil {
 		return err
 	}
-	if affected == 0 {
+	if connector == nil {
 		return fmt.Errorf("local connector not found")
 	}
-	return nil
+	if connector.Status == models.LocalConnectorStatusRevoked {
+		return fmt.Errorf("local connector not found")
+	}
+
+	metadata := cloneMetadata(connector.Metadata)
+	delete(metadata, metadataKeyCliConfigs)
+	if err := txWriteConnectorMetadata(tx, connector.ID, metadata); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE local_connectors
+		SET status = $1, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $2 AND user_id = $3
+	`, models.LocalConnectorStatusRevoked, id, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *LocalConnectorStore) GetByID(id, userID string) (*models.LocalConnector, error) {
@@ -544,6 +563,11 @@ var (
 	ErrCliConfigInvalidProvider     = errors.New("provider_id must be one of the allowed cli:* providers")
 	ErrCliConfigInvalidCliCommand   = errors.New("cli_command must be empty or an absolute path with safe characters")
 	ErrCliConfigModelIDRequired     = errors.New("model_id is required")
+	// ErrCliConfigConnectorRevoked rejects writes against revoked connectors.
+	// Surfaced from the handler as 409 Conflict so the UI hides the section
+	// and the caller cannot resurrect stale configs by re-pairing later
+	// (Phase 6a Part 1, Copilot review on PR #23).
+	ErrCliConfigConnectorRevoked    = errors.New("cannot modify cli_configs on a revoked connector")
 )
 
 // EnqueueCliProbe appends a pending probe request to the named connector's
@@ -898,6 +922,9 @@ func (s *LocalConnectorStore) AddCliConfig(connectorID, userID string, req model
 	if connector == nil {
 		return nil, ErrCliConfigNotFound
 	}
+	if connector.Status == models.LocalConnectorStatusRevoked {
+		return nil, ErrCliConfigConnectorRevoked
+	}
 
 	metadata := cloneMetadata(connector.Metadata)
 	configs := readCliConfigs(metadata)
@@ -971,6 +998,9 @@ func (s *LocalConnectorStore) UpdateCliConfig(connectorID, userID, configID stri
 	}
 	if connector == nil {
 		return nil, ErrCliConfigNotFound
+	}
+	if connector.Status == models.LocalConnectorStatusRevoked {
+		return nil, ErrCliConfigConnectorRevoked
 	}
 
 	metadata := cloneMetadata(connector.Metadata)
@@ -1056,6 +1086,9 @@ func (s *LocalConnectorStore) DeleteCliConfig(connectorID, userID, configID stri
 	if connector == nil {
 		return ErrCliConfigNotFound
 	}
+	if connector.Status == models.LocalConnectorStatusRevoked {
+		return ErrCliConfigConnectorRevoked
+	}
 
 	metadata := cloneMetadata(connector.Metadata)
 	configs := readCliConfigs(metadata)
@@ -1099,6 +1132,9 @@ func (s *LocalConnectorStore) SetPrimaryCliConfig(connectorID, userID, configID 
 	if connector == nil {
 		return ErrCliConfigNotFound
 	}
+	if connector.Status == models.LocalConnectorStatusRevoked {
+		return ErrCliConfigConnectorRevoked
+	}
 	metadata := cloneMetadata(connector.Metadata)
 	configs := readCliConfigs(metadata)
 	found := false
@@ -1138,17 +1174,23 @@ func (s *LocalConnectorStore) GetCliConfig(connectorID, userID, configID string)
 // ── cli_configs metadata helpers ────────────────────────────────────────────
 
 func readCliConfigs(metadata map[string]interface{}) []models.CliConfig {
+	// Always return a non-nil slice so JSON encoding produces `[]` rather
+	// than `null` for clients that strictly type the response as
+	// `CliConfig[]` (Copilot review on PR #23).
 	raw, ok := metadata[metadataKeyCliConfigs]
 	if !ok {
-		return nil
+		return []models.CliConfig{}
 	}
 	bytes, err := json.Marshal(raw)
 	if err != nil {
-		return nil
+		return []models.CliConfig{}
 	}
 	var out []models.CliConfig
 	if err := json.Unmarshal(bytes, &out); err != nil {
-		return nil
+		return []models.CliConfig{}
+	}
+	if out == nil {
+		return []models.CliConfig{}
 	}
 	return out
 }

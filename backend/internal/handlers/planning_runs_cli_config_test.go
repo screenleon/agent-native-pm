@@ -6,6 +6,7 @@ package handlers_test
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,7 @@ import (
 
 type cliConfigRunFixture struct {
 	srv             http.Handler
+	db              *sql.DB
 	projectStore    *store.ProjectStore
 	requirements    *store.RequirementStore
 	connectors      *store.LocalConnectorStore
@@ -74,6 +76,7 @@ func newCliConfigRunFixture(t *testing.T) cliConfigRunFixture {
 
 	return cliConfigRunFixture{
 		srv:             srv,
+		db:              db,
 		projectStore:    projectStore,
 		requirements:    reqStore,
 		connectors:      connectorStore,
@@ -225,5 +228,105 @@ func TestCreatePlanningRun_CliConfigUnknownIDs(t *testing.T) {
 	})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// Cross-user isolation regression test (Critic SHOULD-FIX #1 / Copilot
+// review on PR #23). Seeds a real cli_config on user B's connector, then
+// POSTs the planning-run create as user A (local-admin) referencing both
+// real IDs. Expect 400 "cli_config_id not found" — proving GetCliConfig
+// still scopes by user_id and a dropped filter would surface as a 201
+// (regression) rather than the not-found mask used by the unknown-IDs test
+// above.
+func TestCreatePlanningRun_CliConfigCrossUserDenied(t *testing.T) {
+	fx := newCliConfigRunFixture(t)
+
+	// Seed user B and pair a connector + cli_config under their user_id
+	// directly via the store (bypasses the HTTP layer because
+	// InjectLocalAdmin pins requests to user A).
+	userB := "user-b"
+	if _, err := fx.db.Exec(`INSERT INTO users (id, username, email, password_hash, role, is_active) VALUES ($1, $1, $1 || '@example.com', '', 'admin', TRUE)`, userB); err != nil {
+		t.Fatalf("seed user B: %v", err)
+	}
+	pairing, err := fx.connectors.CreatePairingSession(userB, models.CreateLocalConnectorPairingSessionRequest{Label: "B-Laptop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := fx.connectors.ClaimPairingSession(models.PairLocalConnectorRequest{
+		PairingCode: pairing.PairingCode, Label: "B-Laptop", Platform: "linux", ProtocolVersion: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgB, err := fx.connectors.AddCliConfig(claim.Connector.ID, userB, models.CreateCliConfigRequest{
+		ProviderID: "cli:claude", ModelID: "claude-sonnet-4-6",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Request reaches the handler as user A (local-admin) but references
+	// user B's real connector + cli_config. Expect 400, NOT 201.
+	w := fx.createRun(t, map[string]any{
+		"trigger_source": "manual",
+		"execution_mode": "local_connector",
+		"connector_id":   claim.Connector.ID,
+		"cli_config_id":  cfgB.ID,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("cross-user cli_config must 400, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// adapter_type mismatch (Critic SHOULD-FIX #3 / Copilot review on PR #23).
+// When the caller sends an adapter_type that disagrees with the resolved
+// cli_config.provider_id, the server must reject with 400 rather than
+// silently overwriting one or the other into a self-inconsistent row.
+func TestCreatePlanningRun_CliConfigAdapterTypeMismatch(t *testing.T) {
+	fx := newCliConfigRunFixture(t)
+	connID, cfgID := fx.seedConnectorWithCliConfig(t, "cli:claude", "claude-sonnet-4-6")
+	w := fx.createRun(t, map[string]any{
+		"trigger_source": "manual",
+		"execution_mode": "local_connector",
+		"connector_id":   connID,
+		"cli_config_id":  cfgID,
+		"adapter_type":   "cli:codex", // intentional mismatch
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("adapter_type mismatch must 400, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// account_binding_id is silently cleared when (connector_id, cli_config_id)
+// also resolve (Critic SHOULD-FIX #2 / Copilot review on PR #23). The
+// resulting row must NOT carry the caller's account_binding_id.
+func TestCreatePlanningRun_CliConfigClearsAccountBindingID(t *testing.T) {
+	fx := newCliConfigRunFixture(t)
+	connID, cfgID := fx.seedConnectorWithCliConfig(t, "cli:claude", "claude-sonnet-4-6")
+
+	w := fx.createRun(t, map[string]any{
+		"trigger_source":     "manual",
+		"execution_mode":     "local_connector",
+		"connector_id":       connID,
+		"cli_config_id":      cfgID,
+		"account_binding_id": "some-other-binding-id",
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			AccountBindingID  *string `json:"account_binding_id"`
+			TargetConnectorID *string `json:"target_connector_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v body=%s", err, w.Body.String())
+	}
+	if resp.Data.AccountBindingID != nil {
+		t.Fatalf("account_binding_id must be cleared on cli_config-authored runs; got %q", *resp.Data.AccountBindingID)
+	}
+	if resp.Data.TargetConnectorID == nil || *resp.Data.TargetConnectorID != connID {
+		t.Fatalf("target_connector_id must equal the requested connector_id (%s); got %v", connID, resp.Data.TargetConnectorID)
 	}
 }

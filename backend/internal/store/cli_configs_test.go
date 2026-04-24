@@ -235,3 +235,77 @@ func TestGetCliConfig_Found(t *testing.T) {
 		t.Fatalf("id mismatch: %v", got)
 	}
 }
+
+// Add/Update/Delete/SetPrimary against a revoked connector are rejected
+// (Critic SHOULD-FIX #4 / Copilot review on PR #23). Without this guard
+// stale configs could re-appear on re-pair, and clients would keep
+// mutating metadata that has no operational meaning.
+func TestCliConfig_WritesRejectedOnRevokedConnector(t *testing.T) {
+	cs, connID, userID := seedCliConfigConnector(t)
+	created, err := cs.AddCliConfig(connID, userID, models.CreateCliConfigRequest{
+		ProviderID: "cli:claude", ModelID: "m",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cs.Revoke(connID, userID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	if _, err := cs.AddCliConfig(connID, userID, models.CreateCliConfigRequest{
+		ProviderID: "cli:codex", ModelID: "m",
+	}); !errors.Is(err, ErrCliConfigConnectorRevoked) {
+		t.Fatalf("Add on revoked: want ErrCliConfigConnectorRevoked, got %v", err)
+	}
+	if _, err := cs.UpdateCliConfig(connID, userID, created.ID, models.UpdateCliConfigRequest{}); !errors.Is(err, ErrCliConfigConnectorRevoked) {
+		t.Fatalf("Update on revoked: want ErrCliConfigConnectorRevoked, got %v", err)
+	}
+	if err := cs.DeleteCliConfig(connID, userID, created.ID); !errors.Is(err, ErrCliConfigConnectorRevoked) {
+		t.Fatalf("Delete on revoked: want ErrCliConfigConnectorRevoked, got %v", err)
+	}
+	if err := cs.SetPrimaryCliConfig(connID, userID, created.ID); !errors.Is(err, ErrCliConfigConnectorRevoked) {
+		t.Fatalf("SetPrimary on revoked: want ErrCliConfigConnectorRevoked, got %v", err)
+	}
+}
+
+// Revoke scrubs cli_configs from metadata so a re-paired connector does
+// not inherit the previous owner's CLI list (Critic SHOULD-FIX #4).
+func TestCliConfig_RevokeScrubsConfigs(t *testing.T) {
+	cs, connID, userID := seedCliConfigConnector(t)
+	if _, err := cs.AddCliConfig(connID, userID, models.CreateCliConfigRequest{
+		ProviderID: "cli:claude", ModelID: "m",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.Revoke(connID, userID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	connector, err := cs.GetByID(connID, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connector == nil {
+		t.Fatal("connector should still exist after revoke (just status=revoked)")
+	}
+	if _, ok := connector.Metadata["cli_configs"]; ok {
+		t.Fatalf("cli_configs key must be scrubbed from metadata after revoke; got %+v", connector.Metadata)
+	}
+}
+
+// ListCliConfigs returns an empty slice (not nil) so JSON serialises as
+// `[]` rather than `null` for connectors that have no configs yet
+// (Copilot review on PR #23).
+func TestListCliConfigs_EmptyReturnsNonNilSlice(t *testing.T) {
+	cs, connID, userID := seedCliConfigConnector(t)
+	got, err := cs.ListCliConfigs(connID, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("ListCliConfigs returned nil; expected non-nil empty slice so JSON encodes as []")
+	}
+	if len(got) != 0 {
+		t.Fatalf("want 0 configs, got %d", len(got))
+	}
+}

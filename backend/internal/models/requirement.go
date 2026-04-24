@@ -129,6 +129,14 @@ type CreatePlanningRunRequest struct {
 	// snapshot came from.
 	ConnectorID *string `json:"connector_id,omitempty"`
 	CliConfigID *string `json:"cli_config_id,omitempty"`
+
+	// TargetConnectorID is set internally by the planning-run handler when
+	// the caller supplied (connector_id, cli_config_id). It pins dispatch
+	// to that one connector — the lease query refuses to hand the run to
+	// any other online connector belonging to the same user, because the
+	// chosen cli_config (cli_command, model_id) only exists on that
+	// machine. Not deserialised from JSON; ignored on input.
+	TargetConnectorID *string `json:"-"`
 }
 
 type PlanningProviderModel struct {
@@ -195,6 +203,12 @@ type PlanningRun struct {
 	// "explicitly empty" — exposed as a pointer so JSON omits the key when
 	// absent rather than serialising an empty string.
 	AccountBindingID *string `json:"account_binding_id,omitempty"`
+	// TargetConnectorID pins dispatch to a specific connector when the run
+	// was created via (connector_id, cli_config_id) (Phase 6a). NULL on
+	// account_binding-authored runs and on classic runs — those remain
+	// claimable by any of the user's online connectors. The lease query
+	// refuses to hand a target-pinned run to any other connector.
+	TargetConnectorID *string `json:"target_connector_id,omitempty"`
 	// ConnectorCliInfo is the JSON blob backed by the planning_runs.connector_cli_info
 	// column. Holds the binding snapshot taken at run creation (Path B S2),
 	// the adapter's reported CLI invocation info (S5b), an optional error_kind
