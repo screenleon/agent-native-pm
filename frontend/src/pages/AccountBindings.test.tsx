@@ -10,6 +10,11 @@ const mockCreateAccountBinding = vi.fn()
 const mockUpdateAccountBinding = vi.fn()
 const mockDeleteAccountBinding = vi.fn()
 const mockGetMeta = vi.fn()
+const mockListLocalConnectors = vi.fn()
+const mockProbeBindingOnConnector = vi.fn()
+const mockGetCliProbeResult = vi.fn()
+const mockFetchRemoteModels = vi.fn()
+const mockProbeModel = vi.fn()
 
 vi.mock('../api/client', () => ({
   listAccountBindings: (...args: unknown[]) => mockListAccountBindings(...args),
@@ -17,6 +22,11 @@ vi.mock('../api/client', () => ({
   updateAccountBinding: (...args: unknown[]) => mockUpdateAccountBinding(...args),
   deleteAccountBinding: (...args: unknown[]) => mockDeleteAccountBinding(...args),
   getMeta: (...args: unknown[]) => mockGetMeta(...args),
+  listLocalConnectors: (...args: unknown[]) => mockListLocalConnectors(...args),
+  probeBindingOnConnector: (...args: unknown[]) => mockProbeBindingOnConnector(...args),
+  getCliProbeResult: (...args: unknown[]) => mockGetCliProbeResult(...args),
+  fetchRemoteModels: (...args: unknown[]) => mockFetchRemoteModels(...args),
+  probeModel: (...args: unknown[]) => mockProbeModel(...args),
 }))
 
 function makeCliBinding(overrides: Partial<AccountBinding> = {}): AccountBinding {
@@ -243,5 +253,90 @@ describe('<AccountBindings />', () => {
     // Form must remain closed even after the reload triggered by the UI action.
     expect(screen.queryByText('New CLI Binding')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /\+ Add another CLI binding/i })).toBeInTheDocument()
+  })
+
+  // ── P4-3 (CLI binding inline Edit) ────────────────────────────────────────
+
+  // T-P4-3-1: Edit opens an inline form prefilled with current values.
+  it('T-P4-3-1: Edit opens inline form prefilled', async () => {
+    await renderAndWait([makeCliBinding({ id: 'cb-edit', label: 'My Claude', model_id: 'claude-sonnet-4-5', cli_command: '/usr/bin/claude' })], true)
+
+    await userEvent.click(screen.getByRole('button', { name: /^Edit$/i }))
+    expect(screen.getByDisplayValue('My Claude')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('claude-sonnet-4-5')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('/usr/bin/claude')).toBeInTheDocument()
+  })
+
+  // T-P4-3-4: blocks save when model_id is cleared.
+  it('T-P4-3-4: save blocked when model_id is empty', async () => {
+    await renderAndWait([makeCliBinding({ id: 'cb-edit' })], true)
+    await userEvent.click(screen.getByRole('button', { name: /^Edit$/i }))
+
+    const modelInput = screen.getByDisplayValue('claude-sonnet-4-5')
+    await userEvent.clear(modelInput)
+    await userEvent.click(screen.getByRole('button', { name: /^Save$/i }))
+
+    expect(screen.getByText(/Model ID is required/i)).toBeInTheDocument()
+    expect(mockUpdateAccountBinding).not.toHaveBeenCalled()
+  })
+
+  // T-P4-3-2: happy-path save fires PATCH with the edited model_id.
+  it('T-P4-3-2: save fires PATCH with edited values', async () => {
+    await renderAndWait([makeCliBinding({ id: 'cb-edit' })], true)
+    await userEvent.click(screen.getByRole('button', { name: /^Edit$/i }))
+
+    const modelInput = screen.getByDisplayValue('claude-sonnet-4-5')
+    await userEvent.clear(modelInput)
+    await userEvent.type(modelInput, 'claude-sonnet-4-6')
+    await userEvent.click(screen.getByRole('button', { name: /^Save$/i }))
+
+    await waitFor(() => {
+      expect(mockUpdateAccountBinding).toHaveBeenCalledWith('cb-edit', expect.objectContaining({
+        model_id: 'claude-sonnet-4-6',
+      }))
+    })
+  })
+
+  // T-P4-3-3: Cancel collapses the form without an API call.
+  it('T-P4-3-3: Cancel collapses the edit form', async () => {
+    await renderAndWait([makeCliBinding({ id: 'cb-edit' })], true)
+    await userEvent.click(screen.getByRole('button', { name: /^Edit$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
+
+    expect(screen.queryByRole('button', { name: /^Save$/i })).not.toBeInTheDocument()
+    expect(mockUpdateAccountBinding).not.toHaveBeenCalled()
+  })
+
+  // ── P4-4 (Test on connector) ──────────────────────────────────────────────
+
+  // T-P4-4-12 (frontend portion): no online connector → friendly error, no enqueue.
+  it('T-P4-4-12: no online connector surfaces helpful error', async () => {
+    await renderAndWait([makeCliBinding({ id: 'cb-probe' })], true)
+    mockListLocalConnectors.mockResolvedValue({ data: [] })
+
+    await userEvent.click(screen.getByRole('button', { name: /Test on connector/i }))
+    await waitFor(() => {
+      expect(screen.getByText(/No online connector/i)).toBeInTheDocument()
+    })
+    expect(mockProbeBindingOnConnector).not.toHaveBeenCalled()
+  })
+
+  // T-P4-4-12 (frontend happy path): probe enqueues, polls, renders the
+  // completed result once the poll sees status=completed.
+  it('T-P4-4-12: probe enqueues, polls, renders completed result', async () => {
+    await renderAndWait([makeCliBinding({ id: 'cb-probe' })], true)
+    mockListLocalConnectors.mockResolvedValue({ data: [{ id: 'conn-1', status: 'online', label: 'Laptop' }] })
+    mockProbeBindingOnConnector.mockResolvedValue({ data: { probe_id: 'probe-42' } })
+    // First poll: pending. Second poll: completed.
+    mockGetCliProbeResult
+      .mockResolvedValueOnce({ data: { status: 'pending' } })
+      .mockResolvedValue({ data: { status: 'completed', result: { probe_id: 'probe-42', ok: true, latency_ms: 123, content: 'ok', completed_at: '2026-04-24T00:00:00Z' } } })
+
+    await userEvent.click(screen.getByRole('button', { name: /Test on connector/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/Connector replied in 123 ms/i)).toBeInTheDocument()
+    }, { timeout: 10_000 })
+    expect(mockProbeBindingOnConnector).toHaveBeenCalledWith('conn-1', 'cb-probe')
   })
 })

@@ -185,7 +185,7 @@ func (s *LocalConnectorStore) HeartbeatByToken(token string, req models.LocalCon
 		return nil, fmt.Errorf("connector token is required")
 	}
 
-	tx, err := s.db.Begin()
+	tx, err := s.beginWriteTx()
 	if err != nil {
 		return nil, err
 	}
@@ -529,7 +529,7 @@ const (
 // silently show a stale result on a subsequent click. Transactional + row-
 // locked to prevent concurrent enqueue/heartbeat races (M1).
 func (s *LocalConnectorStore) EnqueueCliProbe(connectorID, userID string, req models.PendingCliProbeRequest) (string, error) {
-	tx, err := s.db.Begin()
+	tx, err := s.beginWriteTx()
 	if err != nil {
 		return "", err
 	}
@@ -641,7 +641,7 @@ func (s *LocalConnectorStore) ScrubCliProbesForBinding(userID, bindingID string)
 }
 
 func (s *LocalConnectorStore) scrubOneConnector(connectorID, userID, bindingID string) error {
-	tx, err := s.db.Begin()
+	tx, err := s.beginWriteTx()
 	if err != nil {
 		return err
 	}
@@ -683,6 +683,30 @@ func (s *LocalConnectorStore) scrubOneConnector(connectorID, userID, bindingID s
 		return err
 	}
 	return tx.Commit()
+}
+
+// beginWriteTx starts a transaction that takes the writer-side lock eagerly.
+// On Postgres, `db.Begin()` is sufficient because row-level locks are acquired
+// by `SELECT ... FOR UPDATE`. On SQLite, the default `BEGIN` is `DEFERRED` —
+// the write lock is not acquired until the first UPDATE, so two goroutines
+// can both SELECT the same metadata, both compute new JSON, and the second
+// to commit overwrites the first with stale pre-read data (classic
+// read-modify-write race). `BEGIN IMMEDIATE` acquires the reserved lock at
+// BEGIN time, so the second writer blocks immediately and re-reads fresh
+// metadata once the first commits. The default retry behaviour of the Go
+// SQLite driver handles SQLITE_BUSY as a transparent retry.
+func (s *LocalConnectorStore) beginWriteTx() (*sql.Tx, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	if s.dialect.IsSQLite() {
+		if _, err := tx.Exec("ROLLBACK; BEGIN IMMEDIATE"); err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
+	}
+	return tx, nil
 }
 
 func txWriteConnectorMetadata(tx *sql.Tx, connectorID string, metadata map[string]interface{}) error {
