@@ -201,14 +201,19 @@ func computeHealthScore(taskCounts map[string]int, totalTasks, totalDocs, staleD
 	return float64(int(score*100)) / 100
 }
 
-// CountPendingReviewByProject returns the number of backlog candidates in
-// 'draft' status for the given project. Used by the Dashboard to surface
-// "N decisions pending" per project card.
+// CountPendingReviewByProject returns the number of draft backlog candidates
+// for the given project that belong to completed planning runs. Candidates from
+// in-flight or failed runs are excluded to avoid showing transient counts while
+// a planning run is still writing its results.
 func (s *SummaryStore) CountPendingReviewByProject(projectID string) (int, error) {
 	var n int
 	err := s.db.QueryRow(`
-		SELECT COUNT(*) FROM backlog_candidates
-		WHERE project_id = $1 AND status = 'draft'
+		SELECT COUNT(*)
+		FROM backlog_candidates bc
+		JOIN planning_runs pr ON pr.id = bc.planning_run_id
+		WHERE bc.project_id = $1
+		  AND bc.status = 'draft'
+		  AND pr.status = 'completed'
 	`, projectID).Scan(&n)
 	return n, err
 }

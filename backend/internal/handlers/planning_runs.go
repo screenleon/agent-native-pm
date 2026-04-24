@@ -663,6 +663,10 @@ func (h *PlanningRunHandler) ListByEvidence(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
+	if !requestAllowsProject(r, projectID) {
+		writeError(w, http.StatusForbidden, "api key not allowed for this project")
+		return
+	}
 
 	q := r.URL.Query()
 	docID := q.Get("document_id")

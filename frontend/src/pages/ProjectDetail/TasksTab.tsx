@@ -46,14 +46,17 @@ export function TasksTab({
   }, [tasks])
 
   useEffect(() => {
+    let active = true
     listProjectTaskLineage(projectId)
       .then(resp => {
+        if (!active) return
         const map: Record<string, AppliedLineageEntry> = {}
         for (const entry of resp.data ?? []) map[entry.task_id] = entry
         setLineageByTask(map)
       })
       .catch(() => {})
-  }, [projectId])
+    return () => { active = false }
+  }, [projectId, tasks.length])
 
   const hasActiveTaskFilters = Boolean(taskFilters.status || taskFilters.priority || taskFilters.assignee.trim())
   const allVisibleTasksSelected = tasks.length > 0 && selectedTaskIds.length === tasks.length

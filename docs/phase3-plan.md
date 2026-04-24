@@ -98,7 +98,7 @@ Each task row in `TasksTab` that has a `task_lineage` record of kind `applied_ca
 
 **3-C-1 Dashboard pending decisions**
 
-Each project card in `Dashboard.tsx` shows a supplementary line "N candidates pending review" when `N > 0`. Candidates with `status = 'draft'` belonging to a `completed` planning run count as pending. A new endpoint `GET /api/projects/:id/planning-runs/pending-review-count` returns `{ count: N }`. The cross-project attention section adds a sorted list of projects with pending decisions: the project with the most pending candidates appears first, with a direct link to that project's Planning Workspace tab.
+Each project card in `Dashboard.tsx` shows a supplementary line "N candidates pending review" when `N > 0`. Candidates with `status = 'draft'` belonging to a `completed` planning run count as pending. A new endpoint `GET /api/projects/:id/pending-review-count` returns `{ count: N }`. The cross-project attention section adds a sorted list of projects with pending decisions: the project with the most pending candidates appears first, with a direct link to that project's Planning Workspace tab.
 
 ### 3-D: Deferred (roadmap record only)
 
@@ -382,7 +382,7 @@ None.
 
 **Scope**
 
-1. New backend endpoint: `GET /api/projects/:id/planning-runs/pending-review-count`
+1. New backend endpoint: `GET /api/projects/:id/pending-review-count`
    - Returns `{ "count": N }` where N is the number of `backlog_candidates` rows with `status = 'draft'` belonging to any `planning_run` with `status = 'completed'` scoped to this project.
    - Auth: authenticated user session (same as project GET).
    - No pagination (single-number aggregate).
@@ -417,7 +417,7 @@ None.
 
 ```
 Dashboard.tsx (on load, per-project)
-  → GET /api/projects/:id/planning-runs/pending-review-count  ← NEW
+  → GET /api/projects/:id/pending-review-count  ← NEW
   → handlers/planning_runs.go (new handler PendingReviewCount)
   → backlog_candidate_store.go (new method CountDraftByProject)
   → backlog_candidates table (existing; no schema change)
@@ -426,7 +426,7 @@ Dashboard.tsx (on load, per-project)
 
 **API contract impact**
 
-New endpoint `GET /api/projects/:id/planning-runs/pending-review-count`. Response:
+New endpoint `GET /api/projects/:id/pending-review-count`. Response:
 ```jsonc
 {
   "data": { "count": 3 },

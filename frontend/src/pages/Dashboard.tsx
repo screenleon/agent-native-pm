@@ -7,6 +7,7 @@ import {
   getPendingReviewCount,
 } from '../api/client'
 import type { Project, LocalConnector, Notification, User } from '../types'
+import { formatRelativeTime } from '../utils/formatters'
 
 interface DashboardProps {
   me: User
@@ -20,19 +21,6 @@ type NextStep = {
   tone: 'info' | 'warn' | 'success'
 }
 
-function relativeTime(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const ts = new Date(iso).getTime()
-  if (Number.isNaN(ts)) return ''
-  const diffSec = Math.round((Date.now() - ts) / 1000)
-  if (diffSec < 60) return `${diffSec}s ago`
-  const diffMin = Math.round(diffSec / 60)
-  if (diffMin < 60) return `${diffMin}m ago`
-  const diffHr = Math.round(diffMin / 60)
-  if (diffHr < 24) return `${diffHr}h ago`
-  const diffDay = Math.round(diffHr / 24)
-  return `${diffDay}d ago`
-}
 
 function connectorIsLive(c: LocalConnector): boolean {
   if (c.status === 'revoked') return false
@@ -192,7 +180,7 @@ export default function Dashboard({ me }: DashboardProps) {
                   <span className={`status-dot ${connectorIsLive(c) ? 'is-live' : 'is-offline'}`} aria-hidden="true" />
                   <span className="dashboard-list-main">{c.label || c.id.slice(0, 8)}</span>
                   <span className="dashboard-list-meta">
-                    {c.platform || 'unknown'} · {c.last_seen_at ? `seen ${relativeTime(c.last_seen_at)}` : 'never seen'}
+                    {c.platform || 'unknown'} · {c.last_seen_at ? `seen ${formatRelativeTime(c.last_seen_at)}` : 'never seen'}
                   </span>
                 </li>
               ))}
@@ -248,7 +236,7 @@ export default function Dashboard({ me }: DashboardProps) {
                     {n.is_read && <span className="status-dot is-offline" aria-hidden="true" />}
                     <Link className="dashboard-list-main" to={link}>{n.title}</Link>
                     <span className="dashboard-list-meta">
-                      {n.kind} · {relativeTime(n.created_at)}
+                      {n.kind} · {formatRelativeTime(n.created_at)}
                     </span>
                   </li>
                 )

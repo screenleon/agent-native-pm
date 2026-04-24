@@ -68,6 +68,10 @@ func (h *SummaryHandler) GetPendingReviewCount(w http.ResponseWriter, r *http.Re
 	if ok := h.ensureProject(w, projectID); !ok {
 		return
 	}
+	if !requestAllowsProject(r, projectID) {
+		writeError(w, http.StatusForbidden, "api key not allowed for this project")
+		return
+	}
 	count, err := h.store.CountPendingReviewByProject(projectID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to count pending review")

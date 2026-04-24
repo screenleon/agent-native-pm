@@ -88,17 +88,20 @@ export function DriftTab({
 
   useEffect(() => {
     if (driftSignals.length === 0) return
+    let active = true
     Promise.allSettled(
       driftSignals.map(ds =>
         listCandidatesByEvidenceDriftSignal(projectId, ds.id).then(r => ({ id: ds.id, data: r.data ?? [] }))
       )
     ).then(results => {
+      if (!active) return
       const map: Record<string, CandidateEvidenceSummary[]> = {}
       for (const r of results) {
         if (r.status === 'fulfilled') map[r.value.id] = r.value.data
       }
       setEvidenceByDrift(map)
     })
+    return () => { active = false }
   }, [projectId, driftSignals])
 
   const filteredDriftSignals = driftSignals

@@ -184,9 +184,12 @@ func TestServiceRunOnceTracksCliBinding(t *testing.T) {
 func TestProbeCliCommandBlocklistInterpreters(t *testing.T) {
 	svc := &Service{Stdout: io.Discard, Stderr: io.Discard}
 	for _, cmd := range []string{"python3", "python", "node", "ruby"} {
-		healthy, _, errMsg := svc.probeCliCommand(context.Background(), cmd)
+		healthy, _, errMsg, cancelled := svc.probeCliCommand(context.Background(), cmd)
 		if healthy {
 			t.Errorf("cmd %q: expected blocklist skip, got healthy=true", cmd)
+		}
+		if cancelled {
+			t.Errorf("cmd %q: unexpected cancelled=true for blocklist command", cmd)
 		}
 		if !strings.Contains(errMsg, "interpreter") {
 			t.Errorf("cmd %q: expected interpreter skip message, got %q", cmd, errMsg)
@@ -197,12 +200,18 @@ func TestProbeCliCommandBlocklistInterpreters(t *testing.T) {
 // T-S5b-5b: probeCliCommand returns unhealthy for a non-existent command.
 func TestProbeCliCommandNotFound(t *testing.T) {
 	svc := &Service{Stdout: io.Discard, Stderr: io.Discard}
-	healthy, _, errMsg := svc.probeCliCommand(context.Background(), "this-binary-does-not-exist-anpm-test")
+	healthy, _, errMsg, cancelled := svc.probeCliCommand(context.Background(), "this-binary-does-not-exist-anpm-test")
 	if healthy {
 		t.Fatalf("expected unhealthy for missing binary, got healthy=true")
 	}
+	if cancelled {
+		t.Fatal("expected cancelled=false for not-found binary")
+	}
 	if errMsg == "" {
 		t.Fatal("expected non-empty error message")
+	}
+	if !strings.Contains(errMsg, "not found on PATH") {
+		t.Errorf("expected 'not found on PATH' in errMsg, got %q", errMsg)
 	}
 }
 

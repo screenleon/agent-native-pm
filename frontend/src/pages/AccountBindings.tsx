@@ -22,16 +22,7 @@ import {
   inferCliBindingPreset,
   type CliBindingPresetID,
 } from '../utils/cliBindingPresets';
-
-function formatRelativeTime(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 1) return 'just now';
-  if (diffMin < 60) return `${diffMin} min ago`;
-  const diffH = Math.floor(diffMin / 60);
-  if (diffH < 24) return `${diffH}h ago`;
-  return `${Math.floor(diffH / 24)}d ago`;
-}
+import { formatRelativeTime } from '../utils/formatters';
 
 function PersistentProbeStatus({ binding }: { binding: { last_probe_at: string | null; last_probe_ok: boolean | null; last_probe_ms: number | null } }) {
   if (!binding.last_probe_at) return null;

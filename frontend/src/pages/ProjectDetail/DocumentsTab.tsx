@@ -38,17 +38,20 @@ export function DocumentsTab({
 
   useEffect(() => {
     if (documents.length === 0) return
+    let active = true
     Promise.allSettled(
       documents.map(doc =>
         listCandidatesByEvidenceDocument(projectId, doc.id).then(r => ({ id: doc.id, data: r.data ?? [] }))
       )
     ).then(results => {
+      if (!active) return
       const map: Record<string, CandidateEvidenceSummary[]> = {}
       for (const r of results) {
         if (r.status === 'fulfilled') map[r.value.id] = r.value.data
       }
       setEvidenceByDoc(map)
     })
+    return () => { active = false }
   }, [projectId, documents])
 
   async function handleCreateDoc(e: React.FormEvent) {

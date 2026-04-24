@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -37,7 +38,8 @@ type Service struct {
 	HeartbeatInterval time.Duration
 	PollInterval      time.Duration
 	// CliHealthInterval controls how often CLI bindings are re-probed.
-	// Zero means use the default (5 minutes).
+	// Zero or a negative value means use the default interval (5 minutes).
+	// Enable CliHealthDisabled to disable probing entirely.
 	CliHealthInterval time.Duration
 	// CliHealthDisabled suppresses the health probe loop entirely.
 	CliHealthDisabled bool
@@ -201,7 +203,13 @@ func (s *Service) runDueProbes(ctx context.Context, interval time.Duration) {
 	s.mu.Unlock()
 
 	for id, b := range due {
-		healthy, versionString, errMsg := s.probeCliCommand(ctx, b.command)
+		healthy, versionString, errMsg, cancelled := s.probeCliCommand(ctx, b.command)
+		if cancelled {
+			// Connector is shutting down; don't advance lastProbedAt so the
+			// probe runs again on the next startup rather than being silently
+			// suppressed for the full cliHealthInterval.
+			continue
+		}
 		if healthy {
 			now := time.Now().UTC()
 			fmt.Fprintf(s.Stdout, "cli health probe [%s] %s: healthy (%s)\n", id, b.command, versionString)
@@ -219,31 +227,41 @@ func (s *Service) runDueProbes(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// probeCliCommand runs `<command> --version` and returns (healthy, versionString, errMsg).
+// probeCliCommand runs `<command> --version` and returns (healthy, versionString, errMsg, cancelled).
+// cancelled is true only when the parent context was cancelled (connector shutting down) — the
+// caller must not treat this as a probe failure or advance lastProbedAt.
 // Commands on the interpreter blocklist are treated as unknown and skipped.
-func (s *Service) probeCliCommand(ctx context.Context, command string) (bool, string, string) {
+func (s *Service) probeCliCommand(ctx context.Context, command string) (healthy bool, versionString string, errMsg string, cancelled bool) {
 	cmd := strings.TrimSpace(command)
 	if cmd == "" {
-		return false, "", "cli_command not configured"
+		return false, "", "cli_command not configured", false
 	}
 	base := strings.ToLower(filepath.Base(cmd))
 	if idx := strings.LastIndex(base, "."); idx > 0 {
 		base = base[:idx]
 	}
 	if cliInterpreterBlocklist[base] {
-		return false, "", "skipped: interpreter command"
+		return false, "", "skipped: interpreter command", false
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(probeCtx, cmd, "--version").CombinedOutput()
 	if err != nil {
-		msg := err.Error()
-		if probeCtx.Err() != nil {
-			msg = "timed out"
+		if ctx.Err() == context.Canceled {
+			return false, "", "", true
 		}
-		return false, "", msg
+		if probeCtx.Err() != nil {
+			return false, "", "timed out", false
+		}
+		var exitErr *exec.ExitError
+		if errors.Is(err, exec.ErrNotFound) {
+			return false, "", "not found on PATH", false
+		} else if errors.As(err, &exitErr) {
+			return false, "", fmt.Sprintf("exited with status %d", exitErr.ExitCode()), false
+		}
+		return false, "", err.Error(), false
 	}
-	return true, strings.TrimSpace(string(out)), ""
+	return true, strings.TrimSpace(string(out)), "", false
 }
 
 func buildCapabilities(config ExecJSONAdapterConfig) map[string]interface{} {
