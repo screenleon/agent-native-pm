@@ -26,6 +26,19 @@ type LocalConnectorHandler struct {
 	projects       *store.ProjectStore
 	notifications  *store.NotificationStore
 	contextBuilder *planning.ProjectContextBuilder
+	// bindings is optional; when set the probe-binding handler can resolve a
+	// CLI binding row so the connector receives cli_command + model_id. Wired
+	// in main.go via WithAccountBindingStore.
+	bindings *store.AccountBindingStore
+}
+
+// WithAccountBindingStore allows the probe-binding handler to look up the
+// caller's CLI binding. Without it the POST /probe-binding endpoint returns
+// 500 rather than silently enqueueing an invalid probe (caller misconfigured
+// the server wiring).
+func (h *LocalConnectorHandler) WithAccountBindingStore(bindings *store.AccountBindingStore) *LocalConnectorHandler {
+	h.bindings = bindings
+	return h
 }
 
 func NewLocalConnectorHandler(s *store.LocalConnectorStore, planningRuns *store.PlanningRunStore, requirements *store.RequirementStore, candidates *store.BacklogCandidateStore, agentRuns *store.AgentRunStore) *LocalConnectorHandler {
@@ -486,6 +499,84 @@ func connectorDraftsToBacklogCandidates(candidates []models.ConnectorBacklogCand
 		})
 	}
 	return drafts, nil
+}
+
+// ProbeBinding enqueues a CLI-binding probe for the named connector.
+// POST /api/me/local-connectors/:id/probe-binding  { binding_id }
+// Returns { probe_id } that the UI polls via GET …/probe-binding/:probe_id.
+func (h *LocalConnectorHandler) ProbeBinding(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	connectorID := chi.URLParam(r, "id")
+	if strings.TrimSpace(connectorID) == "" {
+		writeError(w, http.StatusBadRequest, "connector id is required")
+		return
+	}
+	var req models.ProbeBindingOnConnectorRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	bindingID := strings.TrimSpace(req.BindingID)
+	if bindingID == "" {
+		writeError(w, http.StatusBadRequest, "binding_id is required")
+		return
+	}
+	if h.bindings == nil {
+		writeError(w, http.StatusInternalServerError, "probe-binding handler is not configured with an account binding store")
+		return
+	}
+	binding, err := h.bindings.GetByID(bindingID, user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load binding")
+		return
+	}
+	if binding == nil {
+		writeError(w, http.StatusNotFound, "binding not found")
+		return
+	}
+	if !models.IsCLIAccountBindingProvider(binding.ProviderID) {
+		writeError(w, http.StatusBadRequest, "probe-binding is only supported for cli:* bindings")
+		return
+	}
+	probeID, err := h.store.EnqueueCliProbe(connectorID, user.ID, models.PendingCliProbeRequest{
+		BindingID:   bindingID,
+		ProviderID:  binding.ProviderID,
+		ModelID:     binding.ModelID,
+		CliCommand:  binding.CliCommand,
+		Label:       binding.Label,
+		RequestedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		writeError(w, http.StatusNotFound, "connector not found")
+		return
+	}
+	writeSuccess(w, http.StatusOK, models.ProbeBindingOnConnectorResponse{ProbeID: probeID}, nil)
+}
+
+// GetProbeResult returns the stored probe outcome or status=pending.
+// GET /api/me/local-connectors/:id/probe-binding/:probe_id
+func (h *LocalConnectorHandler) GetProbeResult(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	connectorID := chi.URLParam(r, "id")
+	probeID := chi.URLParam(r, "probe_id")
+	if strings.TrimSpace(connectorID) == "" || strings.TrimSpace(probeID) == "" {
+		writeError(w, http.StatusBadRequest, "connector id and probe id are required")
+		return
+	}
+	status, result, err := h.store.GetCliProbeResult(connectorID, user.ID, probeID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load probe result")
+		return
+	}
+	writeSuccess(w, http.StatusOK, models.CliProbeStatusResponse{Status: status, Result: result}, nil)
 }
 
 // RunStats returns planning run counts for the authenticated user across

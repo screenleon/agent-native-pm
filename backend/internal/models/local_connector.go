@@ -87,6 +87,59 @@ type LocalConnectorHeartbeatRequest struct {
 	// metadata.cli_last_healthy_at with this value (single timestamp,
 	// no per-binding accumulation). Path B S5b.
 	LastCliHealthyAt *time.Time `json:"last_cli_healthy_at,omitempty"`
+	// CliProbeResults carries outcomes of any CLI-binding probe requests the
+	// connector processed since its previous heartbeat. Added in Phase 4
+	// (P4-4). The server pops matching entries from
+	// metadata.pending_cli_probe_requests and stores the outcome under
+	// metadata.cli_probe_results.<probe_id>.
+	CliProbeResults []CliProbeResult `json:"cli_probe_results,omitempty"`
+}
+
+// PendingCliProbeRequest is stored in LocalConnector.Metadata under the key
+// "pending_cli_probe_requests" (array). Each entry represents an operator
+// click of "Test on connector" that has not been delivered and completed yet.
+// The connector sees it in the heartbeat response, runs the built-in adapter
+// with a minimal prompt, and reports a matching CliProbeResult in the next
+// heartbeat.
+type PendingCliProbeRequest struct {
+	ProbeID     string    `json:"probe_id"`
+	BindingID   string    `json:"binding_id"`
+	ProviderID  string    `json:"provider_id"`
+	ModelID     string    `json:"model_id"`
+	CliCommand  string    `json:"cli_command,omitempty"`
+	Label       string    `json:"label,omitempty"`
+	RequestedAt time.Time `json:"requested_at"`
+}
+
+// CliProbeResult is the outcome of a single probe. The server stores it
+// under metadata.cli_probe_results.<probe_id>; the UI polls for it by
+// probe_id. Retained for 24h before GC.
+type CliProbeResult struct {
+	ProbeID      string    `json:"probe_id"`
+	BindingID    string    `json:"binding_id,omitempty"`
+	OK           bool      `json:"ok"`
+	LatencyMS    int64     `json:"latency_ms"`
+	Content      string    `json:"content,omitempty"`
+	ErrorKind    string    `json:"error_kind,omitempty"`
+	ErrorMessage string    `json:"error_message,omitempty"`
+	CompletedAt  time.Time `json:"completed_at"`
+}
+
+// CliProbeStatusResponse is returned by the poll endpoint
+// GET /api/me/local-connectors/:id/probe-binding/:probe_id.
+type CliProbeStatusResponse struct {
+	Status string          `json:"status"` // "pending" | "completed" | "not_found"
+	Result *CliProbeResult `json:"result,omitempty"`
+}
+
+// ProbeBindingOnConnectorRequest is the POST body for kicking off a probe.
+type ProbeBindingOnConnectorRequest struct {
+	BindingID string `json:"binding_id"`
+}
+
+// ProbeBindingOnConnectorResponse returns the probe_id the client should poll.
+type ProbeBindingOnConnectorResponse struct {
+	ProbeID string `json:"probe_id"`
 }
 
 type ConnectorBacklogCandidateDraft struct {

@@ -185,7 +185,16 @@ func (s *LocalConnectorStore) HeartbeatByToken(token string, req models.LocalCon
 		return nil, fmt.Errorf("connector token is required")
 	}
 
-	connector, err := s.GetByToken(token)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	// Lock the connector row inside the transaction so concurrent heartbeats
+	// and out-of-band metadata writers (probe enqueue / binding delete scrub)
+	// serialise instead of racing on a read-modify-write of metadata.
+	connector, err := txSelectConnectorByTokenForUpdate(tx, s.dialect, token)
 	if err != nil {
 		return nil, err
 	}
@@ -205,15 +214,18 @@ func (s *LocalConnectorStore) HeartbeatByToken(token string, req models.LocalCon
 		return nil, fmt.Errorf("encode capabilities: %w", err)
 	}
 
-	// Write at most one timestamp to metadata (no per-binding accumulation).
+	metadata := cloneMetadata(connector.Metadata)
 	// cli_last_healthy_at is overwritten on every heartbeat that carries it.
-	metadata := connector.Metadata
-	if metadata == nil {
-		metadata = map[string]interface{}{}
-	}
 	if req.LastCliHealthyAt != nil {
 		metadata["cli_last_healthy_at"] = req.LastCliHealthyAt.UTC().Format(time.RFC3339)
 	}
+	// S1 guard (critic): only accept probe results whose probe_id actually
+	// appears in pending_cli_probe_requests. Silently discard anything else
+	// so a buggy/hostile connector cannot write arbitrary keys into metadata.
+	if len(req.CliProbeResults) > 0 {
+		foldProbeResultsInto(metadata, req.CliProbeResults)
+	}
+	gcOldProbeResults(metadata)
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
 		return nil, fmt.Errorf("encode metadata: %w", err)
@@ -222,16 +234,109 @@ func (s *LocalConnectorStore) HeartbeatByToken(token string, req models.LocalCon
 	now := time.Now().UTC()
 	lastError := strings.TrimSpace(req.LastError)
 
-	_, err = s.db.Exec(`
+	if _, err := tx.Exec(`
 		UPDATE local_connectors
 		SET status = $1, capabilities = $2, metadata = $3, last_seen_at = $4, last_error = $5, updated_at = $4
 		WHERE id = $6
-	`, models.LocalConnectorStatusOnline, capabilitiesJSON, metadataJSON, now, lastError, connector.ID)
-	if err != nil {
+	`, models.LocalConnectorStatusOnline, capabilitiesJSON, metadataJSON, now, lastError, connector.ID); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 
 	return s.GetByID(connector.ID, connector.UserID)
+}
+
+// foldProbeResultsInto merges reported probe outcomes into the metadata map:
+//   - Each result is written to metadata.cli_probe_results[probe_id] ONLY if
+//     a matching pending entry exists (guards against arbitrary key injection).
+//   - The matching pending entry is removed.
+//   - Empty probe_id values are discarded.
+//   - Missing completed_at defaults to now().
+func foldProbeResultsInto(metadata map[string]interface{}, incoming []models.CliProbeResult) {
+	if len(incoming) == 0 {
+		return
+	}
+	pending := readPendingProbes(metadata)
+	pendingIndex := make(map[string]int, len(pending))
+	for i, p := range pending {
+		pendingIndex[p.ProbeID] = i
+	}
+	results := readProbeResults(metadata)
+	accepted := map[string]bool{}
+	for _, r := range incoming {
+		probeID := strings.TrimSpace(r.ProbeID)
+		if probeID == "" {
+			continue
+		}
+		idx, ok := pendingIndex[probeID]
+		if !ok {
+			continue // unsolicited result — ignore
+		}
+		if r.CompletedAt.IsZero() {
+			r.CompletedAt = time.Now().UTC()
+		}
+		// Preserve binding_id from the pending entry so the client can cross-
+		// reference the result even if the connector did not echo it back.
+		if strings.TrimSpace(r.BindingID) == "" {
+			r.BindingID = pending[idx].BindingID
+		}
+		results[probeID] = r
+		accepted[probeID] = true
+	}
+	if len(accepted) == 0 {
+		return
+	}
+	kept := pending[:0]
+	for _, p := range pending {
+		if !accepted[p.ProbeID] {
+			kept = append(kept, p)
+		}
+	}
+	writePendingProbes(metadata, kept)
+	writeProbeResults(metadata, results)
+}
+
+// txSelectConnectorByTokenForUpdate returns the connector row locked for the
+// duration of the enclosing transaction. Shared by HeartbeatByToken (and is
+// intentionally NOT used by read-only GetByToken to keep that call cheap).
+func txSelectConnectorByTokenForUpdate(tx *sql.Tx, dialect database.Dialect, token string) (*models.LocalConnector, error) {
+	query := `
+		SELECT id, user_id, label, platform, client_version, status, capabilities,
+		       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
+		FROM local_connectors
+		WHERE token_hash = $1
+		FOR UPDATE`
+	if dialect.IsSQLite() {
+		query = `
+			SELECT id, user_id, label, platform, client_version, status, capabilities,
+			       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
+			FROM local_connectors
+			WHERE token_hash = $1`
+	}
+	row := tx.QueryRow(query, hashSecret(token))
+	return scanOneLocalConnector(row)
+}
+
+// txSelectConnectorByIDForUpdate returns the connector row locked by id + user.
+func txSelectConnectorByIDForUpdate(tx *sql.Tx, dialect database.Dialect, connectorID, userID string) (*models.LocalConnector, error) {
+	query := `
+		SELECT id, user_id, label, platform, client_version, status, capabilities,
+		       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
+		FROM local_connectors
+		WHERE id = $1 AND user_id = $2
+		FOR UPDATE`
+	if dialect.IsSQLite() {
+		query = `
+			SELECT id, user_id, label, platform, client_version, status, capabilities,
+			       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
+			FROM local_connectors
+			WHERE id = $1 AND user_id = $2`
+	}
+	row := tx.QueryRow(query, connectorID, userID)
+	return scanOneLocalConnector(row)
 }
 
 func (s *LocalConnectorStore) Revoke(id, userID string) error {
@@ -394,5 +499,275 @@ func generateReadableSecret(byteLength int) (string, error) {
 		return encoded[:len(encoded)/2] + "-" + encoded[len(encoded)/2:], nil
 	}
 	return encoded, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P4-4: CLI-binding probe-on-connector persistence
+//
+// The probe lifecycle lives entirely inside LocalConnector.Metadata:
+//   metadata.pending_cli_probe_requests : []PendingCliProbeRequest
+//   metadata.cli_probe_results          : map[probe_id] CliProbeResult
+//
+// No dedicated table. The metadata JSONB is already round-tripped through
+// every Heartbeat, so the connector side reads pending requests from
+// `connector.metadata` and writes results back via `cli_probe_results` in
+// the next heartbeat.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const (
+	metadataKeyPendingCliProbes = "pending_cli_probe_requests"
+	metadataKeyCliProbeResults  = "cli_probe_results"
+	// probeResultRetention caps how long a completed probe result survives
+	// in metadata. Anything older is dropped at enqueue/heartbeat time.
+	probeResultRetention = 24 * time.Hour
+)
+
+// EnqueueCliProbe appends a pending probe request to the named connector's
+// metadata. Dedup policy (S7): if a pending entry for the same binding
+// exists AND is still in-flight (no matching completed result), return the
+// existing probe_id; otherwise allocate a fresh probe_id so the UI does not
+// silently show a stale result on a subsequent click. Transactional + row-
+// locked to prevent concurrent enqueue/heartbeat races (M1).
+func (s *LocalConnectorStore) EnqueueCliProbe(connectorID, userID string, req models.PendingCliProbeRequest) (string, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+
+	connector, err := txSelectConnectorByIDForUpdate(tx, s.dialect, connectorID, userID)
+	if err != nil {
+		return "", err
+	}
+	if connector == nil {
+		return "", sql.ErrNoRows
+	}
+
+	metadata := cloneMetadata(connector.Metadata)
+	pending := readPendingProbes(metadata)
+	results := readProbeResults(metadata)
+
+	for _, existing := range pending {
+		if existing.BindingID == req.BindingID {
+			// In-flight probe (no completed result for this probe_id). Return it.
+			if _, done := results[existing.ProbeID]; !done {
+				if err := tx.Commit(); err != nil {
+					return "", err
+				}
+				return existing.ProbeID, nil
+			}
+			// Stale pending entry (completed but never cleaned) — drop before append.
+			break
+		}
+	}
+
+	// Remove any stale pending entry referencing this binding (bounded list).
+	kept := pending[:0]
+	for _, p := range pending {
+		if p.BindingID != req.BindingID {
+			kept = append(kept, p)
+		}
+	}
+	pending = kept
+
+	if strings.TrimSpace(req.ProbeID) == "" {
+		req.ProbeID = uuid.NewString()
+	}
+	if req.RequestedAt.IsZero() {
+		req.RequestedAt = time.Now().UTC()
+	}
+	// Evict any cached completed result for this binding so a subsequent poll
+	// on the fresh probe_id does not accidentally surface a prior outcome.
+	for probeID, r := range results {
+		if r.BindingID == req.BindingID {
+			delete(results, probeID)
+		}
+	}
+	writeProbeResults(metadata, results)
+
+	pending = append(pending, req)
+	writePendingProbes(metadata, pending)
+	gcOldProbeResults(metadata)
+
+	if err := txWriteConnectorMetadata(tx, connector.ID, metadata); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return req.ProbeID, nil
+}
+
+// GetCliProbeResult returns the stored probe outcome or nil if still pending.
+// The returned status is one of: "pending", "completed", "not_found".
+func (s *LocalConnectorStore) GetCliProbeResult(connectorID, userID, probeID string) (string, *models.CliProbeResult, error) {
+	connector, err := s.GetByID(connectorID, userID)
+	if err != nil {
+		return "", nil, err
+	}
+	if connector == nil {
+		return "not_found", nil, nil
+	}
+	results := readProbeResults(connector.Metadata)
+	if r, ok := results[probeID]; ok {
+		return "completed", &r, nil
+	}
+	for _, p := range readPendingProbes(connector.Metadata) {
+		if p.ProbeID == probeID {
+			return "pending", nil, nil
+		}
+	}
+	return "not_found", nil, nil
+}
+
+// ScrubCliProbesForBinding removes any pending + completed probe entries for
+// the given binding across all connectors owned by the user. Each connector
+// update runs inside its own transaction with a row lock (M1) so a
+// concurrent heartbeat does not restore the scrubbed entries.
+func (s *LocalConnectorStore) ScrubCliProbesForBinding(userID, bindingID string) error {
+	if strings.TrimSpace(bindingID) == "" {
+		return nil
+	}
+	connectors, err := s.ListByUser(userID)
+	if err != nil {
+		return err
+	}
+	for i := range connectors {
+		if err := s.scrubOneConnector(connectors[i].ID, userID, bindingID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *LocalConnectorStore) scrubOneConnector(connectorID, userID, bindingID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	connector, err := txSelectConnectorByIDForUpdate(tx, s.dialect, connectorID, userID)
+	if err != nil {
+		return err
+	}
+	if connector == nil {
+		return nil
+	}
+	metadata := cloneMetadata(connector.Metadata)
+	changed := false
+	pending := readPendingProbes(metadata)
+	kept := pending[:0]
+	for _, p := range pending {
+		if p.BindingID == bindingID {
+			changed = true
+			continue
+		}
+		kept = append(kept, p)
+	}
+	if changed {
+		writePendingProbes(metadata, kept)
+	}
+	results := readProbeResults(metadata)
+	for probeID, r := range results {
+		if r.BindingID == bindingID {
+			delete(results, probeID)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	writeProbeResults(metadata, results)
+	if err := txWriteConnectorMetadata(tx, connectorID, metadata); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func txWriteConnectorMetadata(tx *sql.Tx, connectorID string, metadata map[string]interface{}) error {
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("encode metadata: %w", err)
+	}
+	_, err = tx.Exec(`UPDATE local_connectors SET metadata = $1, updated_at = $2 WHERE id = $3`,
+		metadataJSON, time.Now().UTC(), connectorID)
+	return err
+}
+
+// ─── metadata read/write helpers ────────────────────────────────────────────
+
+func cloneMetadata(input map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(input)+2)
+	for k, v := range input {
+		out[k] = v
+	}
+	return out
+}
+
+func readPendingProbes(metadata map[string]interface{}) []models.PendingCliProbeRequest {
+	raw, ok := metadata[metadataKeyPendingCliProbes]
+	if !ok {
+		return nil
+	}
+	// JSON round-trip preserves the original encoding regardless of what the
+	// DB driver returned (map[string]any / []any / json.RawMessage).
+	bytes, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var out []models.PendingCliProbeRequest
+	if err := json.Unmarshal(bytes, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func writePendingProbes(metadata map[string]interface{}, list []models.PendingCliProbeRequest) {
+	if len(list) == 0 {
+		delete(metadata, metadataKeyPendingCliProbes)
+		return
+	}
+	metadata[metadataKeyPendingCliProbes] = list
+}
+
+func readProbeResults(metadata map[string]interface{}) map[string]models.CliProbeResult {
+	raw, ok := metadata[metadataKeyCliProbeResults]
+	if !ok {
+		return map[string]models.CliProbeResult{}
+	}
+	bytes, err := json.Marshal(raw)
+	if err != nil {
+		return map[string]models.CliProbeResult{}
+	}
+	out := map[string]models.CliProbeResult{}
+	if err := json.Unmarshal(bytes, &out); err != nil {
+		return map[string]models.CliProbeResult{}
+	}
+	return out
+}
+
+func writeProbeResults(metadata map[string]interface{}, results map[string]models.CliProbeResult) {
+	if len(results) == 0 {
+		delete(metadata, metadataKeyCliProbeResults)
+		return
+	}
+	metadata[metadataKeyCliProbeResults] = results
+}
+
+func gcOldProbeResults(metadata map[string]interface{}) map[string]interface{} {
+	results := readProbeResults(metadata)
+	cutoff := time.Now().Add(-probeResultRetention)
+	changed := false
+	for id, r := range results {
+		if r.CompletedAt.Before(cutoff) {
+			delete(results, id)
+			changed = true
+		}
+	}
+	if changed {
+		writeProbeResults(metadata, results)
+	}
+	return metadata
 }
 

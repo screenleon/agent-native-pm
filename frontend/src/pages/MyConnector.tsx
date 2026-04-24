@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { createLocalConnectorPairingSession, getConnectorRunStats, listLocalConnectors, revokeLocalConnector } from '../api/client';
 import type { ConnectorRunStats } from '../api/client';
 import type { CreateLocalConnectorPairingSessionResponse, LocalConnector } from '../types';
@@ -143,6 +144,9 @@ export default function MyConnector() {
 					<h1>My Connector</h1>
 					<p style={{ margin: '0.35rem 0 0', color: 'var(--text-muted)' }}>
 						Use a paired local connector when you want planning runs to execute on your own machine instead of asking the server to call an API-compatible provider directly.
+					</p>
+					<p style={{ margin: '0.35rem 0 0', color: 'var(--text-muted)' }}>
+						My Connector runs the CLI on <strong>your</strong> machine, not on the server. For a server-side CLI binding, see <Link to="/settings/account-bindings">Account Bindings</Link>.
 					</p>
 					<p style={{ margin: '0.35rem 0 0', color: 'var(--text-muted)' }}>
 						One paired machine serves <strong>all of your projects</strong>. When planning runs are queued concurrently for different projects, they are processed one at a time on this device (oldest first). Pair additional machines to run more than one planning job in parallel.

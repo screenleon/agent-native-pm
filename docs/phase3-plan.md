@@ -485,13 +485,13 @@ Ordering within each slice follows the rule: schema migrations first, API contra
 
 ## 8. Open questions
 
-1. **3-B-1 DB query strategy for `by-evidence`**: Is the expected number of backlog candidates per project small enough (< 200) that Go-layer scanning of `evidence_detail` JSON is acceptable, or should we write dual-dialect SQL (`@>` / `json_each`)? Recommend deciding at implementation time after checking typical candidate counts in local test data.
+1. **3-B-1 DB query strategy for `by-evidence`** — _resolved 2026-04-24 in Phase 4 P4-5_. Go-layer scan stays; revisit when a single project exceeds ~500 candidates. See `DECISIONS.md` 2026-04-24 entry "Phase 3 by-evidence query strategy."
 
-2. **3-C-1 Batching strategy**: Should pending-review counts be fetched per-project (N requests) or via a single aggregation endpoint? If the project list is typically < 20, N requests is fine. Document the threshold decision in DECISIONS.md when the slice lands.
+2. **3-C-1 Batching strategy** — _resolved 2026-04-24 in Phase 4 P4-5_. Per-project fetch is the default; introduce a batch endpoint only when a user routinely lists > 20 projects. See `DECISIONS.md` 2026-04-24 entry "Phase 3 pending-review batching threshold."
 
-3. **3-A-1 `updated_at` bump**: Should `RecordProbe` bump `account_bindings.updated_at`? Current design says yes (keeps `updated_at` as "last write"). If a future feature uses `updated_at` as a proxy for "binding edited by user," the probe bump could be noisy. Consider a separate `last_probe_at` timestamp column (already planned) as the authoritative probe signal, and omit the `updated_at` bump. Decide before landing.
+3. **3-A-1 `updated_at` bump** — _resolved 2026-04-24 in Phase 4 P4-5_. `RecordProbe` keeps bumping `updated_at`; `last_probe_at` is the authoritative probe timestamp. See `DECISIONS.md` 2026-04-24 entry "Phase 3 probe updated_at bump."
 
-4. **3-B-1 Cross-driver JSON path**: SQLite's `json_each` + WHERE filter returns correct results but is not indexed. For projects with > 500 candidates this could be slow. Add a note in the implementation PR to revisit with a GIN index or materialized column if benchmarks show > 50 ms query time.
+4. **3-B-1 Cross-driver JSON path** — deferred observation; same revisit criterion as Q1 above.
 
 ---
 
@@ -499,13 +499,13 @@ Ordering within each slice follows the rule: schema migrations first, API contra
 
 | Slice | Status | PR | Merged |
 |---|---|---|---|
-| 3-A-1 — Probe persistence | not started | — | — |
-| 3-A-2 — Path B S5b (adapter + health probe + UI) | not started | — | — |
-| 3-B-1 — Evidence cross-links (Documents + Drift) | not started | — | — |
-| 3-B-2 — Task lineage full UI | not started | — | — |
-| 3-C-1 — Dashboard pending decisions | not started | — | — |
+| 3-A-1 — Probe persistence | shipped | [#19](https://github.com/screenleon/agent-native-pm/pull/19) | 2026-04-24 |
+| 3-A-2 — Path B S5b (adapter + health probe + UI) | shipped | [#20](https://github.com/screenleon/agent-native-pm/pull/20) | 2026-04-24 |
+| 3-B-1 — Evidence cross-links (Documents + Drift) | shipped | [#20](https://github.com/screenleon/agent-native-pm/pull/20) | 2026-04-24 |
+| 3-B-2 — Task lineage full UI | shipped | [#20](https://github.com/screenleon/agent-native-pm/pull/20) | 2026-04-24 |
+| 3-C-1 — Dashboard pending decisions | shipped | [#20](https://github.com/screenleon/agent-native-pm/pull/20) | 2026-04-24 |
 
-**Phase 3 complete** when all five slices are merged and all CI jobs pass.
+**Phase 3 complete** — all five slices merged to `main`. Phase 4 UX-debt plan continues the work; see `docs/phase4-plan.md`.
 
 ---
 

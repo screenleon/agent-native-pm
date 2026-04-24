@@ -152,10 +152,20 @@ Notes:
 | `status` | TEXT | NOT NULL DEFAULT 'pending' | `pending`, `online`, `offline`, `revoked` |
 | `capabilities` | JSONB | NOT NULL DEFAULT '{}' | Advertised adapter/runtime metadata |
 | `token_hash` | TEXT | NOT NULL, UNIQUE | Hash of the connector token; plaintext token is returned only once on pair |
+| `protocol_version` | INTEGER | NOT NULL DEFAULT 0 | Wire-protocol revision reported at pair time (Path B S2; migration 023) |
+| `metadata` | JSONB | NOT NULL DEFAULT '{}' | Operational signals: CLI health + Phase 4 probe pipeline (see keys below) |
 | `last_seen_at` | TIMESTAMPTZ | | Latest successful heartbeat |
 | `last_error` | TEXT | NOT NULL DEFAULT '' | Last connector-reported error |
 | `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
+
+Well-known keys inside `local_connectors.metadata`:
+
+| Key | Shape | Source | Notes |
+|-----|-------|--------|-------|
+| `cli_last_healthy_at` | RFC3339 string | Heartbeat (Path B S5b) | Most recent successful `<cli_command> --version` probe across any binding |
+| `pending_cli_probe_requests` | array of `PendingCliProbeRequest` | Server (Phase 4 P4-4) | Probes awaiting connector pickup; dedup'd by `binding_id` |
+| `cli_probe_results` | map keyed by `probe_id` of `CliProbeResult` | Connector → heartbeat (Phase 4 P4-4) | 24h retention; scrubbed on binding delete |
 
 ### Table: `connector_pairing_sessions`
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import type { AccountBinding } from '../types'
 import AccountBindings from './AccountBindings'
 
@@ -59,7 +60,7 @@ async function renderAndWait(bindings: AccountBinding[] = [], isLocal = true) {
   mockListAccountBindings.mockResolvedValue({ data: bindings })
   mockGetMeta.mockResolvedValue(isLocal ? localMeta() : serverMeta())
 
-  render(<AccountBindings />)
+  render(<MemoryRouter><AccountBindings /></MemoryRouter>)
 
   await waitFor(() => {
     expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
@@ -70,7 +71,7 @@ describe('<AccountBindings />', () => {
   // T-S3-1: render in local mode → CLI Bindings heading visible
   it('T-S3-1: shows CLI Bindings heading in local mode', async () => {
     await renderAndWait([], true)
-    expect(screen.getByText('CLI Bindings')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2, name: /Server-side CLI Bindings/i })).toBeInTheDocument()
   })
 
   // T-S3-2: render in server mode → info card shown, no CLI form
@@ -101,7 +102,7 @@ describe('<AccountBindings />', () => {
       .mockResolvedValueOnce({ data: [] })
       .mockResolvedValue({ data: [makeCliBinding()] })
 
-    render(<AccountBindings />)
+    render(<MemoryRouter><AccountBindings /></MemoryRouter>)
     await waitFor(() => {
       // Form auto-expands when no CLI bindings (T-S3-3)
       expect(screen.getByText('New CLI Binding')).toBeInTheDocument()
@@ -151,7 +152,7 @@ describe('<AccountBindings />', () => {
 
     vi.spyOn(window, 'confirm').mockReturnValue(true)
 
-    render(<AccountBindings />)
+    render(<MemoryRouter><AccountBindings /></MemoryRouter>)
     await waitFor(() => {
       expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
     })
@@ -175,7 +176,7 @@ describe('<AccountBindings />', () => {
       .mockResolvedValueOnce({ data: [nonPrimaryBinding] })
       .mockResolvedValue({ data: [{ ...nonPrimaryBinding, is_primary: true }] })
 
-    render(<AccountBindings />)
+    render(<MemoryRouter><AccountBindings /></MemoryRouter>)
     await waitFor(() => {
       expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
     })
@@ -215,7 +216,7 @@ describe('<AccountBindings />', () => {
       .mockResolvedValueOnce({ data: [nonPrimaryBinding] })
       .mockResolvedValue({ data: [{ ...nonPrimaryBinding, is_primary: true }] })
 
-    render(<AccountBindings />)
+    render(<MemoryRouter><AccountBindings /></MemoryRouter>)
     await waitFor(() => {
       expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
     })

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useSearchParams, Link } from 'react-router-dom'
 import type { Project, Task, Document, ProjectDashboardSummary, SyncRun, AgentRun, DriftSignal, DocumentContent, DocumentLink, ProjectRepoMapping, MirrorRepoDiscovery, Requirement } from '../types'
 import {
@@ -100,6 +100,29 @@ function ProjectDetail() {
   const [repoMirrorLoadError, setRepoMirrorLoadError] = useState<string | null>(null)
   const [projectBranchForm, setProjectBranchForm] = useState('')
   const [savingProjectBranch, setSavingProjectBranch] = useState(false)
+
+  // P4-1: "More ▾" popover groups demoted tabs (Drift, Activity). Settings
+  // moves to the gear button in the page header. Popover closes on outside
+  // click and on Escape; see the useEffect below.
+  const [showMoreMenu, setShowMoreMenu] = useState(false)
+  const moreMenuRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!showMoreMenu) return
+    const onDocClick = (e: MouseEvent) => {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(e.target as Node)) {
+        setShowMoreMenu(false)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowMoreMenu(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [showMoreMenu])
 
   const loadRepoMirrorDiscovery = useCallback(async (projectID: string) => {
     try {
@@ -478,6 +501,15 @@ function ProjectDetail() {
           <button className="btn btn-primary" onClick={handleSync} disabled={syncing}>
             {syncing ? 'Syncing...' : 'Sync Now'}
           </button>
+          <button
+            type="button"
+            className={`icon-btn ${tab === 'settings' ? 'is-active' : ''}`}
+            aria-label="Project settings"
+            title="Project settings"
+            onClick={() => setTab('settings')}
+          >
+            <span aria-hidden="true">⚙</span>
+          </button>
           {summary && (
             <div className={`health-score ${healthClass(summary.health_score)}`}>
               {Math.round(summary.health_score * 100)}%
@@ -546,12 +578,12 @@ function ProjectDetail() {
 
       <div className="project-rail-layout">
         <nav className="project-rail" aria-label="Project sections">
-          <button className={tab === 'overview' ? 'is-active' : ''} onClick={() => setTab('overview')}>
-            <span>Overview</span>
-          </button>
           <button className={tab === 'planning' ? 'is-active' : ''} onClick={() => setTab('planning')}>
             <span>Workspace</span>
             <span className="rail-count">{requirements.length}</span>
+          </button>
+          <button className={tab === 'overview' ? 'is-active' : ''} onClick={() => setTab('overview')}>
+            <span>Overview</span>
           </button>
           <button className={tab === 'tasks' ? 'is-active' : ''} onClick={() => setTab('tasks')}>
             <span>Tasks</span>
@@ -561,18 +593,44 @@ function ProjectDetail() {
             <span>Documents</span>
             <span className="rail-count">{documents.length}</span>
           </button>
-          <button className={tab === 'drift' ? 'is-active' : ''} onClick={() => setTab('drift')}>
-            <span>Drift</span>
-            <span className="rail-count">{driftSignals.filter(s => s.status === 'open').length}</span>
-          </button>
-          <button className={tab === 'agents' ? 'is-active' : ''} onClick={() => setTab('agents')}>
-            <span>Activity</span>
-            <span className="rail-count">{agentRuns.length}</span>
-          </button>
-          <button className={tab === 'settings' ? 'is-active' : ''} onClick={() => setTab('settings')}>
-            <span>Settings</span>
-            <span className="rail-count">{repoMappings.length}</span>
-          </button>
+          <div className="project-rail-more" ref={moreMenuRef} style={{ position: 'relative' }}>
+            <button
+              type="button"
+              className={(tab === 'drift' || tab === 'agents') ? 'is-active' : ''}
+              aria-expanded={showMoreMenu}
+              aria-haspopup="menu"
+              onClick={() => setShowMoreMenu(v => !v)}
+            >
+              <span>More ▾</span>
+              {driftSignals.filter(s => s.status === 'open').length > 0 && (
+                <span className="rail-count" aria-label="open drift signals in demoted tabs">
+                  {driftSignals.filter(s => s.status === 'open').length}
+                </span>
+              )}
+            </button>
+            {showMoreMenu && (
+              <div role="menu" className="project-rail-more-menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={tab === 'drift' ? 'is-active' : ''}
+                  onClick={() => { setTab('drift'); setShowMoreMenu(false) }}
+                >
+                  <span>Drift</span>
+                  <span className="rail-count">{driftSignals.filter(s => s.status === 'open').length}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={tab === 'agents' ? 'is-active' : ''}
+                  onClick={() => { setTab('agents'); setShowMoreMenu(false) }}
+                >
+                  <span>Activity</span>
+                  <span className="rail-count">{agentRuns.length}</span>
+                </button>
+              </div>
+            )}
+          </div>
         </nav>
         <div className="project-rail-content">
 
