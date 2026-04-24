@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -235,6 +236,40 @@ func TestHeartbeatGCsOldProbeResults(t *testing.T) {
 	status, _, _ := connectorStore.GetCliProbeResult(connectorID, user.ID, old)
 	if status != "not_found" {
 		t.Fatalf("expected 30h-old probe result to be GC'd, got status=%s", status)
+	}
+}
+
+// S-3: EnqueueCliProbe must return ErrPendingProbeCapReached once the
+// pending list hits maxPendingProbesPerConnector. This defends against an
+// unbounded pending list if dedup ever regresses or if a user has an
+// unreasonable number of bindings all in-flight at once.
+func TestEnqueueCliProbeEnforcesPendingCap(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	userStore := NewUserStore(db)
+	user, err := userStore.Create(models.CreateUserRequest{Username: "probe-cap", Email: "probe-cap@example.com", Password: "password123", Role: "member"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectorStore := NewLocalConnectorStore(db, testutil.TestDialect())
+	connectorID, _ := pairTestConnector(t, connectorStore, user.ID, "Laptop")
+
+	// Fill the pending list to the cap. Each binding is unique so dedup does
+	// not fold them together.
+	for i := 0; i < maxPendingProbesPerConnector; i++ {
+		bid := "binding-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		if _, err := connectorStore.EnqueueCliProbe(connectorID, user.ID, models.PendingCliProbeRequest{
+			BindingID: bid, ProviderID: "cli:claude", ModelID: "m",
+		}); err != nil {
+			t.Fatalf("enqueue %d: %v", i, err)
+		}
+	}
+
+	// One more must be rejected with the sentinel error.
+	_, err = connectorStore.EnqueueCliProbe(connectorID, user.ID, models.PendingCliProbeRequest{
+		BindingID: "one-too-many", ProviderID: "cli:claude", ModelID: "m",
+	})
+	if !errors.Is(err, ErrPendingProbeCapReached) {
+		t.Fatalf("expected ErrPendingProbeCapReached, got %v", err)
 	}
 }
 

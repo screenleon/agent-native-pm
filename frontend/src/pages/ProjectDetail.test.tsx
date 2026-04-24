@@ -86,15 +86,27 @@ beforeEach(() => {
 })
 
 describe('<ProjectDetail /> P4-1 IA', () => {
-  // T-P4-1-1: primary rail contains exactly Workspace, Overview, Tasks, Documents.
-  it('T-P4-1-1: primary rail exposes the four primary tabs and no Drift/Activity/Settings button', async () => {
+  // T-P4-1-1: primary rail contains exactly Workspace, Overview, Tasks,
+  // Documents — plus exactly one More ▾ button. This test codifies the
+  // 2026-04-24 DECISIONS.md entry "the primary rail's four tabs are a stable
+  // set" (N-2): a future PR that adds a fifth primary tab without amending
+  // DECISIONS will fail this count assertion in CI.
+  it('T-P4-1-1: primary rail exposes exactly 4 primary tabs + More ▾', async () => {
     renderAt('/projects/p1')
     await waitLoaded()
     const rail = screen.getByRole('navigation', { name: /Project sections/i })
+
+    // Exactly 5 buttons: 4 primary tabs + 1 More ▾ trigger. A new rail entry
+    // forces either updating this number (and DECISIONS.md) or routing it
+    // through the More popover instead.
+    const railButtons = within(rail).getAllByRole('button')
+    expect(railButtons).toHaveLength(5)
+
     expect(within(rail).getByRole('button', { name: /Workspace/ })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: /^Overview$/i })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: /^Tasks/ })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: /^Documents/ })).toBeInTheDocument()
+    expect(within(rail).getByRole('button', { name: /More/i })).toBeInTheDocument()
     // Drift + Activity must NOT be directly visible — they live in More ▾.
     expect(within(rail).queryByRole('button', { name: /^Drift$/i })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: /^Activity$/i })).not.toBeInTheDocument()

@@ -295,6 +295,31 @@ func TestGetProbeResultCompletedAfterHeartbeat(t *testing.T) {
 	}
 }
 
+// TestProbeBindingCapReturns429 verifies the S-3 guard: when the pending
+// list already has maxPendingProbesPerConnector entries, the handler
+// returns HTTP 429 instead of silently accepting.
+func TestProbeBindingCapReturns429(t *testing.T) {
+	fx := newConnectorProbeFixture(t)
+	connectorID := fx.seedConnector(t, fx.userID, "Laptop")
+
+	// Seed the pending list directly to the cap without going through the
+	// Create binding path (cheaper than creating 64 bindings).
+	for i := 0; i < 64; i++ {
+		if _, err := fx.connectorStr.EnqueueCliProbe(connectorID, fx.userID, models.PendingCliProbeRequest{
+			BindingID: "fill-" + string(rune('a'+i%26)) + string(rune('a'+i/26)),
+			ProviderID: "cli:claude", ModelID: "m",
+		}); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+
+	binding := fx.seedCliBinding(t, fx.userID, "MyClaude")
+	w := fx.postProbe(t, connectorID, map[string]string{"binding_id": binding.ID})
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
 // TestAccountBindingDeleteScrubsProbeResults verifies that the Delete
 // handler's best-effort probe scrub actually clears the corresponding
 // cli_probe_results entry from the connector metadata.

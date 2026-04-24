@@ -442,10 +442,10 @@ Ordering within each slice: types/contracts first, core logic second, wiring thi
 
 | Slice | Status | PR | Merged |
 |---|---|---|---|
-| P4-1 — ProjectDetail IA slim-down | implemented + tested | PR #21 | pending merge |
+| P4-1 — ProjectDetail IA slim-down | implemented + tested + rail-invariant locked | PR #21 | pending merge |
 | P4-2 — Model Settings hub + naming | implemented | PR #21 | pending merge |
 | P4-3 — CLI Binding Edit UI | implemented + tested | PR #21 | pending merge |
-| P4-4 — Connector model probe | implemented + tested | PR #21 | pending merge |
+| P4-4 — Connector model probe | implemented + tested + S-2/S-3/S-5 hardening | PR #21 | pending merge |
 | P4-5 — Phase 3 resolutions + status sync | implemented | PR #21 | pending merge |
 
 **Phase 4 is delivered as one bundled PR** per owner request. `make lint-governance` + frontend + backend tests all green before PR creation.

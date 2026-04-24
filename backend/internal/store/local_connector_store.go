@@ -7,6 +7,7 @@ import (
 	"encoding/base32"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -520,7 +521,18 @@ const (
 	// probeResultRetention caps how long a completed probe result survives
 	// in metadata. Anything older is dropped at enqueue/heartbeat time.
 	probeResultRetention = 24 * time.Hour
+	// maxPendingProbesPerConnector is a defensive cap on the pending list
+	// length (S-3). Dedup by binding_id already bounds the list to O(#CLI
+	// bindings), but this cap protects against runaway growth if dedup ever
+	// regresses or if a user has an unreasonable number of bindings. A 64-
+	// entry list is ~20 KB worst case, well under the JSONB row-size ceiling.
+	maxPendingProbesPerConnector = 64
 )
+
+// ErrPendingProbeCapReached is returned by EnqueueCliProbe when the connector
+// already has maxPendingProbesPerConnector pending probes queued. The handler
+// surface maps this to HTTP 429 so the UI can back off.
+var ErrPendingProbeCapReached = errors.New("connector pending-probe queue is full")
 
 // EnqueueCliProbe appends a pending probe request to the named connector's
 // metadata. Dedup policy (S7): if a pending entry for the same binding
@@ -569,6 +581,14 @@ func (s *LocalConnectorStore) EnqueueCliProbe(connectorID, userID string, req mo
 		}
 	}
 	pending = kept
+
+	// S-3 cap: reject if the pending list is already at the hard cap after
+	// removing stale same-binding entries. Dedup means this only trips when
+	// the user has > 64 distinct bindings all in-flight simultaneously —
+	// extremely unusual, and the 429 gives the UI a clear signal.
+	if len(pending) >= maxPendingProbesPerConnector {
+		return "", ErrPendingProbeCapReached
+	}
 
 	if strings.TrimSpace(req.ProbeID) == "" {
 		req.ProbeID = uuid.NewString()
@@ -621,68 +641,93 @@ func (s *LocalConnectorStore) GetCliProbeResult(connectorID, userID, probeID str
 }
 
 // ScrubCliProbesForBinding removes any pending + completed probe entries for
-// the given binding across all connectors owned by the user. Each connector
-// update runs inside its own transaction with a row lock (M1) so a
-// concurrent heartbeat does not restore the scrubbed entries.
+// the given binding across all connectors owned by the user. All connector
+// rows are locked inside a single transaction (S-2 fix) so N sequential
+// round-trips collapse to one and a concurrent heartbeat on any connector
+// cannot resurrect a scrubbed entry mid-loop. A connector added AFTER the
+// SELECT lock is acquired is not scrubbed in this pass — that small window
+// is closed by the 24h retention sweep (`probeResultRetention`).
 func (s *LocalConnectorStore) ScrubCliProbesForBinding(userID, bindingID string) error {
 	if strings.TrimSpace(bindingID) == "" {
 		return nil
 	}
-	connectors, err := s.ListByUser(userID)
-	if err != nil {
-		return err
-	}
-	for i := range connectors {
-		if err := s.scrubOneConnector(connectors[i].ID, userID, bindingID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *LocalConnectorStore) scrubOneConnector(connectorID, userID, bindingID string) error {
 	tx, err := s.beginWriteTx()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	connector, err := txSelectConnectorByIDForUpdate(tx, s.dialect, connectorID, userID)
+	connectors, err := txListConnectorsByUserForUpdate(tx, s.dialect, userID)
 	if err != nil {
 		return err
 	}
-	if connector == nil {
-		return nil
-	}
-	metadata := cloneMetadata(connector.Metadata)
-	changed := false
-	pending := readPendingProbes(metadata)
-	kept := pending[:0]
-	for _, p := range pending {
-		if p.BindingID == bindingID {
-			changed = true
+	for i := range connectors {
+		connector := &connectors[i]
+		metadata := cloneMetadata(connector.Metadata)
+		changed := false
+		pending := readPendingProbes(metadata)
+		kept := pending[:0]
+		for _, p := range pending {
+			if p.BindingID == bindingID {
+				changed = true
+				continue
+			}
+			kept = append(kept, p)
+		}
+		if changed {
+			writePendingProbes(metadata, kept)
+		}
+		results := readProbeResults(metadata)
+		for probeID, r := range results {
+			if r.BindingID == bindingID {
+				delete(results, probeID)
+				changed = true
+			}
+		}
+		if !changed {
 			continue
 		}
-		kept = append(kept, p)
-	}
-	if changed {
-		writePendingProbes(metadata, kept)
-	}
-	results := readProbeResults(metadata)
-	for probeID, r := range results {
-		if r.BindingID == bindingID {
-			delete(results, probeID)
-			changed = true
+		writeProbeResults(metadata, results)
+		if err := txWriteConnectorMetadata(tx, connector.ID, metadata); err != nil {
+			return err
 		}
 	}
-	if !changed {
-		return nil
-	}
-	writeProbeResults(metadata, results)
-	if err := txWriteConnectorMetadata(tx, connectorID, metadata); err != nil {
-		return err
-	}
 	return tx.Commit()
+}
+
+// txListConnectorsByUserForUpdate returns all of the user's connector rows
+// locked for the enclosing transaction. Used by ScrubCliProbesForBinding so
+// all scrubs commit atomically.
+func txListConnectorsByUserForUpdate(tx *sql.Tx, dialect database.Dialect, userID string) ([]models.LocalConnector, error) {
+	query := `
+		SELECT id, user_id, label, platform, client_version, status, capabilities,
+		       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
+		FROM local_connectors
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+		FOR UPDATE`
+	if dialect.IsSQLite() {
+		query = `
+			SELECT id, user_id, label, platform, client_version, status, capabilities,
+			       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
+			FROM local_connectors
+			WHERE user_id = $1
+			ORDER BY created_at DESC`
+	}
+	rows, err := tx.Query(query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]models.LocalConnector, 0)
+	for rows.Next() {
+		c, err := scanLocalConnector(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *c)
+	}
+	return out, rows.Err()
 }
 
 // beginWriteTx starts a transaction that takes the writer-side lock eagerly.

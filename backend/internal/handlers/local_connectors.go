@@ -143,6 +143,13 @@ func (h *LocalConnectorHandler) Heartbeat(w http.ResponseWriter, r *http.Request
 	}
 	var req models.LocalConnectorHeartbeatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		// Strict-by-design (T-S1 / security): a connector sending malformed
+		// heartbeat body gets 400 and loses online status. We log the error
+		// server-side so an operator can distinguish "connector unreachable"
+		// from "connector buggy" when a connector repeatedly drops offline.
+		// Token hash is NOT logged (sensitive); the caller IP and decode
+		// error are sufficient to triage.
+		log.Printf("heartbeat decode failed: remote=%s err=%v", r.RemoteAddr, err)
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -551,6 +558,10 @@ func (h *LocalConnectorHandler) ProbeBinding(w http.ResponseWriter, r *http.Requ
 		RequestedAt: time.Now().UTC(),
 	})
 	if err != nil {
+		if errors.Is(err, store.ErrPendingProbeCapReached) {
+			writeError(w, http.StatusTooManyRequests, "too many pending probes on this connector; wait for one to finish before starting another")
+			return
+		}
 		writeError(w, http.StatusNotFound, "connector not found")
 		return
 	}
