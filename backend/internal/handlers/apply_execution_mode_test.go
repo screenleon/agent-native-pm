@@ -142,7 +142,9 @@ func TestApplyBacklogCandidate_NoBody_PreservesManualSource(t *testing.T) {
 			} `json:"task"`
 		} `json:"data"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
 	if resp.Data.Task.Source == "" || strings.HasPrefix(resp.Data.Task.Source, "role_dispatch") {
 		t.Fatalf("expected manual source, got %q", resp.Data.Task.Source)
 	}
@@ -163,7 +165,14 @@ func TestApplyBacklogCandidate_ExplicitManual(t *testing.T) {
 			} `json:"task"`
 		} `json:"data"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
+	// Manual must produce a non-empty, non-role_dispatch source. An empty
+	// value here would mean the response envelope shape drifted.
+	if resp.Data.Task.Source == "" {
+		t.Fatalf("manual apply produced empty task.source — response shape drift?")
+	}
 	if strings.HasPrefix(resp.Data.Task.Source, "role_dispatch") {
 		t.Fatalf("manual must not produce role_dispatch source, got %q", resp.Data.Task.Source)
 	}
@@ -184,7 +193,9 @@ func TestApplyBacklogCandidate_RoleDispatchWithRole(t *testing.T) {
 			} `json:"task"`
 		} `json:"data"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
 	want := "role_dispatch:backend-architect"
 	if resp.Data.Task.Source != want {
 		t.Fatalf("expected task source %q, got %q", want, resp.Data.Task.Source)
@@ -206,9 +217,22 @@ func TestApplyBacklogCandidate_RoleDispatchWithoutRole(t *testing.T) {
 			} `json:"task"`
 		} `json:"data"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
+	}
 	if resp.Data.Task.Source != "role_dispatch" {
 		t.Fatalf("expected bare 'role_dispatch', got %q", resp.Data.Task.Source)
+	}
+}
+
+// Copilot PR#22: whitespace-padded mode values should behave identically
+// to trimmed values. Regression guard for the trim-before-forward fix.
+func TestApplyBacklogCandidate_WhitespacePaddedModeIsTrimmed(t *testing.T) {
+	fx := newApplyFixture(t)
+	candidate := fx.seedApprovedCandidate(t, "")
+	w := fx.apply(t, candidate.ID, map[string]string{"execution_mode": "  manual  "})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for whitespace-padded manual, got %d body=%s", w.Code, w.Body.String())
 	}
 }
 

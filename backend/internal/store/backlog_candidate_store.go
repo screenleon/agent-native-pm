@@ -406,8 +406,14 @@ func (s *BacklogCandidateStore) ApplyToTaskWithMode(id, executionMode string) (*
 		} else {
 			source = "role_dispatch"
 		}
-		if len(source) > 80 {
-			source = source[:80]
+		// Rune-aware truncation — Phase 5 does not enforce a role
+		// catalog so execution_role can contain non-ASCII. Byte-slicing
+		// could split a multi-byte codepoint and produce invalid UTF-8
+		// in task.source (Copilot PR#22). Convert to []rune and slice
+		// by rune count; 80 codepoints is a generous cap that still
+		// fits any sensible role id.
+		if runes := []rune(source); len(runes) > 80 {
+			source = string(runes[:80])
 		}
 	}
 	task, err := createAppliedCandidateTaskWithSource(tx, candidate.ProjectID, candidate.Title, candidate.Description, source)

@@ -1,7 +1,9 @@
 package store
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/testutil"
@@ -119,6 +121,62 @@ func TestCreateAndUpdateCandidate_ExecutionRoleRoundTrip(t *testing.T) {
 	}
 	if cleared.ExecutionRole != nil {
 		t.Fatalf("want cleared, got %v", *cleared.ExecutionRole)
+	}
+}
+
+// Copilot PR#22 C4: rune-aware truncation of task.source. Phase 5 does
+// not enforce a role catalog so execution_role can contain non-ASCII;
+// byte-slicing a role like "ui-scaffolder-日本語版" to 80 bytes could
+// split a multi-byte codepoint. This test sets a multi-byte role +
+// applies with role_dispatch and asserts the resulting task.source is
+// valid UTF-8 (no � replacement, round-trips through JSON).
+func TestApplyToTaskWithMode_RoleDispatchSourceIsValidUTF8(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+
+	projectStore := NewProjectStore(db)
+	project, err := projectStore.Create(models.CreateProjectRequest{Name: "Utf8Proj"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqStore := NewRequirementStore(db)
+	req, err := reqStore.Create(project.ID, models.CreateRequirementRequest{Title: "r", Source: "human"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runStore := NewPlanningRunStore(db, testutil.TestDialect())
+	run, err := runStore.Create(project.ID, req.ID, "", models.CreatePlanningRunRequest{
+		TriggerSource: "manual", ExecutionMode: "deterministic",
+	}, models.PlanningProviderSelection{
+		ProviderID: "deterministic", ModelID: "deterministic", SelectionSource: "server_default",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	candStore := NewBacklogCandidateStore(db, testutil.TestDialect())
+	// Role id long enough to force truncation when combined with the
+	// "role_dispatch:" prefix (14 bytes) + multi-byte runes.
+	longMultiByteRole := strings.Repeat("テストロール", 20) // each char is 3 bytes UTF-8
+	created, err := candStore.CreateDraftsForPlanningRun(req, run.ID, []models.BacklogCandidateDraft{
+		{Title: "t", Rank: 1, PriorityScore: 10, Confidence: 10, ExecutionRole: longMultiByteRole},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved := "approved"
+	if _, err := candStore.Update(created[0].ID, models.UpdateBacklogCandidateRequest{Status: &approved}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := candStore.ApplyToTaskWithMode(created[0].ID, models.ApplyExecutionModeRoleDispatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !utf8.ValidString(resp.Task.Source) {
+		t.Fatalf("task.source is not valid UTF-8: %q (bytes=%v)", resp.Task.Source, []byte(resp.Task.Source))
+	}
+	if runeCount := utf8.RuneCountInString(resp.Task.Source); runeCount > 80 {
+		t.Fatalf("want <= 80 runes, got %d", runeCount)
 	}
 }
 

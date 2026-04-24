@@ -712,6 +712,11 @@ func (h *PlanningRunHandler) ApplyBacklogCandidate(w http.ResponseWriter, r *htt
 	// Phase 5 B3: optional request body carries execution_mode.
 	// Missing body / empty field = "manual" (back-compat with Phase 4
 	// and earlier callers that send no body at all).
+	//
+	// Trim BEFORE enum comparison so `" manual "` behaves the same as
+	// `"manual"` — the previous code trimmed only for the empty-check
+	// and then forwarded the untrimmed value, which would have returned
+	// 400 for whitespace-only input differences (Copilot PR#22).
 	executionMode := models.ApplyExecutionModeManual
 	if r.ContentLength != 0 {
 		var req models.ApplyBacklogCandidateRequest
@@ -719,8 +724,9 @@ func (h *PlanningRunHandler) ApplyBacklogCandidate(w http.ResponseWriter, r *htt
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		if strings.TrimSpace(req.ExecutionMode) != "" {
-			executionMode = req.ExecutionMode
+		trimmed := strings.TrimSpace(req.ExecutionMode)
+		if trimmed != "" {
+			executionMode = trimmed
 		}
 	}
 

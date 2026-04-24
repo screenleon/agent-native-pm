@@ -12,9 +12,18 @@
 //     prior duplication where each language carried its own copy of the
 //     prompt text.
 //
-// The only public surface is Render. Everything else — frontmatter
-// stripping, variable substitution, embed.FS — is an implementation
-// detail.
+// Public API:
+//
+//   - Render — load + strip frontmatter + substitute {{VAR}} placeholders.
+//     This is the primary entry point used by the adapters.
+//   - Load — return the raw markdown source INCLUDING frontmatter. Used
+//     by callers that want to parse the metadata themselves.
+//   - Exists — report whether a named prompt is bundled.
+//   - ListRoles — enumerate the role ids under roles/. Used by tooling
+//     that needs the catalog (e.g. Phase 6 dispatcher validation).
+//
+// Frontmatter stripping, regex substitution, and embed.FS are private
+// implementation details.
 package prompts
 
 import (

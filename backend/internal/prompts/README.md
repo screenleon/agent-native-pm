@@ -40,7 +40,7 @@ JSON schema examples inside the prompt body use **single braces** (`{`, `}`). Th
 | Prompt | Variables it consumes |
 |---|---|
 | `backlog` | `{{PROJECT_NAME}}`, `{{PROJECT_DESCRIPTION_LINE}}`, `{{REQUIREMENT}}`, `{{MAX_CANDIDATES}}`, `{{CONTEXT}}`, `{{SCHEMA_VERSION}}` |
-| `whatsnext` | `{{PROJECT_NAME}}`, `{{PROJECT_DESCRIPTION_LINE}}`, `{{REQUIREMENT}}`, `{{MAX_CANDIDATES}}`, `{{CONTEXT}}`, `{{SCHEMA_VERSION}}` |
+| `whatsnext` | `{{PROJECT_NAME}}`, `{{PROJECT_DESCRIPTION_LINE}}`, `{{SCOPE_SECTION}}`, `{{MAX_CANDIDATES}}`, `{{CONTEXT}}`, `{{SCHEMA_VERSION}}` (plus `{{REQUIREMENT}}`, currently required by the loader contract but not substituted by the template body — pass an empty string to future-proof the adapter) |
 | `roles/*` | `{{TASK_TITLE}}`, `{{TASK_DESCRIPTION}}`, `{{PROJECT_CONTEXT}}`, `{{REQUIREMENT}}` (not every role uses every variable) |
 
 Callers pre-compute conditional content into a single variable. For example, `PROJECT_DESCRIPTION_LINE` is either `"Description: <text>"` or the empty string — the prompt body stays branch-free.

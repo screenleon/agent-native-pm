@@ -512,6 +512,8 @@ export function CandidateReviewPanel({
                 {onSelectedExecutionModeChange && (
                   <div
                     className="planning-execution-mode"
+                    role="radiogroup"
+                    aria-labelledby="execution-mode-label"
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -520,7 +522,7 @@ export function CandidateReviewPanel({
                       fontSize: '0.88rem',
                     }}
                   >
-                    <span style={{ color: 'var(--text-muted)' }}>Execution:</span>
+                    <span id="execution-mode-label" style={{ color: 'var(--text-muted)' }}>Execution:</span>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', cursor: 'pointer' }}>
                       <input
                         type="radio"
@@ -546,6 +548,7 @@ export function CandidateReviewPanel({
                         checked={selectedExecutionMode === 'role_dispatch'}
                         onChange={() => onSelectedExecutionModeChange('role_dispatch')}
                         disabled
+                        aria-disabled="true"
                       />
                       Auto-dispatch <span style={{ fontSize: '0.76rem' }}>(coming in Phase 6)</span>
                     </label>
