@@ -43,7 +43,7 @@ Name: {{PROJECT_NAME}}
 {{PROJECT_DESCRIPTION_LINE}}
 
 === Requirement ===
-{{REQUIREMENT}}
+{{REQUIREMENT}}{{AUDIENCE_LINE}}{{SUCCESS_LINE}}
 
 === Project context (schema={{SCHEMA_VERSION}}) ===
 {{CONTEXT}}

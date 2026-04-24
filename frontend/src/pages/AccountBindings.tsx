@@ -17,6 +17,7 @@ import {
 } from '../api/client';
 import type { ProbeModelResult } from '../api/client';
 import type { AccountBinding, CreateAccountBindingPayload } from '../types';
+import Jargon from '../components/Jargon';
 import {
   getPlanningConnectionPreset,
   inferPlanningConnectionPreset,
@@ -579,7 +580,7 @@ export default function AccountBindings() {
                     </span>
                     {binding.is_primary && (
                       <span style={{ marginLeft: '0.5rem', color: 'var(--success)', fontSize: '0.85rem' }}>
-                        Primary
+                        <Jargon term="primary binding">Primary</Jargon>
                       </span>
                     )}
                     {!binding.is_active && (
@@ -766,7 +767,7 @@ export default function AccountBindings() {
                           </span>
                           {binding.is_primary && (
                             <span style={{ marginLeft: '0.5rem', color: 'var(--success)', fontSize: '0.85rem' }}>
-                              Primary
+                              <Jargon term="primary binding">Primary</Jargon>
                             </span>
                           )}
                           {!binding.is_active && (

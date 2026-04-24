@@ -279,7 +279,7 @@ func rewriteForSQLite(sql string) string {
 // PostgreSQL-only constructs (GIN indexes, COMMENT ON) are silently skipped.
 // Multi-ADD-COLUMN ALTER TABLE statements are split before execution.
 func execMulti(tx *sql.Tx, sqlContent string) error {
-	for raw := range strings.SplitSeq(sqlContent, ";") {
+	for _, raw := range strings.Split(sqlContent, ";") {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			continue

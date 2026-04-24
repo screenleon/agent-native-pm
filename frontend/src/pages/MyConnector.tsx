@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createLocalConnectorPairingSession, getConnectorRunStats, listLocalConnectors, revokeLocalConnector } from '../api/client';
 import { ConnectorCliConfigs } from './MyConnector/ConnectorCliConfigs';
+import Jargon from '../components/Jargon';
 import type { ConnectorRunStats } from '../api/client';
 import type { CreateLocalConnectorPairingSessionResponse, LocalConnector } from '../types';
 
@@ -27,7 +28,7 @@ function connectorReadiness(connector: LocalConnector): 'ready' | 'stale' | 'off
 
 function ReadinessBadge({ state }: { state: ReturnType<typeof connectorReadiness> }) {
 	const map: Record<typeof state, { label: string; cls: string }> = {
-		ready:   { label: '● Ready for planning', cls: 'connector-badge connector-badge-ready' },
+		ready:   { label: '● Online', cls: 'connector-badge connector-badge-ready' },
 		stale:   { label: '◑ Online — adapter not confirmed', cls: 'connector-badge connector-badge-stale' },
 		offline: { label: '○ Offline', cls: 'connector-badge connector-badge-offline' },
 		revoked: { label: '✕ Revoked', cls: 'connector-badge connector-badge-revoked' },
@@ -142,7 +143,7 @@ export default function MyConnector() {
 		<div className="page">
 			<div className="page-header">
 				<div>
-					<h1>My Connector</h1>
+					<h1>My <Jargon term="connector">Connector</Jargon></h1>
 					<p style={{ margin: '0.35rem 0 0', color: 'var(--text-muted)' }}>
 						Use a paired local connector when you want planning runs to execute on your own machine instead of asking the server to call an API-compatible provider directly.
 					</p>

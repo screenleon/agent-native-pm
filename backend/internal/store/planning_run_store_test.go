@@ -135,7 +135,7 @@ func TestPlanningRunStoreRejectsConcurrentActiveDuplicates(t *testing.T) {
 	results := make(chan error, attempts)
 	var wg sync.WaitGroup
 
-	for range attempts {
+	for i := 0; i < attempts; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

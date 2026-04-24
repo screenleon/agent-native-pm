@@ -7,7 +7,7 @@ This file is the canonical schema reference for the current backend database.
 - Runtime database: PostgreSQL
 - SQL semantics: PostgreSQL placeholders, `TIMESTAMPTZ`, `BOOLEAN`, `JSONB`, partial indexes, and GIN full-text indexes
 - Migrations: forward-only numbered SQL files in `backend/db/migrations/`
-- Migration set currently applied through `026_backlog_candidate_execution_role.sql`
+- Migration set currently applied through `028_requirement_audience_success.sql`
 - Minimum SQLite version: **3.35** (March 2021). Required by migration 026's `.down.sql` which uses `ALTER TABLE ... DROP COLUMN`. Older SQLite versions apply the forward migration fine but rollback fails with `near "DROP": syntax error`.
 
 ## Current Entity Relationships
@@ -199,8 +199,14 @@ Notes:
 | `description` | TEXT | NOT NULL DEFAULT '' | Longer free-text requirement detail |
 | `status` | TEXT | NOT NULL DEFAULT 'draft' | `draft`, `planned`, `archived` |
 | `source` | TEXT | NOT NULL DEFAULT 'human' | `human` or `agent:<name>` |
+| `audience` | TEXT | NOT NULL DEFAULT '' | Optional wizard-sourced audience description (Phase 6a A3) |
+| `success_criteria` | TEXT | NOT NULL DEFAULT '' | Optional wizard-sourced success criteria (Phase 6a A3) |
 | `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
+
+Notes:
+- `audience` and `success_criteria` are injected into the backlog planner prompt as `AUDIENCE_LINE` / `SUCCESS_LINE` template vars when non-empty. Both are empty-string by default so existing rows and golden fixtures are unaffected.
+- Added by migration `028_requirement_audience_success.sql`.
 
 ### Table: `planning_runs`
 

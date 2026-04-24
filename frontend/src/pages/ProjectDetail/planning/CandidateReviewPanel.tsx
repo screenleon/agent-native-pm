@@ -1,5 +1,6 @@
 import type { BacklogCandidate, PlanningProviderOptions, PlanningRun } from '../../../types'
 import { formatDateTime, formatRelativeTime } from '../../../utils/formatters'
+import Jargon from '../../../components/Jargon'
 import {
   backlogCandidateStatusBadgeClass,
   backlogCandidateSuggestionLabel,
@@ -154,7 +155,7 @@ export function CandidateReviewPanel({
       <div className="planning-stage-header">
         <div>
           <h3 style={{ marginBottom: '0.25rem' }}>
-            {isWhatsnextRun ? 'Suggested Focus Areas' : 'Suggested Backlog'}
+            {isWhatsnextRun ? 'Suggested Focus Areas' : <><Jargon term="backlog candidate">Suggested Backlog</Jargon></>}
           </h3>
           <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.88rem' }}>
             {isWhatsnextRun
@@ -550,7 +551,7 @@ export function CandidateReviewPanel({
                         disabled
                         aria-disabled="true"
                       />
-                      Auto-dispatch <span style={{ fontSize: '0.76rem' }}>(coming in Phase 6)</span>
+                      <Jargon term="dispatch">Auto-dispatch</Jargon> <span style={{ fontSize: '0.76rem' }}>(coming in Phase 6)</span>
                     </label>
                   </div>
                 )}

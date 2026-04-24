@@ -1,0 +1,2 @@
+-- +migrate Down
+-- SQLite pre-3.35 has no DROP COLUMN. Use table rebuild or leave as no-op dev-only.

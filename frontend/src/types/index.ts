@@ -121,6 +121,8 @@ export interface CreateRequirementPayload {
   summary?: string;
   description?: string;
   source?: string;
+  audience?: string;
+  success_criteria?: string;
 }
 
 export interface CreatePlanningRunPayload {

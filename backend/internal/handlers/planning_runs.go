@@ -770,6 +770,102 @@ func (h *PlanningRunHandler) ListByEvidence(w http.ResponseWriter, r *http.Reque
 	writeSuccess(w, http.StatusOK, summaries, nil)
 }
 
+// DemoSeed POST /api/projects/:id/demo-seed
+// Creates one demo requirement, one completed planning run, and three draft
+// backlog candidates. Returns 409 if the project already has requirements.
+// Intended for new empty projects so operators can explore the UI without a
+// real planning run.
+func (h *PlanningRunHandler) DemoSeed(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "id")
+
+	// Verify project exists.
+	project, err := h.projectStore.GetByID(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get project")
+		return
+	}
+	if project == nil {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	// Atomically guard + create the demo requirement so concurrent requests
+	// cannot both pass the emptiness check.
+	req, err := h.requirementStore.CreateIfProjectEmpty(projectID, models.CreateRequirementRequest{
+		Title:       "Demo: Build a task-tracker SaaS",
+		Source:      "demo",
+		Description: "A lightweight SaaS that lets small teams track tasks, deadlines, and progress without the overhead of enterprise PM tools.",
+	})
+	if errors.Is(err, store.ErrProjectNotEmpty) {
+		writeError(w, http.StatusConflict, "project is not empty; demo seed only works on empty projects")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create demo requirement")
+		return
+	}
+
+	// Create a planning run using the deterministic provider (no connector needed).
+	selection := models.PlanningProviderSelection{
+		ProviderID:      models.PlanningProviderDeterministic,
+		ModelID:         models.PlanningProviderModelDeterministic,
+		SelectionSource: models.PlanningSelectionSourceServerDefault,
+	}
+	run, err := h.store.Create(projectID, req.ID, "", models.CreatePlanningRunRequest{
+		TriggerSource: "demo",
+		ExecutionMode: models.PlanningExecutionModeDeterministic,
+		AdapterType:   "backlog",
+	}, selection)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create demo planning run")
+		return
+	}
+
+	// Insert the three demo backlog candidates.
+	drafts := []models.BacklogCandidateDraft{
+		{
+			Title:         "Set up project scaffolding with Next.js + PostgreSQL",
+			Description:   "Bootstrap the monorepo with Next.js 14, Drizzle ORM, and a PostgreSQL schema for tasks, users, and projects.",
+			Rationale:     "Foundation layer — everything else builds on this.",
+			PriorityScore: 0.95,
+			Confidence:    0.9,
+			Rank:          1,
+		},
+		{
+			Title:         "Design the task board UI with drag-and-drop",
+			Description:   "Build a Kanban-style board using @dnd-kit. Columns: To Do / In Progress / Done. Cards show assignee + due date.",
+			Rationale:     "The core user-facing feature that differentiates the product.",
+			PriorityScore: 0.80,
+			Confidence:    0.85,
+			Rank:          2,
+		},
+		{
+			Title:         "Add Slack notification for due-date reminders",
+			Description:   "Send a Slack webhook 24h before a task's due date. Configurable per-workspace.",
+			Rationale:     "Reduces missed deadlines — common pain point in small teams.",
+			PriorityScore: 0.65,
+			Confidence:    0.75,
+			Rank:          3,
+		},
+	}
+	if _, err := h.candidateStore.CreateDraftsForPlanningRun(req, run.ID, drafts); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create demo backlog candidates")
+		return
+	}
+
+	// Mark the run as completed.
+	if err := h.store.Complete(run.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to complete demo planning run")
+		return
+	}
+
+	writeSuccess(w, http.StatusCreated, map[string]string{
+		"requirement_id":  req.ID,
+		"planning_run_id": run.ID,
+		"message":         "Demo seed created successfully",
+	}, nil)
+}
+
 func (h *PlanningRunHandler) ApplyBacklogCandidate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	candidate, err := h.candidateStore.GetByID(id)
