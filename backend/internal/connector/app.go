@@ -181,21 +181,48 @@ func runDoctor(ctx context.Context, args []string, stdout io.Writer) error {
 }
 
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	// requireAdapter is false because the built-in adapter covers the zero-flag case.
-	state, client, statePath, changed, err := loadRuntimeState(args, false)
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	statePathFlag := fs.String("state-path", "", "state file path")
+	cliHealthIntervalSec := fs.Int("cli-health-interval", 300, "seconds between CLI health probes (0 to use default)")
+	cliHealthDisabled := fs.Bool("cli-health-disabled", false, "disable CLI health probe loop")
+	adapterFlags := bindAdapterFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	adapterOverrides := adapterFlags.Overrides()
+	statePath, err := ResolveStatePath(*statePathFlag)
 	if err != nil {
 		return err
+	}
+	state, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	changed := false
+	if state.Adapter.HasConfiguration() || adapterOverrides.HasValues() {
+		adapterConfig, adapterChanged, err := applyAdapterOverrides(state.Adapter, adapterOverrides)
+		if err != nil {
+			return err
+		}
+		state.Adapter = adapterConfig
+		changed = adapterChanged
 	}
 	if changed {
 		if err := state.Save(statePath); err != nil {
 			return err
 		}
 	}
+	client := NewClient(state.ServerURL, state.ConnectorToken)
+	client.HTTPClient = &http.Client{Timeout: 20 * time.Second}
+	cliHealthInterval := time.Duration(*cliHealthIntervalSec) * time.Second
 	service := &Service{
 		Client:            client,
 		State:             state,
 		HeartbeatInterval: 30 * time.Second,
 		PollInterval:      5 * time.Second,
+		CliHealthInterval: cliHealthInterval,
+		CliHealthDisabled: *cliHealthDisabled,
 		Stdout:            stdout,
 		Stderr:            stderr,
 	}

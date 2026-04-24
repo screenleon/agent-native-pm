@@ -4,8 +4,10 @@ import {
   listProjects,
   listLocalConnectors,
   listNotifications,
+  getPendingReviewCount,
 } from '../api/client'
 import type { Project, LocalConnector, Notification, User } from '../types'
+import { formatRelativeTime } from '../utils/formatters'
 
 interface DashboardProps {
   me: User
@@ -19,19 +21,6 @@ type NextStep = {
   tone: 'info' | 'warn' | 'success'
 }
 
-function relativeTime(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const ts = new Date(iso).getTime()
-  if (Number.isNaN(ts)) return ''
-  const diffSec = Math.round((Date.now() - ts) / 1000)
-  if (diffSec < 60) return `${diffSec}s ago`
-  const diffMin = Math.round(diffSec / 60)
-  if (diffMin < 60) return `${diffMin}m ago`
-  const diffHr = Math.round(diffMin / 60)
-  if (diffHr < 24) return `${diffHr}h ago`
-  const diffDay = Math.round(diffHr / 24)
-  return `${diffDay}d ago`
-}
 
 function connectorIsLive(c: LocalConnector): boolean {
   if (c.status === 'revoked') return false
@@ -44,6 +33,7 @@ export default function Dashboard({ me }: DashboardProps) {
   const [projects, setProjects] = useState<Project[]>([])
   const [connectors, setConnectors] = useState<LocalConnector[]>([])
   const [notifications, setNotifications] = useState<Notification[]>([])
+  const [pendingCounts, setPendingCounts] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -59,9 +49,20 @@ export default function Dashboard({ me }: DashboardProps) {
           listNotifications(false).catch(() => ({ data: [] as Notification[] })),
         ])
         if (cancelled) return
-        setProjects(projResp.data ?? [])
+        const loadedProjects = projResp.data ?? []
+        setProjects(loadedProjects)
         setConnectors(connResp.data ?? [])
         setNotifications(notifResp.data ?? [])
+
+        const countResults = await Promise.allSettled(
+          loadedProjects.map(p => getPendingReviewCount(p.id).then(r => ({ id: p.id, count: r.data?.count ?? 0 })))
+        )
+        if (cancelled) return
+        const counts: Record<string, number> = {}
+        for (const result of countResults) {
+          if (result.status === 'fulfilled') counts[result.value.id] = result.value.count
+        }
+        setPendingCounts(counts)
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load dashboard')
       } finally {
@@ -179,7 +180,7 @@ export default function Dashboard({ me }: DashboardProps) {
                   <span className={`status-dot ${connectorIsLive(c) ? 'is-live' : 'is-offline'}`} aria-hidden="true" />
                   <span className="dashboard-list-main">{c.label || c.id.slice(0, 8)}</span>
                   <span className="dashboard-list-meta">
-                    {c.platform || 'unknown'} · {c.last_seen_at ? `seen ${relativeTime(c.last_seen_at)}` : 'never seen'}
+                    {c.platform || 'unknown'} · {c.last_seen_at ? `seen ${formatRelativeTime(c.last_seen_at)}` : 'never seen'}
                   </span>
                 </li>
               ))}
@@ -196,14 +197,27 @@ export default function Dashboard({ me }: DashboardProps) {
             <p style={{ color: 'var(--text-muted)' }}>You have no projects yet.</p>
           ) : (
             <ul className="dashboard-list">
-              {recentProjects.map(p => (
-                <li key={p.id}>
-                  <Link className="dashboard-list-main" to={`/projects/${p.id}`}>{p.name}</Link>
-                  <span className="dashboard-list-meta">
-                    {p.description ? p.description.slice(0, 64) : 'No description'}
-                  </span>
-                </li>
-              ))}
+              {recentProjects.map(p => {
+                const pending = pendingCounts[p.id] ?? 0
+                return (
+                  <li key={p.id}>
+                    <Link className="dashboard-list-main" to={`/projects/${p.id}`}>{p.name}</Link>
+                    <span className="dashboard-list-meta">
+                      {p.description ? p.description.slice(0, 64) : 'No description'}
+                    </span>
+                    {pending > 0 && (
+                      <Link
+                        to={`/projects/${p.id}?tab=planning`}
+                        className="badge badge-todo"
+                        style={{ fontSize: '0.75rem', marginLeft: 'auto', flexShrink: 0 }}
+                        title={`${pending} draft candidate${pending === 1 ? '' : 's'} pending review`}
+                      >
+                        {pending} pending
+                      </Link>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
           )}
         </section>
@@ -222,7 +236,7 @@ export default function Dashboard({ me }: DashboardProps) {
                     {n.is_read && <span className="status-dot is-offline" aria-hidden="true" />}
                     <Link className="dashboard-list-main" to={link}>{n.title}</Link>
                     <span className="dashboard-list-meta">
-                      {n.kind} · {relativeTime(n.created_at)}
+                      {n.kind} · {formatRelativeTime(n.created_at)}
                     </span>
                   </li>
                 )

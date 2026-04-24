@@ -178,6 +178,10 @@ export interface AccountBinding {
   is_primary: boolean;
   created_at: string;
   updated_at: string;
+  // Probe history (migration 024); null until first probe.
+  last_probe_at: string | null;
+  last_probe_ok: boolean | null;
+  last_probe_ms: number | null;
 }
 
 export interface CreateAccountBindingPayload {
@@ -210,6 +214,9 @@ export interface LocalConnector {
   client_version: string;
   status: 'pending' | 'online' | 'offline' | 'revoked';
   capabilities: Record<string, unknown>;
+  metadata?: {
+    cli_last_healthy_at?: string;
+  };
   last_seen_at: string | null;
   last_error: string;
   created_at: string;
@@ -434,6 +441,15 @@ export interface ApplyBacklogCandidateResponse {
   candidate: BacklogCandidate;
   lineage: TaskLineage;
   already_applied: boolean;
+}
+
+export interface CandidateEvidenceSummary {
+  id: string;
+  title: string;
+  status: BacklogCandidate['status'];
+  planning_run_id: string;
+  requirement_id: string;
+  requirement_title: string;
 }
 
 export interface BatchUpdateTaskChanges {

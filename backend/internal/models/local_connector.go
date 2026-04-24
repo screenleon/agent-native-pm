@@ -18,6 +18,7 @@ const (
 	ConnectorPairingStatusCancelled = "cancelled"
 )
 
+
 type LocalConnector struct {
 	ID            string                 `json:"id"`
 	UserID        string                 `json:"user_id"`
@@ -31,6 +32,9 @@ type LocalConnector struct {
 	// response). 1 = Path B / S2-aware. Set by the connector at pair time
 	// (Path B S2). See migration 023 and design §6.2 / §6.5 R3.
 	ProtocolVersion int                    `json:"protocol_version"`
+	// Metadata holds operational data such as CLI health probe results
+	// (path: metadata.cli_health.<binding_id>). Added in migration 025.
+	Metadata        map[string]interface{} `json:"metadata"`
 	LastSeenAt      *time.Time             `json:"last_seen_at"`
 	LastError       string                 `json:"last_error"`
 	CreatedAt       time.Time              `json:"created_at"`
@@ -76,8 +80,13 @@ type PairLocalConnectorResponse struct {
 }
 
 type LocalConnectorHeartbeatRequest struct {
-	Capabilities map[string]interface{} `json:"capabilities,omitempty"`
-	LastError    string                 `json:"last_error,omitempty"`
+	Capabilities     map[string]interface{} `json:"capabilities,omitempty"`
+	LastError        string                 `json:"last_error,omitempty"`
+	// LastCliHealthyAt is set by the connector when a CLI health probe
+	// succeeded since the previous heartbeat. The server overwrites
+	// metadata.cli_last_healthy_at with this value (single timestamp,
+	// no per-binding accumulation). Path B S5b.
+	LastCliHealthyAt *time.Time `json:"last_cli_healthy_at,omitempty"`
 }
 
 type ConnectorBacklogCandidateDraft struct {

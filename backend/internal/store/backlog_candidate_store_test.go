@@ -503,3 +503,106 @@ func TestBacklogCandidateStoreListAppliedLineageByProject(t *testing.T) {
 		t.Fatalf("expected manual lineage to be filtered out, got %d entries", len(entries))
 	}
 }
+
+// T-3B1-1: ListByEvidenceDocument returns candidates referencing a document id.
+func TestBacklogCandidateListByEvidenceDocument(t *testing.T) {
+	store, requirement, run := setupBacklogCandidateStore(t)
+
+	candidates, err := store.CreateDraftsForPlanningRun(requirement, run.ID, sampleCandidateDrafts(requirement))
+	if err != nil {
+		t.Fatalf("create drafts: %v", err)
+	}
+
+	// sampleCandidateDrafts[0] references "doc-1"; [1] does not.
+	results, err := store.ListByEvidenceDocument(requirement.ProjectID, "doc-1")
+	if err != nil {
+		t.Fatalf("ListByEvidenceDocument: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("want 1 candidate referencing doc-1, got %d", len(results))
+	}
+	if results[0].ID != candidates[0].ID {
+		t.Fatalf("expected candidate %s, got %s", candidates[0].ID, results[0].ID)
+	}
+}
+
+// T-3B1-3: ListByEvidenceDocument returns empty slice when document is referenced by zero candidates.
+func TestBacklogCandidateListByEvidenceDocumentNoMatch(t *testing.T) {
+	store, requirement, run := setupBacklogCandidateStore(t)
+
+	if _, err := store.CreateDraftsForPlanningRun(requirement, run.ID, sampleCandidateDrafts(requirement)); err != nil {
+		t.Fatalf("create drafts: %v", err)
+	}
+
+	results, err := store.ListByEvidenceDocument(requirement.ProjectID, "doc-does-not-exist")
+	if err != nil {
+		t.Fatalf("ListByEvidenceDocument: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("want 0 results for unknown doc, got %d", len(results))
+	}
+}
+
+// T-3B1-7: ListByEvidenceDocument scopes results to the given project.
+func TestBacklogCandidateListByEvidenceDocumentCrossProject(t *testing.T) {
+	store, requirement, run := setupBacklogCandidateStore(t)
+
+	if _, err := store.CreateDraftsForPlanningRun(requirement, run.ID, sampleCandidateDrafts(requirement)); err != nil {
+		t.Fatalf("create drafts: %v", err)
+	}
+
+	// Query doc-1 but from a different project — must return empty.
+	results, err := store.ListByEvidenceDocument("other-project-id", "doc-1")
+	if err != nil {
+		t.Fatalf("ListByEvidenceDocument cross-project: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("want 0 results when scoped to wrong project, got %d", len(results))
+	}
+}
+
+// T-3B1-2: ListByEvidenceDriftSignal returns candidates referencing a drift signal id.
+func TestBacklogCandidateListByEvidenceDriftSignal(t *testing.T) {
+	store, requirement, run := setupBacklogCandidateStore(t)
+
+	drafts := []models.BacklogCandidateDraft{
+		{
+			SuggestionType: "implementation",
+			Title:          "With drift signal",
+			PriorityScore:  80,
+			Confidence:     70,
+			Rank:           1,
+			EvidenceDetail: models.PlanningEvidenceDetail{
+				DriftSignals: []models.PlanningDriftSignalEvidence{{
+					DriftSignalID: "ds-42",
+					DocumentID:    "doc-1",
+					Severity:      2,
+				}},
+			},
+		},
+		{
+			SuggestionType: "validation",
+			Title:          "Without drift signal",
+			PriorityScore:  60,
+			Confidence:     60,
+			Rank:           2,
+			EvidenceDetail: models.PlanningEvidenceDetail{},
+		},
+	}
+
+	candidates, err := store.CreateDraftsForPlanningRun(requirement, run.ID, drafts)
+	if err != nil {
+		t.Fatalf("create drafts: %v", err)
+	}
+
+	results, err := store.ListByEvidenceDriftSignal(requirement.ProjectID, "ds-42")
+	if err != nil {
+		t.Fatalf("ListByEvidenceDriftSignal: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("want 1 candidate for ds-42, got %d", len(results))
+	}
+	if results[0].ID != candidates[0].ID {
+		t.Fatalf("expected candidate %s, got %s", candidates[0].ID, results[0].ID)
+	}
+}

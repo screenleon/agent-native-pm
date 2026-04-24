@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { Task, ProjectSummary } from '../../types'
-import { createTask, updateTask, deleteTask, batchUpdateTasks } from '../../api/client'
+import { createTask, updateTask, deleteTask, batchUpdateTasks, listProjectTaskLineage, type AppliedLineageEntry } from '../../api/client'
 
 type TaskFilterState = { status: '' | Task['status']; priority: '' | Task['priority']; assignee: string }
 type BatchTaskFormState = { status: '' | Task['status']; priority: '' | Task['priority']; assignee: string; clearAssignee: boolean }
@@ -39,10 +39,24 @@ export function TasksTab({
   const [editTaskForm, setEditTaskForm] = useState<{ title: string; description: string; status: Task['status']; priority: Task['priority']; assignee: string }>({ title: '', description: '', status: 'todo', priority: 'medium', assignee: '' })
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([])
   const [batchTaskForm, setBatchTaskForm] = useState<BatchTaskFormState>({ status: '', priority: '', assignee: '', clearAssignee: false })
+  const [lineageByTask, setLineageByTask] = useState<Record<string, AppliedLineageEntry>>({})
 
   useEffect(() => {
     setSelectedTaskIds(prev => prev.filter(taskId => tasks.some(task => task.id === taskId)))
   }, [tasks])
+
+  useEffect(() => {
+    let active = true
+    listProjectTaskLineage(projectId)
+      .then(resp => {
+        if (!active) return
+        const map: Record<string, AppliedLineageEntry> = {}
+        for (const entry of resp.data ?? []) map[entry.task_id] = entry
+        setLineageByTask(map)
+      })
+      .catch(() => {})
+    return () => { active = false }
+  }, [projectId, tasks.length])
 
   const hasActiveTaskFilters = Boolean(taskFilters.status || taskFilters.priority || taskFilters.assignee.trim())
   const allVisibleTasksSelected = tasks.length > 0 && selectedTaskIds.length === tasks.length
@@ -325,7 +339,18 @@ export function TasksTab({
                   <td onClick={e => e.stopPropagation()}>
                     <input type="checkbox" checked={selectedTaskIds.includes(task.id)} onChange={() => toggleTaskSelection(task.id)} />
                   </td>
-                  <td>{task.title}</td>
+                  <td>
+                    {task.title}
+                    {lineageByTask[task.id] && (
+                      <span
+                        className="badge badge-low"
+                        title={`Lineage: ${lineageByTask[task.id].lineage_kind}`}
+                        style={{ fontSize: '0.7rem', marginLeft: '0.5rem', verticalAlign: 'middle' }}
+                      >
+                        {lineageByTask[task.id].lineage_kind === 'applied_candidate' ? '← Plan' : '← Req'}
+                      </span>
+                    )}
+                  </td>
                   <td><span className={`badge badge-${task.status === 'done' ? 'fresh' : task.status === 'in_progress' ? 'low' : task.status === 'cancelled' ? 'stale' : 'todo'}`}>{task.status.replace('_', ' ')}</span></td>
                   <td><span className={`badge badge-${task.priority}`}>{task.priority}</span></td>
                   <td style={{ color: 'var(--text-muted)' }}>{task.assignee || '—'}</td>

@@ -579,3 +579,4 @@ func TestS1_10RollbackPlaceholder(t *testing.T) {
 	// the actual migrate-down → re-apply sequence.
 	t.Skip("rollback fixture not yet established in the migration runner; sibling .down.sql ships per design §13")
 }
+

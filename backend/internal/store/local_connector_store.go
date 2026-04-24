@@ -28,7 +28,7 @@ func NewLocalConnectorStore(db *sql.DB, dialect database.Dialect) *LocalConnecto
 func (s *LocalConnectorStore) ListByUser(userID string) ([]models.LocalConnector, error) {
 	rows, err := s.db.Query(`
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       protocol_version, last_seen_at, last_error, created_at, updated_at
+		       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -204,14 +204,29 @@ func (s *LocalConnectorStore) HeartbeatByToken(token string, req models.LocalCon
 	if err != nil {
 		return nil, fmt.Errorf("encode capabilities: %w", err)
 	}
+
+	// Write at most one timestamp to metadata (no per-binding accumulation).
+	// cli_last_healthy_at is overwritten on every heartbeat that carries it.
+	metadata := connector.Metadata
+	if metadata == nil {
+		metadata = map[string]interface{}{}
+	}
+	if req.LastCliHealthyAt != nil {
+		metadata["cli_last_healthy_at"] = req.LastCliHealthyAt.UTC().Format(time.RFC3339)
+	}
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, fmt.Errorf("encode metadata: %w", err)
+	}
+
 	now := time.Now().UTC()
 	lastError := strings.TrimSpace(req.LastError)
 
 	_, err = s.db.Exec(`
 		UPDATE local_connectors
-		SET status = $1, capabilities = $2, last_seen_at = $3, last_error = $4, updated_at = $3
-		WHERE id = $5
-	`, models.LocalConnectorStatusOnline, capabilitiesJSON, now, lastError, connector.ID)
+		SET status = $1, capabilities = $2, metadata = $3, last_seen_at = $4, last_error = $5, updated_at = $4
+		WHERE id = $6
+	`, models.LocalConnectorStatusOnline, capabilitiesJSON, metadataJSON, now, lastError, connector.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +256,7 @@ func (s *LocalConnectorStore) Revoke(id, userID string) error {
 func (s *LocalConnectorStore) GetByID(id, userID string) (*models.LocalConnector, error) {
 	row := s.db.QueryRow(`
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       protocol_version, last_seen_at, last_error, created_at, updated_at
+		       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE id = $1 AND user_id = $2
 	`, id, userID)
@@ -251,7 +266,7 @@ func (s *LocalConnectorStore) GetByID(id, userID string) (*models.LocalConnector
 func (s *LocalConnectorStore) GetByToken(token string) (*models.LocalConnector, error) {
 	row := s.db.QueryRow(`
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       protocol_version, last_seen_at, last_error, created_at, updated_at
+		       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE token_hash = $1
 	`, hashSecret(token))
@@ -272,7 +287,7 @@ func (s *LocalConnectorStore) GetFirstUsableByUser(userID string) (*models.Local
 		// SQLite date arithmetic: subtract seconds using datetime modifier.
 		query = `
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       protocol_version, last_seen_at, last_error, created_at, updated_at
+		       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE user_id = $1
 		  AND status = $2
@@ -283,7 +298,7 @@ func (s *LocalConnectorStore) GetFirstUsableByUser(userID string) (*models.Local
 	} else {
 		query = `
 		SELECT id, user_id, label, platform, client_version, status, capabilities,
-		       protocol_version, last_seen_at, last_error, created_at, updated_at
+		       protocol_version, metadata, last_seen_at, last_error, created_at, updated_at
 		FROM local_connectors
 		WHERE user_id = $1
 		  AND status = $2
@@ -314,6 +329,7 @@ func scanOneLocalConnector(row localConnectorScanner) (*models.LocalConnector, e
 func scanLocalConnector(scanner localConnectorScanner) (*models.LocalConnector, error) {
 	var connector models.LocalConnector
 	var capabilitiesRaw []byte
+	var metadataRaw []byte
 	var lastSeenAt sql.NullTime
 	err := scanner.Scan(
 		&connector.ID,
@@ -324,6 +340,7 @@ func scanLocalConnector(scanner localConnectorScanner) (*models.LocalConnector, 
 		&connector.Status,
 		&capabilitiesRaw,
 		&connector.ProtocolVersion,
+		&metadataRaw,
 		&lastSeenAt,
 		&connector.LastError,
 		&connector.CreatedAt,
@@ -336,6 +353,12 @@ func scanLocalConnector(scanner localConnectorScanner) (*models.LocalConnector, 
 	if len(capabilitiesRaw) > 0 {
 		if err := json.Unmarshal(capabilitiesRaw, &connector.Capabilities); err != nil {
 			return nil, fmt.Errorf("decode local connector capabilities: %w", err)
+		}
+	}
+	connector.Metadata = map[string]interface{}{}
+	if len(metadataRaw) > 0 {
+		if err := json.Unmarshal(metadataRaw, &connector.Metadata); err != nil {
+			return nil, fmt.Errorf("decode local connector metadata: %w", err)
 		}
 	}
 	if lastSeenAt.Valid {
@@ -372,3 +395,4 @@ func generateReadableSecret(byteLength int) (string, error) {
 	}
 	return encoded, nil
 }
+

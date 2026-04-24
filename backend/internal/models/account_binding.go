@@ -52,19 +52,23 @@ const (
 
 // AccountBinding represents a per-user provider credential binding.
 type AccountBinding struct {
-	ID               string    `json:"id"`
-	UserID           string    `json:"user_id"`
-	ProviderID       string    `json:"provider_id"`
-	Label            string    `json:"label"`
-	BaseURL          string    `json:"base_url"`
-	ModelID          string    `json:"model_id"`
-	ConfiguredModels []string  `json:"configured_models"`
-	APIKeyConfigured bool      `json:"api_key_configured"`
-	IsActive         bool      `json:"is_active"`
-	CliCommand       string    `json:"cli_command"`
-	IsPrimary        bool      `json:"is_primary"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               string     `json:"id"`
+	UserID           string     `json:"user_id"`
+	ProviderID       string     `json:"provider_id"`
+	Label            string     `json:"label"`
+	BaseURL          string     `json:"base_url"`
+	ModelID          string     `json:"model_id"`
+	ConfiguredModels []string   `json:"configured_models"`
+	APIKeyConfigured bool       `json:"api_key_configured"`
+	IsActive         bool       `json:"is_active"`
+	CliCommand       string     `json:"cli_command"`
+	IsPrimary        bool       `json:"is_primary"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	// Probe history (migration 024). All three are null until the first probe.
+	LastProbeAt *time.Time `json:"last_probe_at"`
+	LastProbeOk *bool      `json:"last_probe_ok"`
+	LastProbeMs *int       `json:"last_probe_ms"`
 }
 
 // StoredAccountBinding includes the encrypted API key (never serialized to JSON).

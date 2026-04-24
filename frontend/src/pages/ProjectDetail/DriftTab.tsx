@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
-import type { DriftSignal, Document, DocumentLink, DocumentContent } from '../../types'
-import { getDocumentContent } from '../../api/client'
+import { Link } from 'react-router-dom'
+import type { DriftSignal, Document, DocumentLink, DocumentContent, CandidateEvidenceSummary } from '../../types'
+import { getDocumentContent, listCandidatesByEvidenceDriftSignal } from '../../api/client'
 import { formatRelativeTime } from '../../utils/formatters'
 
 type DriftFilter = 'open' | 'all' | 'resolved' | 'dismissed'
 type DriftSort = 'severity' | 'created_at'
 
 interface DriftTabProps {
+  projectId: string
   driftSignals: DriftSignal[]
   documents: Document[]
   documentLinksByDocumentId: Record<string, DocumentLink[]>
@@ -63,6 +65,7 @@ function confidenceBadgeClass(confidence: string | undefined): string {
 }
 
 export function DriftTab({
+  projectId,
   driftSignals,
   documents,
   documentLinksByDocumentId,
@@ -80,6 +83,26 @@ export function DriftTab({
   const [selectedDriftPreview, setSelectedDriftPreview] = useState<DocumentContent | null>(null)
   const [selectedDriftPreviewLoading, setSelectedDriftPreviewLoading] = useState(false)
   const [selectedDriftPreviewError, setSelectedDriftPreviewError] = useState<string | null>(null)
+  const [evidenceByDrift, setEvidenceByDrift] = useState<Record<string, CandidateEvidenceSummary[]>>({})
+  const [evidenceModalDriftId, setEvidenceModalDriftId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (driftSignals.length === 0) return
+    let active = true
+    Promise.allSettled(
+      driftSignals.map(ds =>
+        listCandidatesByEvidenceDriftSignal(projectId, ds.id).then(r => ({ id: ds.id, data: r.data ?? [] }))
+      )
+    ).then(results => {
+      if (!active) return
+      const map: Record<string, CandidateEvidenceSummary[]> = {}
+      for (const r of results) {
+        if (r.status === 'fulfilled') map[r.value.id] = r.value.data
+      }
+      setEvidenceByDrift(map)
+    })
+    return () => { active = false }
+  }, [projectId, driftSignals])
 
   const filteredDriftSignals = driftSignals
     .filter(signal => (driftFilter === 'all' ? true : signal.status === driftFilter))
@@ -191,35 +214,48 @@ export function DriftTab({
       ) : (
         <div className="drift-layout">
           <div className="card-list" style={{ marginBottom: 0 }}>
-            {filteredDriftSignals.map(signal => (
-              <div
-                key={signal.id}
-                className="card"
-                style={{
-                  cursor: 'pointer',
-                  borderColor: selectedDriftSignal?.id === signal.id ? 'var(--primary)' : 'var(--border)',
-                }}
-                onClick={() => { setSelectedDriftId(signal.id); setShowDriftPreview(false) }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
-                  <h4>{signal.document_title || 'Unlinked document'}</h4>
-                  <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-                    <span className={`badge ${severityBadgeClass(signal.severity ?? 1)}`}>
-                      {severityLabel(signal.severity ?? 1)}
-                    </span>
-                    <span className={`badge ${signal.status === 'open' ? 'badge-stale' : 'badge-fresh'}`}>{signal.status}</span>
+            {filteredDriftSignals.map(signal => {
+              const driftCandidates = evidenceByDrift[signal.id]
+              return (
+                <div
+                  key={signal.id}
+                  className="card"
+                  style={{
+                    cursor: 'pointer',
+                    borderColor: selectedDriftSignal?.id === signal.id ? 'var(--primary)' : 'var(--border)',
+                  }}
+                  onClick={() => { setSelectedDriftId(signal.id); setShowDriftPreview(false) }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+                    <h4>{signal.document_title || 'Unlinked document'}</h4>
+                    <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                      {driftCandidates && driftCandidates.length > 0 && (
+                        <button
+                          className="badge badge-low"
+                          style={{ cursor: 'pointer', border: 'none', background: 'none', fontSize: '0.75rem' }}
+                          onClick={e => { e.stopPropagation(); setEvidenceModalDriftId(signal.id) }}
+                          title="View candidates that cite this drift signal"
+                        >
+                          cited in {driftCandidates.length}
+                        </button>
+                      )}
+                      <span className={`badge ${severityBadgeClass(signal.severity ?? 1)}`}>
+                        {severityLabel(signal.severity ?? 1)}
+                      </span>
+                      <span className={`badge ${signal.status === 'open' ? 'badge-stale' : 'badge-fresh'}`}>{signal.status}</span>
+                    </div>
+                  </div>
+                  <p style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                    {signal.trigger_type === 'code_change' && signal.trigger_meta?.changed_files?.length
+                      ? `${signal.trigger_meta.changed_files.length} file${signal.trigger_meta.changed_files.length === 1 ? '' : 's'} changed`
+                      : signal.trigger_detail}
+                  </p>
+                  <div style={{ marginTop: '0.75rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                    {new Date(signal.created_at).toLocaleString()}
                   </div>
                 </div>
-                <p style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                  {signal.trigger_type === 'code_change' && signal.trigger_meta?.changed_files?.length
-                    ? `${signal.trigger_meta.changed_files.length} file${signal.trigger_meta.changed_files.length === 1 ? '' : 's'} changed`
-                    : signal.trigger_detail}
-                </p>
-                <div style={{ marginTop: '0.75rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  {new Date(signal.created_at).toLocaleString()}
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
 
           {selectedDriftSignal && (
@@ -384,6 +420,47 @@ export function DriftTab({
           )}
         </div>
       )}
+
+      {evidenceModalDriftId && (() => {
+        const signal = driftSignals.find(s => s.id === evidenceModalDriftId)
+        const candidates = evidenceByDrift[evidenceModalDriftId] ?? []
+        return (
+          <div className="modal-overlay" onClick={() => setEvidenceModalDriftId(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h3>Candidates citing "{signal?.document_title || 'this drift signal'}"</h3>
+              {candidates.length === 0 ? (
+                <p style={{ color: 'var(--text-muted)' }}>No candidates reference this drift signal.</p>
+              ) : (
+                <ul style={{ listStyle: 'none', padding: 0, margin: '0.75rem 0', display: 'grid', gap: '0.5rem' }}>
+                  {candidates.map(c => (
+                    <li key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', padding: '0.4rem 0', borderBottom: '1px solid var(--border)' }}>
+                      <div>
+                        <div style={{ fontWeight: 500 }}>{c.title}</div>
+                        {c.requirement_title && (
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Req: {c.requirement_title}</div>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexShrink: 0 }}>
+                        <span className={`badge badge-${c.status === 'applied' ? 'fresh' : c.status === 'approved' ? 'low' : c.status === 'rejected' ? 'stale' : 'todo'}`}>{c.status}</span>
+                        <Link
+                          className="btn btn-ghost btn-sm"
+                          to={`/projects/${projectId}?tab=planning`}
+                          onClick={() => setEvidenceModalDriftId(null)}
+                        >
+                          View →
+                        </Link>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="modal-actions">
+                <button className="btn btn-primary" onClick={() => setEvidenceModalDriftId(null)}>Close</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

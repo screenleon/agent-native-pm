@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -164,12 +165,16 @@ func (h *RemoteModelsHandler) Probe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve credentials from stored binding if binding_id given.
+	// resolvedUserID is hoisted so recordProbe can use it after credential
+	// resolution regardless of which exit path the handler takes.
+	var resolvedUserID string
 	if req.BindingID != nil && *req.BindingID != "" {
 		user := middleware.UserFromContext(r.Context())
 		if user == nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
+		resolvedUserID = user.ID
 		b, err := h.bindingStore.GetByID(*req.BindingID, user.ID)
 		if err != nil || b == nil {
 			writeError(w, http.StatusNotFound, "binding not found")
@@ -186,6 +191,17 @@ func (h *RemoteModelsHandler) Probe(w http.ResponseWriter, r *http.Request) {
 			if err == nil {
 				req.APIKey = plainKey
 			}
+		}
+	}
+
+	// recordProbe persists the probe outcome when a binding_id was supplied.
+	// It is best-effort: failures are logged but never surfaced to the caller.
+	recordProbe := func(ok bool, latencyMS int64) {
+		if req.BindingID == nil || *req.BindingID == "" || resolvedUserID == "" {
+			return
+		}
+		if err := h.bindingStore.RecordProbe(*req.BindingID, resolvedUserID, ok, latencyMS); err != nil {
+			log.Printf("probe: failed to record probe result for binding %s: %v", *req.BindingID, err)
 		}
 	}
 
@@ -220,20 +236,24 @@ func (h *RemoteModelsHandler) Probe(w http.ResponseWriter, r *http.Request) {
 	latencyMS := time.Since(start).Milliseconds()
 
 	if err != nil {
-		writeSuccess(w, http.StatusOK, probeModelResponse{
+		result := probeModelResponse{
 			OK: false, LatencyMS: latencyMS,
 			Error: fmt.Sprintf("provider unreachable: %v", err),
-		}, nil)
+		}
+		recordProbe(false, latencyMS)
+		writeSuccess(w, http.StatusOK, result, nil)
 		return
 	}
 	defer resp.Body.Close()
 
 	var chat chatResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProviderResponseBytes)).Decode(&chat); err != nil {
-		writeSuccess(w, http.StatusOK, probeModelResponse{
+		result := probeModelResponse{
 			OK: false, LatencyMS: latencyMS,
 			Error: fmt.Sprintf("HTTP %d — could not parse response", resp.StatusCode),
-		}, nil)
+		}
+		recordProbe(false, latencyMS)
+		writeSuccess(w, http.StatusOK, result, nil)
 		return
 	}
 
@@ -242,9 +262,9 @@ func (h *RemoteModelsHandler) Probe(w http.ResponseWriter, r *http.Request) {
 		if chat.Error != nil && chat.Error.Message != "" {
 			errMsg += " — " + chat.Error.Message
 		}
-		writeSuccess(w, http.StatusOK, probeModelResponse{
-			OK: false, LatencyMS: latencyMS, Error: errMsg,
-		}, nil)
+		result := probeModelResponse{OK: false, LatencyMS: latencyMS, Error: errMsg}
+		recordProbe(false, latencyMS)
+		writeSuccess(w, http.StatusOK, result, nil)
 		return
 	}
 
@@ -270,6 +290,7 @@ func (h *RemoteModelsHandler) Probe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	recordProbe(true, latencyMS)
 	writeSuccess(w, http.StatusOK, result, nil)
 }
 

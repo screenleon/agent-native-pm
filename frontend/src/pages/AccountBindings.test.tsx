@@ -33,6 +33,9 @@ function makeCliBinding(overrides: Partial<AccountBinding> = {}): AccountBinding
     is_primary: true,
     created_at: '2026-04-23T00:00:00Z',
     updated_at: '2026-04-23T00:00:00Z',
+    last_probe_at: null,
+    last_probe_ok: null,
+    last_probe_ms: null,
     ...overrides,
   }
 }
