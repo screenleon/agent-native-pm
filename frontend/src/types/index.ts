@@ -130,7 +130,13 @@ export interface CreatePlanningRunPayload {
   execution_mode?: PlanningExecutionMode;
   adapter_type?: string;
   model_override?: string;
+  // Phase 3 Path B legacy — references a cli:* account_bindings row. Still
+  // works; prefer connector_id + cli_config_id for new code.
   account_binding_id?: string;
+  // Phase 6a UX-B3: per-connector CLI config selection. Both must be set
+  // together; only valid for execution_mode === "local_connector".
+  connector_id?: string;
+  cli_config_id?: string;
 }
 
 export type PlanningExecutionMode = 'deterministic' | 'server_provider' | 'local_connector';

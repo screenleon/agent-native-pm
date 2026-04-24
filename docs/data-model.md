@@ -167,6 +167,7 @@ Well-known keys inside `local_connectors.metadata`:
 | `cli_last_healthy_at` | RFC3339 string | Heartbeat (Path B S5b) | Most recent successful `<cli_command> --version` probe across any binding |
 | `pending_cli_probe_requests` | array of `PendingCliProbeRequest` | Server (Phase 4 P4-4) | Probes awaiting connector pickup; dedup'd by `binding_id` |
 | `cli_probe_results` | map keyed by `probe_id` of `CliProbeResult` | Connector → heartbeat (Phase 4 P4-4) | 24h retention; scrubbed on binding delete |
+| `cli_configs` | array of `CliConfig` | Server + user (Phase 6a UX-B1) | Per-connector CLI + model combos. Exactly one `is_primary` when non-empty. Cap 16 entries. Replaces user-level `cli:*` account_bindings as the primary authoring surface; legacy bindings still work as a fallback. |
 
 ### Table: `connector_pairing_sessions`
 

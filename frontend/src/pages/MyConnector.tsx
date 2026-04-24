@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createLocalConnectorPairingSession, getConnectorRunStats, listLocalConnectors, revokeLocalConnector } from '../api/client';
+import { ConnectorCliConfigs } from './MyConnector/ConnectorCliConfigs';
 import type { ConnectorRunStats } from '../api/client';
 import type { CreateLocalConnectorPairingSessionResponse, LocalConnector } from '../types';
 
@@ -311,6 +312,9 @@ export default function MyConnector() {
 											</button>
 										)}
 									</div>
+									{connector.status !== 'revoked' && (
+										<ConnectorCliConfigs connectorId={connector.id} />
+									)}
 								</div>
 							);
 						})}

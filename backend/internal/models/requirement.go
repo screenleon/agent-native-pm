@@ -112,7 +112,23 @@ type CreatePlanningRunRequest struct {
 	// falls back to its env-var default (backwards compatible with
 	// pre-Path-B connectors). Explicit empty string is treated identically
 	// to absent — there is no "opt out of auto-resolution" sentinel today.
+	//
+	// LEGACY as of Phase 6a: new clients should prefer
+	// ConnectorID + CliConfigID instead. The account-binding path
+	// continues to work for existing cli:* account_bindings rows.
 	AccountBindingID *string `json:"account_binding_id,omitempty"`
+
+	// ConnectorID + CliConfigID select a per-connector cli_config
+	// (Phase 6a UX-B3). Both must be set together. When present, they
+	// take precedence over AccountBindingID; the server resolves the
+	// config from local_connectors.metadata.cli_configs[], verifies it
+	// belongs to the requesting user's connector, and snapshots the
+	// CLI + model onto the planning run. The connector-side claim
+	// response keeps the same PlanningRunCliBindingPayload shape, so
+	// the connector daemon does not care which authoring surface the
+	// snapshot came from.
+	ConnectorID *string `json:"connector_id,omitempty"`
+	CliConfigID *string `json:"cli_config_id,omitempty"`
 }
 
 type PlanningProviderModel struct {

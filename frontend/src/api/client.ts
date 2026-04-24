@@ -548,6 +548,64 @@ export async function revokeLocalConnector(id: string) {
   });
 }
 
+// ─── Phase 6a UX-B1: per-connector CLI configs ─────────────────────────────
+
+export interface CliConfig {
+  id: string;
+  provider_id: 'cli:claude' | 'cli:codex';
+  cli_command: string;
+  model_id: string;
+  label: string;
+  is_primary: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateCliConfigPayload {
+  provider_id: 'cli:claude' | 'cli:codex';
+  cli_command?: string;
+  model_id: string;
+  label?: string;
+  is_primary?: boolean;
+}
+
+export interface UpdateCliConfigPayload {
+  cli_command?: string;
+  model_id?: string;
+  label?: string;
+  is_primary?: boolean;
+}
+
+export async function listConnectorCliConfigs(connectorId: string) {
+  return request<CliConfig[]>(`/me/local-connectors/${encodeURIComponent(connectorId)}/cli-configs`);
+}
+
+export async function createConnectorCliConfig(connectorId: string, data: CreateCliConfigPayload) {
+  return request<CliConfig>(`/me/local-connectors/${encodeURIComponent(connectorId)}/cli-configs`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateConnectorCliConfig(connectorId: string, configId: string, data: UpdateCliConfigPayload) {
+  return request<CliConfig>(`/me/local-connectors/${encodeURIComponent(connectorId)}/cli-configs/${encodeURIComponent(configId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteConnectorCliConfig(connectorId: string, configId: string) {
+  return request<null>(`/me/local-connectors/${encodeURIComponent(connectorId)}/cli-configs/${encodeURIComponent(configId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function setPrimaryConnectorCliConfig(connectorId: string, configId: string) {
+  return request<null>(`/me/local-connectors/${encodeURIComponent(connectorId)}/cli-configs/${encodeURIComponent(configId)}/primary`, {
+    method: 'POST',
+  });
+}
+
 export interface ConnectorRunStats {
   runs_today: number;
   runs_week: number;

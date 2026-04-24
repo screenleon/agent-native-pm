@@ -198,7 +198,62 @@ func (h *PlanningRunHandler) resolvePathBBinding(w http.ResponseWriter, r *http.
 	var binding *models.StoredAccountBinding
 	var warnings []models.EnvelopeWarning
 
-	// Step 1: explicit binding id.
+	// Step 0 (Phase 6a UX-B3): explicit connector_id + cli_config_id path.
+	// When present, this is the new per-connector authoring surface — take
+	// precedence over the legacy account_binding path. Both fields MUST be
+	// set together so a caller cannot reference a config on an unspecified
+	// connector.
+	connectorID := ""
+	if req.ConnectorID != nil {
+		connectorID = strings.TrimSpace(*req.ConnectorID)
+	}
+	cliConfigID := ""
+	if req.CliConfigID != nil {
+		cliConfigID = strings.TrimSpace(*req.CliConfigID)
+	}
+	if cliConfigID != "" || connectorID != "" {
+		if cliConfigID == "" || connectorID == "" {
+			writeError(w, http.StatusBadRequest, "connector_id and cli_config_id must be supplied together")
+			return nil, nil, false
+		}
+		if !isLocalConnector {
+			writeError(w, http.StatusBadRequest, "cli_config_id is only valid for execution_mode=local_connector")
+			return nil, nil, false
+		}
+		if h.localConnectorStore == nil {
+			writeError(w, http.StatusInternalServerError, "local connector store not configured")
+			return nil, nil, false
+		}
+		cfg, err := h.localConnectorStore.GetCliConfig(connectorID, requestingUserID, cliConfigID)
+		if err != nil {
+			if errors.Is(err, store.ErrCliConfigNotFound) {
+				writeError(w, http.StatusBadRequest, "cli_config_id not found on the named connector for this user")
+				return nil, nil, false
+			}
+			writeError(w, http.StatusInternalServerError, "failed to load cli config")
+			return nil, nil, false
+		}
+		// Snapshot the CliConfig directly — bypass the account_bindings
+		// validation path entirely. PlanningRunCliBindingPayload shape on
+		// the claim side is identical so the connector daemon does not
+		// notice the authoring change.
+		snapshot := &models.PlanningRunBindingSnapshot{
+			ProviderID: cfg.ProviderID,
+			ModelID:    cfg.ModelID,
+			CliCommand: cfg.CliCommand,
+			Label:      cfg.Label,
+			IsPrimary:  cfg.IsPrimary,
+		}
+		if strings.TrimSpace(req.AdapterType) == "" {
+			req.AdapterType = cfg.ProviderID
+		}
+		if strings.TrimSpace(req.ModelOverride) == "" {
+			req.ModelOverride = cfg.ModelID
+		}
+		return snapshot, warnings, true
+	}
+
+	// Step 1: explicit binding id (LEGACY path).
 	if req.AccountBindingID != nil && strings.TrimSpace(*req.AccountBindingID) != "" {
 		bindingID := strings.TrimSpace(*req.AccountBindingID)
 		// Three-way ownership check (design §6.2): the current schema has

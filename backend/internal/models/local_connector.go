@@ -125,6 +125,45 @@ type CliProbeResult struct {
 	CompletedAt  time.Time `json:"completed_at"`
 }
 
+// CliConfig is a per-connector CLI + model combination, stored in
+// local_connectors.metadata.cli_configs[] (Phase 6a UX-B1). Each entry
+// belongs to exactly one connector — unlike pre-Phase-6a cli:* account
+// bindings which were user-level and not tied to any specific machine.
+// This is the Phase 6 mental model: config lives on the connector that
+// executes it.
+type CliConfig struct {
+	ID         string    `json:"id"`
+	ProviderID string    `json:"provider_id"`          // "cli:claude" | "cli:codex"
+	CliCommand string    `json:"cli_command,omitempty"` // empty = PATH lookup
+	ModelID    string    `json:"model_id"`
+	Label      string    `json:"label"`
+	IsPrimary  bool      `json:"is_primary"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// CreateCliConfigRequest is the POST body for adding a CLI config to a connector.
+type CreateCliConfigRequest struct {
+	ProviderID string `json:"provider_id"`
+	CliCommand string `json:"cli_command,omitempty"`
+	ModelID    string `json:"model_id"`
+	Label      string `json:"label,omitempty"`
+	IsPrimary  *bool  `json:"is_primary,omitempty"`
+}
+
+// UpdateCliConfigRequest is the PATCH body.
+type UpdateCliConfigRequest struct {
+	CliCommand *string `json:"cli_command,omitempty"`
+	ModelID    *string `json:"model_id,omitempty"`
+	Label      *string `json:"label,omitempty"`
+	IsPrimary  *bool   `json:"is_primary,omitempty"`
+}
+
+// MaxCliConfigsPerConnector caps the cli_configs[] list length per
+// connector. Same rationale as MaxAccountBindingConfiguredModels (16):
+// generous for real usage, defensive against metadata bloat.
+const MaxCliConfigsPerConnector = 16
+
 // CliProbeStatusResponse is returned by the poll endpoint
 // GET /api/me/local-connectors/:id/probe-binding/:probe_id.
 type CliProbeStatusResponse struct {

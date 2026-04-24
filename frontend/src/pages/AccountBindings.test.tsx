@@ -81,7 +81,7 @@ describe('<AccountBindings />', () => {
   // T-S3-1: render in local mode → CLI Bindings heading visible
   it('T-S3-1: shows CLI Bindings heading in local mode', async () => {
     await renderAndWait([], true)
-    expect(screen.getByRole('heading', { level: 2, name: /Server-side CLI Bindings/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2, name: /CLI Bindings/i })).toBeInTheDocument()
   })
 
   // T-S3-2: render in server mode → info card shown, no CLI form
@@ -91,65 +91,27 @@ describe('<AccountBindings />', () => {
     expect(screen.queryByText('New CLI Binding')).not.toBeInTheDocument()
   })
 
-  // T-S3-3: render with empty CLI bindings → form auto-expanded (no extra click needed)
-  it('T-S3-3: auto-expands CLI binding form when no CLI bindings exist', async () => {
-    await renderAndWait([], true)
-    expect(screen.getByText('New CLI Binding')).toBeInTheDocument()
-  })
-
-  // T-S3-4: render with one CLI binding + local mode → binding card shown, form collapsed
-  it('T-S3-4: shows existing CLI binding card and form is collapsed by default', async () => {
+  // T-S3-4: render with one CLI binding + local mode → binding card shown
+  it('T-S3-4: shows existing legacy CLI binding card', async () => {
     await renderAndWait([makeCliBinding()], true)
     expect(screen.getByText('My Claude')).toBeInTheDocument()
-    expect(screen.queryByText('New CLI Binding')).not.toBeInTheDocument()
   })
 
-  // T-S3-5: submit form with valid Claude binding → POST fires with expected payload; UI refreshes
-  it('T-S3-5: submits CLI binding form and fires POST with expected payload', async () => {
-    mockCreateAccountBinding.mockResolvedValue({ data: makeCliBinding() })
-    mockGetMeta.mockResolvedValue(localMeta())
-    mockListAccountBindings
-      .mockResolvedValueOnce({ data: [] })
-      .mockResolvedValue({ data: [makeCliBinding()] })
-
-    render(<MemoryRouter><AccountBindings /></MemoryRouter>)
-    await waitFor(() => {
-      // Form auto-expands when no CLI bindings (T-S3-3)
-      expect(screen.getByText('New CLI Binding')).toBeInTheDocument()
-    })
-
-    const modelInput = screen.getByPlaceholderText('claude-sonnet-4-5')
-    await userEvent.clear(modelInput)
-    await userEvent.type(modelInput, 'claude-sonnet-4-5')
-
-    await userEvent.click(screen.getByRole('button', { name: /^Create$/i }))
-
-    await waitFor(() => {
-      expect(mockCreateAccountBinding).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider_id: 'cli:claude',
-          base_url: '',
-          model_id: 'claude-sonnet-4-5',
-        }),
-      )
-    })
-    // UI refreshes: binding card appears, form collapses
-    await waitFor(() => {
-      expect(screen.getByText('My Claude')).toBeInTheDocument()
-    })
-  })
-
-  // T-S3-6: submit form with empty model_id → submit blocked (HTML5 required attr)
-  it('T-S3-6: submit is blocked when model_id is empty (required field)', async () => {
+  // Phase 6a UX-A7: the legacy create flow is disabled. These assertions
+  // replace the deprecated T-S3-3 / T-S3-5 / T-S3-6 tests that covered
+  // auto-expand and form-submit of the CLI binding create form — those
+  // paths are intentionally gone. New CLI configs live per-connector
+  // under MyConnector.
+  it('T-S3-3: no CLI create form is rendered (legacy section)', async () => {
     await renderAndWait([], true)
-    // Form auto-expands with no CLI bindings (T-S3-3); no extra click needed
-    expect(screen.getByText('New CLI Binding')).toBeInTheDocument()
+    expect(screen.queryByText('New CLI Binding')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /\+ Add CLI Binding/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /\+ Add another CLI binding/i })).not.toBeInTheDocument()
+  })
 
-    const modelInput = screen.getByPlaceholderText('claude-sonnet-4-5')
-    expect(modelInput).toHaveAttribute('required')
-    expect((modelInput as HTMLInputElement).value).toBe('')
-
-    expect(mockCreateAccountBinding).not.toHaveBeenCalled()
+  it('T-S3-5: legacy section shows the "CLI configuration has moved" banner', async () => {
+    await renderAndWait([], true)
+    expect(screen.getByText(/CLI configuration has moved/i)).toBeInTheDocument()
   })
 
   // T-S3-7: delete binding → DELETE fires → binding removed from list
@@ -198,62 +160,10 @@ describe('<AccountBindings />', () => {
     })
   })
 
-  // T-S3-9: switching preset to a provider that already has a binding → is_primary unchecked
-  it('T-S3-9: switching to a preset whose provider already has a binding unchecks is_primary', async () => {
-    const codexBinding = makeCliBinding({ id: 'cb-codex', provider_id: 'cli:codex', label: 'My Codex' })
-    await renderAndWait([codexBinding], true)
-
-    // Open form manually (bindings exist, form is collapsed)
-    await userEvent.click(screen.getByRole('button', { name: /\+ Add another CLI binding/i }))
-    await waitFor(() => expect(screen.getByText('New CLI Binding')).toBeInTheDocument())
-
-    // Default preset is Claude Code — no existing claude binding → checkbox checked
-    const checkbox = screen.getByRole('checkbox', { name: /primary/i }) as HTMLInputElement
-    expect(checkbox.checked).toBe(true)
-
-    // Switch to Codex preset — codex binding exists → checkbox should uncheck
-    await userEvent.click(screen.getByRole('button', { name: /OpenAI Codex CLI/i }))
-    await waitFor(() => expect(checkbox.checked).toBe(false))
-  })
-
-  // T-S3-10: after canceling the "+ Add another" form, a subsequent load() triggered by a
-  // real UI action (e.g. "Switch to this binding") must NOT re-open the form.
-  it('T-S3-10: form stays closed after Cancel when load() is re-triggered by a UI action', async () => {
-    const nonPrimaryBinding = makeCliBinding({ id: 'cb2', is_primary: false, label: 'Old Claude' })
-    mockUpdateAccountBinding.mockResolvedValue({ data: { ...nonPrimaryBinding, is_primary: true } })
-    mockGetMeta.mockResolvedValue(localMeta())
-    mockListAccountBindings
-      .mockResolvedValueOnce({ data: [nonPrimaryBinding] })
-      .mockResolvedValue({ data: [{ ...nonPrimaryBinding, is_primary: true }] })
-
-    render(<MemoryRouter><AccountBindings /></MemoryRouter>)
-    await waitFor(() => {
-      expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
-    })
-
-    // One binding exists so form is collapsed; open it manually.
-    await userEvent.click(screen.getByRole('button', { name: /\+ Add another CLI binding/i }))
-    await waitFor(() => expect(screen.getByText('New CLI Binding')).toBeInTheDocument())
-
-    // Cancel — sets userDismissedCliForm.current = true.
-    await userEvent.click(screen.getByRole('button', { name: /Cancel/i }))
-    await waitFor(() => {
-      expect(screen.queryByText('New CLI Binding')).not.toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /\+ Add another CLI binding/i })).toBeInTheDocument()
-    })
-
-    // Trigger a real load() call via "Switch to this binding".
-    await userEvent.click(screen.getByRole('button', { name: /Switch to this binding/i }))
-
-    await waitFor(() => {
-      expect(mockUpdateAccountBinding).toHaveBeenCalledWith('cb2', { is_primary: true })
-      expect(mockListAccountBindings).toHaveBeenCalledTimes(2)
-    })
-
-    // Form must remain closed even after the reload triggered by the UI action.
-    expect(screen.queryByText('New CLI Binding')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /\+ Add another CLI binding/i })).toBeInTheDocument()
-  })
+  // Phase 6a UX-A7 removed the legacy T-S3-9 and T-S3-10 tests: both
+  // exercised preset switching + form re-expansion on the deprecated
+  // create flow. Those paths no longer exist. Switch-to-this-binding
+  // (Set Primary) is still covered by T-S3-8 above.
 
   // ── P4-3 (CLI binding inline Edit) ────────────────────────────────────────
 
