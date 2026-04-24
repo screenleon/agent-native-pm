@@ -20,6 +20,16 @@ BACKLOG_FIXTURE_VARS = {
     "SCHEMA_VERSION": "context.v1",
 }
 
+WHATSNEXT_FIXTURE_VARS = {
+    "PROJECT_NAME": "CrossLang",
+    "PROJECT_DESCRIPTION_LINE": "Description: Parity-check project.",
+    "SCOPE_SECTION": "\n=== Focus scope ===\nReliability push Q2\n",
+    "MAX_CANDIDATES": "3",
+    "CONTEXT": "=== Current state ===\n(no items)",
+    "SCHEMA_VERSION": "context.v1",
+    "REQUIREMENT": "",
+}
+
 
 class PromptLoaderTests(unittest.TestCase):
     # --- loader unit tests ------------------------------------------------
@@ -105,25 +115,32 @@ class PromptLoaderTests(unittest.TestCase):
     # is the whole point of pinning.
 
     GOLDEN_PATH = Path(__file__).resolve().parent / "testdata" / "backlog_render_golden.txt"
+    WHATSNEXT_GOLDEN_PATH = Path(__file__).resolve().parent / "testdata" / "whatsnext_render_golden.txt"
 
-    def test_python_render_matches_golden(self):
-        py_rendered = _prompt_loader.render("backlog", BACKLOG_FIXTURE_VARS)
+    def _assert_matches_golden(self, name: str, fixture: dict, golden_path: Path):
+        py_rendered = _prompt_loader.render(name, fixture)
         if os.environ.get("UPDATE_PROMPT_GOLDEN") == "1":
-            self.GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self.GOLDEN_PATH.write_text(py_rendered, encoding="utf-8")
-            self.skipTest("golden regenerated")
-        if not self.GOLDEN_PATH.exists():
+            golden_path.parent.mkdir(parents=True, exist_ok=True)
+            golden_path.write_text(py_rendered, encoding="utf-8")
+            self.skipTest(f"golden regenerated: {golden_path}")
+        if not golden_path.exists():
             self.fail(
-                f"golden fixture missing at {self.GOLDEN_PATH} — run the test suite "
+                f"golden fixture missing at {golden_path} — run the test suite "
                 f"with UPDATE_PROMPT_GOLDEN=1 to regenerate"
             )
-        expected = self.GOLDEN_PATH.read_text(encoding="utf-8")
+        expected = golden_path.read_text(encoding="utf-8")
         self.assertEqual(
             py_rendered,
             expected,
-            msg="Python-rendered backlog prompt drifted from the pinned golden; "
+            msg=f"Python-rendered '{name}' prompt drifted from the pinned golden; "
             "if the drift is intentional re-run with UPDATE_PROMPT_GOLDEN=1",
         )
+
+    def test_python_render_matches_golden(self):
+        self._assert_matches_golden("backlog", BACKLOG_FIXTURE_VARS, self.GOLDEN_PATH)
+
+    def test_python_render_matches_whatsnext_golden(self):
+        self._assert_matches_golden("whatsnext", WHATSNEXT_FIXTURE_VARS, self.WHATSNEXT_GOLDEN_PATH)
 
 
 if __name__ == "__main__":

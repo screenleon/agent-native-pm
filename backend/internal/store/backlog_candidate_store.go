@@ -268,7 +268,11 @@ func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandid
 		trimmed := strings.TrimSpace(*req.ExecutionRole)
 		// Empty string clears the column (NULL). Non-empty sets it.
 		// Catalog validation is deliberately deferred to Phase 6 (see
-		// docs/phase5-plan.md §8 Q2).
+		// docs/phase5-plan.md §8 Q2). Do NOT add a role-allowlist check
+		// here without bumping the Phase 5 DECISIONS entry — the contract
+		// explicitly allows unknown role strings today so Phase 6 can
+		// introduce catalog enforcement as a single atomic change with
+		// migration of any existing rows.
 		if trimmed == "" {
 			if candidate.ExecutionRole != nil {
 				executionRoleValue = nil

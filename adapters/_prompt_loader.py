@@ -47,8 +47,23 @@ def _prompts_dir() -> Path:
 
 def load(name: str) -> str:
     """Return the raw markdown source INCLUDING frontmatter."""
-    path = _prompts_dir() / f"{name}.md"
-    return path.read_text(encoding="utf-8")
+    base = _prompts_dir()
+    path = base / f"{name}.md"
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        # This is the first hint an operator gets when the adapter is
+        # run against a deployment layout that doesn't ship the prompts
+        # tree next to the adapter source (e.g. a packaged connector
+        # binary without the repo checkout). Surface the canonical
+        # resolution so the operator can point ANPM_PROMPTS_DIR at the
+        # right location instead of grepping the code path.
+        raise RuntimeError(
+            f"prompt '{name}' not found at {path}. "
+            f"Set ANPM_PROMPTS_DIR to the directory containing "
+            f"backend/internal/prompts/*.md, or install this adapter "
+            f"inside the repo checkout."
+        ) from exc
 
 
 def render(name: str, variables: dict[str, str]) -> str:

@@ -562,6 +562,11 @@ def _normalize_candidate(raw: dict[str, Any], default_rank: int) -> dict[str, An
         "rank": _coerce_int(raw.get("rank"), default_rank),
         "evidence": _coerce_string_list(raw.get("evidence")),
         "duplicate_titles": _coerce_string_list(raw.get("duplicate_titles")),
+        # Phase 5 B2: optional execution_role hint. The current backlog
+        # prompt does NOT ask the model to emit this field, so it will be
+        # empty in almost all cases. Carried here so a future Phase-6-aware
+        # planner can populate it without a connector-protocol bump.
+        "execution_role": str(raw.get("execution_role") or "").strip(),
     }
 
 

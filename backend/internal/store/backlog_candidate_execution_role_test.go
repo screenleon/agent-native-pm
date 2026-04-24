@@ -7,16 +7,6 @@ import (
 	"github.com/screenleon/agent-native-pm/internal/testutil"
 )
 
-// seedCandidateForExecRoleTest sets up the minimum objects needed to
-// create a backlog candidate: a project + a requirement + a planning
-// run. The candidate is then returned via Update path exercises.
-func seedCandidateForExecRoleTest(t *testing.T, db interface{ /* *sql.DB shaped */ }) (*BacklogCandidateStore, *models.Requirement, string) {
-	t.Helper()
-	// (intentionally left blank — real fixtures in the test bodies below;
-	// this helper is a placeholder the Phase 6 execution work can extend)
-	return nil, nil, ""
-}
-
 // T-P5-B2-5: creating a candidate with ExecutionRole="" leaves the DB
 // column NULL and the read-back model's ExecutionRole nil pointer.
 func TestCreateCandidate_NullExecutionRoleRoundTrip(t *testing.T) {
@@ -129,5 +119,55 @@ func TestCreateAndUpdateCandidate_ExecutionRoleRoundTrip(t *testing.T) {
 	}
 	if cleared.ExecutionRole != nil {
 		t.Fatalf("want cleared, got %v", *cleared.ExecutionRole)
+	}
+}
+
+// T-P5-B2-4: unknown role strings are accepted today (no catalog
+// enforcement — plan §5 B2 / DECISIONS 2026-04-24). This test pins the
+// current contract so a future tightening in Phase 6 is a deliberate
+// change rather than a silent regression.
+func TestUpdateCandidate_UnknownExecutionRoleAcceptedInPhase5(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+
+	projectStore := NewProjectStore(db)
+	project, err := projectStore.Create(models.CreateProjectRequest{Name: "ProbeRole3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqStore := NewRequirementStore(db)
+	req, err := reqStore.Create(project.ID, models.CreateRequirementRequest{Title: "r", Source: "human"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runStore := NewPlanningRunStore(db, testutil.TestDialect())
+	run, err := runStore.Create(project.ID, req.ID, "", models.CreatePlanningRunRequest{
+		TriggerSource: "manual",
+		ExecutionMode: "deterministic",
+	}, models.PlanningProviderSelection{
+		ProviderID:      "deterministic",
+		ModelID:         "deterministic",
+		SelectionSource: "server_default",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	candStore := NewBacklogCandidateStore(db, testutil.TestDialect())
+	created, err := candStore.CreateDraftsForPlanningRun(req, run.ID, []models.BacklogCandidateDraft{
+		{Title: "draft", Rank: 1, PriorityScore: 10, Confidence: 10},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bogus := "not-a-real-role-name-in-the-catalog"
+	updated, err := candStore.Update(created[0].ID, models.UpdateBacklogCandidateRequest{
+		ExecutionRole: &bogus,
+	})
+	if err != nil {
+		t.Fatalf("Phase 5 must accept unknown role strings without catalog validation: %v", err)
+	}
+	if updated.ExecutionRole == nil || *updated.ExecutionRole != bogus {
+		t.Fatalf("unknown role not persisted; got %v", updated.ExecutionRole)
 	}
 }

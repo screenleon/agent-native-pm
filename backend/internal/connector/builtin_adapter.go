@@ -648,6 +648,11 @@ type rawJSONCandidate struct {
 	Rank               int      `json:"rank"`
 	Evidence           []string `json:"evidence"`
 	DuplicateTitles    []string `json:"duplicate_titles"`
+	// ExecutionRole is optional (Phase 5 B2). The current planner prompts
+	// do NOT ask the model to emit this field, so it will be empty in
+	// almost all cases. Kept in the wire shape now so Phase 6 can enable
+	// role-aware planners without a connector-protocol bump.
+	ExecutionRole string `json:"execution_role"`
 }
 
 // extractJSONFromOutput implements the three-strategy extraction from _extract_json.
@@ -737,6 +742,7 @@ func normalizeBuiltinCandidates(parsed map[string]json.RawMessage, maxCandidates
 			Rank:               rank,
 			Evidence:           coerceStringList(c.Evidence),
 			DuplicateTitles:    coerceStringList(c.DuplicateTitles),
+			ExecutionRole:      strings.TrimSpace(c.ExecutionRole),
 		})
 	}
 	return out

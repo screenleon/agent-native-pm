@@ -126,6 +126,40 @@ func TestExists(t *testing.T) {
 	}
 }
 
+// TestRender_MatchesPythonParityGolden_Whatsnext mirrors the backlog
+// golden test for the whatsnext prompt. Both prompts are active
+// production surfaces; pinning only the backlog side leaves whatsnext
+// drift undetected. See docs/phase5-plan.md §7 R1 / risk-reviewer S2.
+func TestRender_MatchesPythonParityGolden_Whatsnext(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	goldenPath := filepath.Join(
+		filepath.Dir(thisFile), "..", "..", "..",
+		"adapters", "testdata", "whatsnext_render_golden.txt",
+	)
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	got, err := Render("whatsnext", map[string]string{
+		"PROJECT_NAME":             "CrossLang",
+		"PROJECT_DESCRIPTION_LINE": "Description: Parity-check project.",
+		"SCOPE_SECTION":            "\n=== Focus scope ===\nReliability push Q2\n",
+		"MAX_CANDIDATES":           "3",
+		"CONTEXT":                  "=== Current state ===\n(no items)",
+		"SCHEMA_VERSION":           "context.v1",
+		"REQUIREMENT":              "",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if got != string(expected) {
+		t.Fatalf("Go-rendered whatsnext prompt drifted from the pinned golden.\n"+
+			"if intentional, regenerate via UPDATE_PROMPT_GOLDEN=1 on the Python side.\n\n"+
+			"=== Go (%d bytes) ===\n%s\n\n=== Golden (%d bytes) ===\n%s",
+			len(got), got, len(expected), string(expected))
+	}
+}
+
 // TestRender_MatchesPythonParityGolden enforces byte-identical output
 // with the Python reference adapter. The companion test in
 // adapters/test_prompt_loader.py renders the same fixture and asserts

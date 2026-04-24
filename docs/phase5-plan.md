@@ -345,13 +345,13 @@ Day 4:
 
 | Slice | Status | PR |
 |---|---|---|
-| P5-A1 — prompts package + render | pending | — |
-| P5-A2 — backlog.md + whatsnext.md migration | pending | — |
-| P5-A3 — adapter refactor | pending | — |
-| P5-B1 — 6 role prompts | pending | — |
-| P5-B2 — `execution_role` column | pending | — |
-| P5-B3 — apply dialog + UI hint | pending | — |
-| Docs sync | pending | — |
+| P5-A1 — prompts package + render | implemented | bundled |
+| P5-A2 — backlog.md + whatsnext.md migration | implemented | bundled |
+| P5-A3 — adapter refactor | implemented | bundled |
+| P5-B1 — 6 role prompts | implemented | bundled |
+| P5-B2 — `execution_role` column | implemented | bundled |
+| P5-B3 — apply dialog + UI hint | implemented | bundled |
+| Docs sync | implemented | bundled |
 
 **Phase 5 complete** when all 6 slices + docs sync are merged AND `make pre-pr` is green AND `critic` + `/security-review` + `risk-reviewer` have all run with must-fix findings resolved.
 
