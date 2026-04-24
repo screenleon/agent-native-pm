@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -341,22 +342,43 @@ func txSelectConnectorByIDForUpdate(tx *sql.Tx, dialect database.Dialect, connec
 }
 
 func (s *LocalConnectorStore) Revoke(id, userID string) error {
-	result, err := s.db.Exec(`
-		UPDATE local_connectors
-		SET status = $1, updated_at = CURRENT_TIMESTAMP
-		WHERE id = $2 AND user_id = $3 AND status <> $1
-	`, models.LocalConnectorStatusRevoked, id, userID)
+	// Scrub cli_configs on revoke so a re-paired connector does not
+	// inherit the previous owner's CLI list (Phase 6a, Copilot review on
+	// PR #23). Done in the same transaction as the status flip so a
+	// failure half-way leaves the row in its previous state.
+	tx, err := s.beginWriteTx()
 	if err != nil {
 		return err
 	}
-	affected, err := result.RowsAffected()
+	defer tx.Rollback()
+
+	connector, err := txSelectConnectorByIDForUpdate(tx, s.dialect, id, userID)
 	if err != nil {
 		return err
 	}
-	if affected == 0 {
+	if connector == nil {
 		return fmt.Errorf("local connector not found")
 	}
-	return nil
+	if connector.Status == models.LocalConnectorStatusRevoked {
+		// Already revoked — nothing to do. Return nil so callers are
+		// idempotent and HTTP DELETE retries get 200, not 404.
+		return nil
+	}
+
+	metadata := cloneMetadata(connector.Metadata)
+	delete(metadata, metadataKeyCliConfigs)
+	if err := txWriteConnectorMetadata(tx, connector.ID, metadata); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE local_connectors
+		SET status = $1, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $2 AND user_id = $3
+	`, models.LocalConnectorStatusRevoked, id, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *LocalConnectorStore) GetByID(id, userID string) (*models.LocalConnector, error) {
@@ -518,6 +540,7 @@ func generateReadableSecret(byteLength int) (string, error) {
 const (
 	metadataKeyPendingCliProbes = "pending_cli_probe_requests"
 	metadataKeyCliProbeResults  = "cli_probe_results"
+	metadataKeyCliConfigs       = "cli_configs" // Phase 6a UX-B1
 	// probeResultRetention caps how long a completed probe result survives
 	// in metadata. Anything older is dropped at enqueue/heartbeat time.
 	probeResultRetention = 24 * time.Hour
@@ -533,6 +556,21 @@ const (
 // already has maxPendingProbesPerConnector pending probes queued. The handler
 // surface maps this to HTTP 429 so the UI can back off.
 var ErrPendingProbeCapReached = errors.New("connector pending-probe queue is full")
+
+// Phase 6a UX-B1 error sentinels for cli_configs CRUD.
+var (
+	ErrCliConfigNotFound            = errors.New("cli_config not found")
+	ErrCliConfigDuplicateLabel      = errors.New("cli_config with the same provider_id and label already exists on this connector")
+	ErrCliConfigCapReached          = errors.New("connector already has the maximum number of cli_configs")
+	ErrCliConfigInvalidProvider     = errors.New("provider_id must be one of the allowed cli:* providers")
+	ErrCliConfigInvalidCliCommand   = errors.New("cli_command must be empty or an absolute path with safe characters")
+	ErrCliConfigModelIDRequired     = errors.New("model_id is required")
+	// ErrCliConfigConnectorRevoked rejects writes against revoked connectors.
+	// Surfaced from the handler as 409 Conflict so the UI hides the section
+	// and the caller cannot resurrect stale configs by re-pairing later
+	// (Phase 6a Part 1, Copilot review on PR #23).
+	ErrCliConfigConnectorRevoked    = errors.New("cannot modify cli_configs on a revoked connector")
+)
 
 // EnqueueCliProbe appends a pending probe request to the named connector's
 // metadata. Dedup policy (S7): if a pending entry for the same binding
@@ -838,5 +876,364 @@ func gcOldProbeResults(metadata map[string]interface{}) map[string]interface{} {
 		writeProbeResults(metadata, results)
 	}
 	return metadata
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 6a UX-B1: cli_configs[] in connector metadata
+//
+// Per-connector CLI + model combinations. Replaces the user-level cli:*
+// account_bindings as the primary way to express "this machine runs this
+// CLI with this model". No migration — existing cli:* rows stay as legacy.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// cliCommandRegex is the same sanity check as account_binding_store's
+// validateCLICommand — absolute path or empty, restricted character set.
+var cliCommandRegex = regexp.MustCompile(`^/[A-Za-z0-9_./\-]+$`)
+
+// ListCliConfigs returns the connector's CLI configs (empty slice if unset).
+// Requires user-scope match — cross-user reads return ErrCliConfigNotFound.
+func (s *LocalConnectorStore) ListCliConfigs(connectorID, userID string) ([]models.CliConfig, error) {
+	connector, err := s.GetByID(connectorID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if connector == nil {
+		return nil, ErrCliConfigNotFound
+	}
+	return readCliConfigs(connector.Metadata), nil
+}
+
+// AddCliConfig appends a new config to the connector's metadata. If this is
+// the first config OR the caller sets IsPrimary=true, the new entry becomes
+// primary and any previous primary is demoted — exactly one primary per
+// connector, atomically.
+func (s *LocalConnectorStore) AddCliConfig(connectorID, userID string, req models.CreateCliConfigRequest) (*models.CliConfig, error) {
+	if err := validateCliConfigShape(req.ProviderID, req.ModelID, req.CliCommand); err != nil {
+		return nil, err
+	}
+	tx, err := s.beginWriteTx()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	connector, err := txSelectConnectorByIDForUpdate(tx, s.dialect, connectorID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if connector == nil {
+		return nil, ErrCliConfigNotFound
+	}
+	if connector.Status == models.LocalConnectorStatusRevoked {
+		return nil, ErrCliConfigConnectorRevoked
+	}
+
+	metadata := cloneMetadata(connector.Metadata)
+	configs := readCliConfigs(metadata)
+
+	if len(configs) >= models.MaxCliConfigsPerConnector {
+		return nil, ErrCliConfigCapReached
+	}
+
+	label := strings.TrimSpace(req.Label)
+	if label == "" {
+		label = defaultCliConfigLabel(req.ProviderID)
+	}
+	for _, existing := range configs {
+		if existing.ProviderID == req.ProviderID && existing.Label == label {
+			return nil, ErrCliConfigDuplicateLabel
+		}
+	}
+
+	// Primary rule: first config auto-becomes primary; explicit
+	// IsPrimary=true also wins and demotes all others. A non-primary
+	// addition when some other is already primary keeps its false value.
+	wantsPrimary := len(configs) == 0
+	if req.IsPrimary != nil && *req.IsPrimary {
+		wantsPrimary = true
+	}
+	if wantsPrimary {
+		for i := range configs {
+			configs[i].IsPrimary = false
+		}
+	}
+
+	now := time.Now().UTC()
+	created := models.CliConfig{
+		ID:         uuid.NewString(),
+		ProviderID: req.ProviderID,
+		CliCommand: strings.TrimSpace(req.CliCommand),
+		ModelID:    strings.TrimSpace(req.ModelID),
+		Label:      label,
+		IsPrimary:  wantsPrimary,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	configs = append(configs, created)
+	writeCliConfigs(metadata, configs)
+
+	if err := txWriteConnectorMetadata(tx, connector.ID, metadata); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &created, nil
+}
+
+// UpdateCliConfig patches specific fields on an existing config.
+// Setting IsPrimary=true demotes other configs on the same connector
+// atomically; IsPrimary=false on the currently-primary config is
+// rejected (caller must promote another config instead, mirroring the
+// account_bindings invariant that at least one stays primary after the
+// first addition).
+func (s *LocalConnectorStore) UpdateCliConfig(connectorID, userID, configID string, req models.UpdateCliConfigRequest) (*models.CliConfig, error) {
+	tx, err := s.beginWriteTx()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	connector, err := txSelectConnectorByIDForUpdate(tx, s.dialect, connectorID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if connector == nil {
+		return nil, ErrCliConfigNotFound
+	}
+	if connector.Status == models.LocalConnectorStatusRevoked {
+		return nil, ErrCliConfigConnectorRevoked
+	}
+
+	metadata := cloneMetadata(connector.Metadata)
+	configs := readCliConfigs(metadata)
+	idx := -1
+	for i, c := range configs {
+		if c.ID == configID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, ErrCliConfigNotFound
+	}
+
+	if req.CliCommand != nil {
+		if err := validateCliCommand(*req.CliCommand); err != nil {
+			return nil, err
+		}
+		configs[idx].CliCommand = strings.TrimSpace(*req.CliCommand)
+	}
+	if req.ModelID != nil {
+		m := strings.TrimSpace(*req.ModelID)
+		if m == "" {
+			return nil, ErrCliConfigModelIDRequired
+		}
+		configs[idx].ModelID = m
+	}
+	if req.Label != nil {
+		nextLabel := strings.TrimSpace(*req.Label)
+		if nextLabel == "" {
+			nextLabel = defaultCliConfigLabel(configs[idx].ProviderID)
+		}
+		// Duplicate-label guard with self-exclusion.
+		for i, existing := range configs {
+			if i == idx {
+				continue
+			}
+			if existing.ProviderID == configs[idx].ProviderID && existing.Label == nextLabel {
+				return nil, ErrCliConfigDuplicateLabel
+			}
+		}
+		configs[idx].Label = nextLabel
+	}
+	if req.IsPrimary != nil {
+		if *req.IsPrimary {
+			for i := range configs {
+				configs[i].IsPrimary = (i == idx)
+			}
+		}
+		// IsPrimary=false on the current primary is a no-op — the
+		// invariant is "exactly one primary if any exist", not "you can
+		// demote the primary without promoting a replacement". Callers
+		// should SetPrimary on a different config instead.
+	}
+	configs[idx].UpdatedAt = time.Now().UTC()
+	writeCliConfigs(metadata, configs)
+
+	if err := txWriteConnectorMetadata(tx, connector.ID, metadata); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	updated := configs[idx]
+	return &updated, nil
+}
+
+// DeleteCliConfig removes a config. If the deleted config was primary AND
+// other configs remain, the first remaining config is auto-promoted to
+// primary (so "at least one primary when non-empty" invariant holds).
+func (s *LocalConnectorStore) DeleteCliConfig(connectorID, userID, configID string) error {
+	tx, err := s.beginWriteTx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	connector, err := txSelectConnectorByIDForUpdate(tx, s.dialect, connectorID, userID)
+	if err != nil {
+		return err
+	}
+	if connector == nil {
+		return ErrCliConfigNotFound
+	}
+	if connector.Status == models.LocalConnectorStatusRevoked {
+		return ErrCliConfigConnectorRevoked
+	}
+
+	metadata := cloneMetadata(connector.Metadata)
+	configs := readCliConfigs(metadata)
+	idx := -1
+	for i, c := range configs {
+		if c.ID == configID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return ErrCliConfigNotFound
+	}
+
+	wasPrimary := configs[idx].IsPrimary
+	configs = append(configs[:idx], configs[idx+1:]...)
+	if wasPrimary && len(configs) > 0 {
+		configs[0].IsPrimary = true
+	}
+	writeCliConfigs(metadata, configs)
+
+	if err := txWriteConnectorMetadata(tx, connector.ID, metadata); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SetPrimaryCliConfig promotes the named config to primary and demotes
+// every other config on the same connector.
+func (s *LocalConnectorStore) SetPrimaryCliConfig(connectorID, userID, configID string) error {
+	tx, err := s.beginWriteTx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	connector, err := txSelectConnectorByIDForUpdate(tx, s.dialect, connectorID, userID)
+	if err != nil {
+		return err
+	}
+	if connector == nil {
+		return ErrCliConfigNotFound
+	}
+	if connector.Status == models.LocalConnectorStatusRevoked {
+		return ErrCliConfigConnectorRevoked
+	}
+	metadata := cloneMetadata(connector.Metadata)
+	configs := readCliConfigs(metadata)
+	found := false
+	for i, c := range configs {
+		if c.ID == configID {
+			configs[i].IsPrimary = true
+			configs[i].UpdatedAt = time.Now().UTC()
+			found = true
+		} else {
+			configs[i].IsPrimary = false
+		}
+	}
+	if !found {
+		return ErrCliConfigNotFound
+	}
+	writeCliConfigs(metadata, configs)
+	if err := txWriteConnectorMetadata(tx, connector.ID, metadata); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// GetCliConfig returns one config by id, user-scoped.
+func (s *LocalConnectorStore) GetCliConfig(connectorID, userID, configID string) (*models.CliConfig, error) {
+	configs, err := s.ListCliConfigs(connectorID, userID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range configs {
+		if configs[i].ID == configID {
+			return &configs[i], nil
+		}
+	}
+	return nil, ErrCliConfigNotFound
+}
+
+// ── cli_configs metadata helpers ────────────────────────────────────────────
+
+func readCliConfigs(metadata map[string]interface{}) []models.CliConfig {
+	// Always return a non-nil slice so JSON encoding produces `[]` rather
+	// than `null` for clients that strictly type the response as
+	// `CliConfig[]` (Copilot review on PR #23).
+	raw, ok := metadata[metadataKeyCliConfigs]
+	if !ok {
+		return []models.CliConfig{}
+	}
+	bytes, err := json.Marshal(raw)
+	if err != nil {
+		return []models.CliConfig{}
+	}
+	var out []models.CliConfig
+	if err := json.Unmarshal(bytes, &out); err != nil {
+		return []models.CliConfig{}
+	}
+	if out == nil {
+		return []models.CliConfig{}
+	}
+	return out
+}
+
+func writeCliConfigs(metadata map[string]interface{}, configs []models.CliConfig) {
+	if len(configs) == 0 {
+		delete(metadata, metadataKeyCliConfigs)
+		return
+	}
+	metadata[metadataKeyCliConfigs] = configs
+}
+
+func validateCliConfigShape(providerID, modelID, cliCommand string) error {
+	if !models.AllowedAccountBindingProviderIDs[providerID] || !models.IsCLIAccountBindingProvider(providerID) {
+		return ErrCliConfigInvalidProvider
+	}
+	if strings.TrimSpace(modelID) == "" {
+		return ErrCliConfigModelIDRequired
+	}
+	return validateCliCommand(cliCommand)
+}
+
+func validateCliCommand(cmd string) error {
+	trimmed := strings.TrimSpace(cmd)
+	if trimmed == "" {
+		return nil
+	}
+	if !cliCommandRegex.MatchString(trimmed) {
+		return ErrCliConfigInvalidCliCommand
+	}
+	return nil
+}
+
+func defaultCliConfigLabel(providerID string) string {
+	switch providerID {
+	case "cli:claude":
+		return "My Claude"
+	case "cli:codex":
+		return "My Codex"
+	default:
+		return "My CLI"
+	}
 }
 

@@ -160,14 +160,10 @@ export default function AccountBindings() {
       setBindings(allBindings);
       setIsLocalMode(isLocal);
       setError('');
-      // T-S3-3: auto-expand form when no CLI bindings exist in local mode.
-      // After a deletion that leaves 0 bindings the form re-expands too, which
-      // is the intended "first binding of a namespace" onboarding flow.
-      const hasAnyCli = allBindings.some((b: AccountBinding) => b.provider_id.startsWith('cli:'));
-      if (isLocal && !hasAnyCli && !userDismissedCliForm.current) {
-        setShowCliForm(true);
-        setCliIsPrimary(true);
-      }
+      // Phase 6a UX-A7: the Phase 3 auto-expand of the CLI create form is
+      // disabled; new CLI configs live under My Connector now. Existing
+      // bindings still render + can be edited/deleted/promoted, but the
+      // create flow is inactive here.
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load bindings');
     } finally {
@@ -416,12 +412,10 @@ export default function AccountBindings() {
     setCliIsPrimary(true);
   }
 
-  function handleOpenCliForm() {
-    resetCliForm(selectedCliPresetId);
-    const preset = getCliBindingPreset(selectedCliPresetId);
-    setCliIsPrimary(!cliBindings.some(b => b.provider_id === preset.providerId));
-    setShowCliForm(true);
-  }
+  // Phase 6a UX-A7: `handleOpenCliForm` was removed — the create flow for
+  // CLI bindings is gone. New CLI configurations live per-connector on the
+  // My Connector page. Edit / Delete / Set-Primary / Test on existing
+  // legacy bindings continue to work.
 
   function handleOpenCliEdit(binding: AccountBinding) {
     setEditingCliId(binding.id);
@@ -738,25 +732,24 @@ export default function AccountBindings() {
             )}
           </div>
 
-          {/* CLI bindings section */}
+          {/* CLI bindings section (Phase 6a UX-A7: legacy — new CLI configs live per-connector on My Connector). */}
           <div className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <h2 style={{ margin: 0 }}>Server-side CLI Bindings <span style={{ fontSize: '0.75rem', fontWeight: 400, color: 'var(--text-muted)', marginLeft: '0.5rem' }}>(local-mode only)</span></h2>
-              {isLocalMode && !showCliForm && (
-                <button className="btn btn-primary btn-sm" onClick={() => handleOpenCliForm()}>
-                  + Add CLI Binding
-                </button>
-              )}
+              <h2 style={{ margin: 0 }}>CLI Bindings <span style={{ fontSize: '0.75rem', fontWeight: 400, color: 'var(--text-muted)', marginLeft: '0.5rem' }}>(legacy · pre-Phase 6)</span></h2>
+            </div>
+
+            <div className="helper-note" style={{ marginBottom: '0.85rem' }}>
+              <strong>CLI configuration has moved.</strong> Add your CLI + model directly on the connector that runs it — open <Link to="/settings/connector">My Connector</Link> and use the "CLIs on this machine" section on each connector card. Existing bindings below keep working; new bindings should be created per-connector.
             </div>
 
             {!isLocalMode ? (
               <div className="helper-note">
-                CLI bindings are only available in local mode. Switch to local mode to manage CLI bindings.
+                CLI bindings are only available in local mode. Switch to local mode to manage them.
               </div>
             ) : (
               <>
                 {cliBindings.length === 0 && !showCliForm && (
-                  <p style={{ color: 'var(--text-muted)', margin: 0 }}>No CLI bindings configured yet.</p>
+                  <p style={{ color: 'var(--text-muted)', margin: 0 }}>No legacy CLI bindings. Configure CLIs under My Connector instead.</p>
                 )}
 
                 {cliBindings.map(binding => {
@@ -987,11 +980,9 @@ export default function AccountBindings() {
                   </div>
                 )}
 
-                {cliBindings.length > 0 && !showCliForm && (
-                  <button className="btn btn-ghost btn-sm" onClick={() => handleOpenCliForm()}>
-                    + Add another CLI binding
-                  </button>
-                )}
+                {/* Phase 6a UX-A7: new bindings are no longer created here.
+                    Edit and Delete on existing rows still work; new CLI configs
+                    should be added per-connector on the My Connector page. */}
               </>
             )}
           </div>

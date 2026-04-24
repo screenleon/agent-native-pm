@@ -171,7 +171,9 @@ This preserves a single JSON API surface for both humans and agents.
 
 ## Near-Term Architectural Direction
 
-Phase 2 (Planning Workspace consolidation), Phase 3 (Local-mode completeness + evidence cross-links + Dashboard aggregation), and Phase 4 (UX debt from early-operator friction, PR #21) are shipped and merged to `main`. Phase 5 (prompt externalization + execution role library) is active — see `docs/phase5-plan.md`. Phase 5 adds:
+Phases 2 through 5 are merged to `main`. Phase 6a (Workspace onboarding UX + connector-owned CLI configs) is active — see `docs/phase6a-plan.md`. Part 1 of Phase 6a (this PR) reshapes where CLI configuration lives: per-connector metadata (`local_connectors.metadata.cli_configs[]`) instead of user-level `account_bindings`. The PlanningRun resolver accepts `(connector_id, cli_config_id)` with legacy `account_binding_id` still honoured. Part 2 will add the one-line Workspace entry, progressive-disclosure in PlanningLauncher, What/Who/Success wizard, demo seed, jargon tooltips, and primary-binding visual affordance.
+
+Phase 5 added:
 
 - a single markdown source for every agent prompt (`backend/internal/prompts/`) consumed by both the Go built-in adapter and the Python reference adapters — ending the two-language drift risk flagged during Phase 3 S5b,
 - a role-prompt library of six execution specialists (backend / UI / DB / API / tests / code review) under `backend/internal/prompts/roles/` — the language basis for Phase 6 auto-dispatch, not invoked yet,

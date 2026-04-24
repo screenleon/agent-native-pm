@@ -600,6 +600,126 @@ func (h *LocalConnectorHandler) GetProbeResult(w http.ResponseWriter, r *http.Re
 	writeSuccess(w, http.StatusOK, models.CliProbeStatusResponse{Status: status, Result: result}, nil)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 6a UX-B1: cli_configs[] CRUD handlers.
+//
+// Each connector owns its CLI configs (claude/codex + model). Replaces the
+// pre-Phase-6a user-level cli:* account_bindings as the primary authoring
+// flow. All routes authenticate the caller and enforce
+// `connector.user_id == caller.user.id` via the store's user-scoped lookups.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ListCliConfigs GET /api/me/local-connectors/:id/cli-configs
+func (h *LocalConnectorHandler) ListCliConfigs(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	connectorID := chi.URLParam(r, "id")
+	configs, err := h.store.ListCliConfigs(connectorID, user.ID)
+	if err != nil {
+		writeCliConfigError(w, err)
+		return
+	}
+	writeSuccess(w, http.StatusOK, configs, nil)
+}
+
+// CreateCliConfig POST /api/me/local-connectors/:id/cli-configs
+func (h *LocalConnectorHandler) CreateCliConfig(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	connectorID := chi.URLParam(r, "id")
+	var req models.CreateCliConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	created, err := h.store.AddCliConfig(connectorID, user.ID, req)
+	if err != nil {
+		writeCliConfigError(w, err)
+		return
+	}
+	writeSuccess(w, http.StatusCreated, created, nil)
+}
+
+// UpdateCliConfig PATCH /api/me/local-connectors/:id/cli-configs/:config_id
+func (h *LocalConnectorHandler) UpdateCliConfig(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	connectorID := chi.URLParam(r, "id")
+	configID := chi.URLParam(r, "config_id")
+	var req models.UpdateCliConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	updated, err := h.store.UpdateCliConfig(connectorID, user.ID, configID, req)
+	if err != nil {
+		writeCliConfigError(w, err)
+		return
+	}
+	writeSuccess(w, http.StatusOK, updated, nil)
+}
+
+// DeleteCliConfig DELETE /api/me/local-connectors/:id/cli-configs/:config_id
+func (h *LocalConnectorHandler) DeleteCliConfig(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	connectorID := chi.URLParam(r, "id")
+	configID := chi.URLParam(r, "config_id")
+	if err := h.store.DeleteCliConfig(connectorID, user.ID, configID); err != nil {
+		writeCliConfigError(w, err)
+		return
+	}
+	writeSuccess(w, http.StatusOK, nil, nil)
+}
+
+// SetPrimaryCliConfig POST /api/me/local-connectors/:id/cli-configs/:config_id/primary
+func (h *LocalConnectorHandler) SetPrimaryCliConfig(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	connectorID := chi.URLParam(r, "id")
+	configID := chi.URLParam(r, "config_id")
+	if err := h.store.SetPrimaryCliConfig(connectorID, user.ID, configID); err != nil {
+		writeCliConfigError(w, err)
+		return
+	}
+	writeSuccess(w, http.StatusOK, nil, nil)
+}
+
+func writeCliConfigError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrCliConfigNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, store.ErrCliConfigInvalidProvider),
+		errors.Is(err, store.ErrCliConfigInvalidCliCommand),
+		errors.Is(err, store.ErrCliConfigModelIDRequired):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, store.ErrCliConfigDuplicateLabel):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, store.ErrCliConfigCapReached):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, store.ErrCliConfigConnectorRevoked):
+		writeError(w, http.StatusConflict, err.Error())
+	default:
+		log.Printf("cli_config handler: unmapped error: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+	}
+}
+
 // RunStats returns planning run counts for the authenticated user across
 // several time windows (today / 7 days / 30 days / all time).
 func (h *LocalConnectorHandler) RunStats(w http.ResponseWriter, r *http.Request) {

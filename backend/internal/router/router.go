@@ -217,6 +217,12 @@ func New(deps Deps) http.Handler {
 				r.Get("/me/local-connectors/run-stats", deps.LocalConnectorHandler.RunStats)
 				r.Post("/me/local-connectors/{id}/probe-binding", deps.LocalConnectorHandler.ProbeBinding)
 				r.Get("/me/local-connectors/{id}/probe-binding/{probe_id}", deps.LocalConnectorHandler.GetProbeResult)
+				// Phase 6a UX-B1: per-connector CLI configs
+				r.Get("/me/local-connectors/{id}/cli-configs", deps.LocalConnectorHandler.ListCliConfigs)
+				r.Post("/me/local-connectors/{id}/cli-configs", deps.LocalConnectorHandler.CreateCliConfig)
+				r.Patch("/me/local-connectors/{id}/cli-configs/{config_id}", deps.LocalConnectorHandler.UpdateCliConfig)
+				r.Delete("/me/local-connectors/{id}/cli-configs/{config_id}", deps.LocalConnectorHandler.DeleteCliConfig)
+				r.Post("/me/local-connectors/{id}/cli-configs/{config_id}/primary", deps.LocalConnectorHandler.SetPrimaryCliConfig)
 			}
 			if deps.RemoteModelsHandler != nil {
 				r.Post("/me/remote-models", deps.RemoteModelsHandler.Fetch)

@@ -93,16 +93,25 @@ func (s *PlanningRunStore) CreateWithBinding(projectID, requirementID, requested
 		connectorCliInfoArg = string(b)
 	}
 
+	// target_connector_id pins the run to a single connector when the
+	// caller authored it via (connector_id, cli_config_id). NULL on every
+	// other path so the lease query still hands those runs out to any of
+	// the user's online connectors (Phase 6a, Copilot review on PR #23).
+	var targetConnectorArg any
+	if request.TargetConnectorID != nil && strings.TrimSpace(*request.TargetConnectorID) != "" {
+		targetConnectorArg = strings.TrimSpace(*request.TargetConnectorID)
+	}
+
 	_, err := s.db.Exec(`
 		INSERT INTO planning_runs (
 			id, project_id, requirement_id, status, trigger_source,
 			provider_id, model_id, selection_source, binding_source, binding_label,
 			requested_by_user_id, execution_mode, dispatch_status, connector_label,
 			dispatch_error, error_message, started_at, completed_at, created_at, updated_at,
-			adapter_type, model_override, account_binding_id, connector_cli_info
+			adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, '', '', '', NULL, NULL, $14, $14, $15, $16, $17, $18)
-	`, id, projectID, requirementID, models.PlanningRunStatusQueued, triggerSource, selection.ProviderID, selection.ModelID, selection.SelectionSource, selection.BindingSource, selection.BindingLabel, requestedByUser, executionMode, dispatchStatus, now, strings.TrimSpace(request.AdapterType), strings.TrimSpace(request.ModelOverride), accountBindingArg, connectorCliInfoArg)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, '', '', '', NULL, NULL, $14, $14, $15, $16, $17, $18, $19)
+	`, id, projectID, requirementID, models.PlanningRunStatusQueued, triggerSource, selection.ProviderID, selection.ModelID, selection.SelectionSource, selection.BindingSource, selection.BindingLabel, requestedByUser, executionMode, dispatchStatus, now, strings.TrimSpace(request.AdapterType), strings.TrimSpace(request.ModelOverride), accountBindingArg, connectorCliInfoArg, targetConnectorArg)
 	if err != nil {
 		if isActivePlanningRunConstraintError(err) {
 			return nil, ErrActivePlanningRunExists
@@ -293,6 +302,14 @@ func (s *PlanningRunStore) LeaseNextLocalConnectorRunForProtocol(userID, connect
 		bindingFilter = " AND (account_binding_id IS NULL)"
 	}
 
+	// Phase 6a: a cli_config-authored run is pinned to one connector via
+	// target_connector_id. Refuse to claim such a run on any other
+	// connector (the chosen cli_command + provider_id only exist on the
+	// pinned machine; Copilot review on PR #23). NULL target_connector_id
+	// means "any of the user's connectors may claim" — the legacy and
+	// account_binding paths.
+	targetFilter := " AND (target_connector_id IS NULL OR target_connector_id = $12)"
+
 	// FOR UPDATE SKIP LOCKED is PostgreSQL row-level locking for distributed workers.
 	// SQLite serialises writes at the engine level, so the clause is both unsupported
 	// and unnecessary there.
@@ -303,7 +320,7 @@ func (s *PlanningRunStore) LeaseNextLocalConnectorRunForProtocol(userID, connect
 			WHERE requested_by_user_id = $1
 			  AND execution_mode = $2
 			  AND dispatch_status IN ($3, $4)
-			  AND status = $5` + bindingFilter + `
+			  AND status = $5` + bindingFilter + targetFilter + `
 			ORDER BY created_at ASC, id ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
@@ -316,7 +333,7 @@ func (s *PlanningRunStore) LeaseNextLocalConnectorRunForProtocol(userID, connect
 			WHERE requested_by_user_id = $1
 			  AND execution_mode = $2
 			  AND dispatch_status IN ($3, $4)
-			  AND status = $5` + bindingFilter + `
+			  AND status = $5` + bindingFilter + targetFilter + `
 			ORDER BY created_at ASC, id ASC
 			LIMIT 1
 		)`
@@ -337,8 +354,8 @@ func (s *PlanningRunStore) LeaseNextLocalConnectorRunForProtocol(userID, connect
 		          selection_source, binding_source, binding_label, requested_by_user_id,
 		          execution_mode, dispatch_status, connector_id, connector_label,
 		          lease_expires_at, dispatch_error, error_message, started_at, completed_at,
-		          created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info
-	`, strings.TrimSpace(userID), models.PlanningExecutionModeLocalConnector, models.PlanningDispatchStatusQueued, models.PlanningDispatchStatusExpired, models.PlanningRunStatusQueued, models.PlanningRunStatusRunning, models.PlanningDispatchStatusLeased, strings.TrimSpace(connectorID), strings.TrimSpace(connectorLabel), now, leaseExpiresAt)
+		          created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id
+	`, strings.TrimSpace(userID), models.PlanningExecutionModeLocalConnector, models.PlanningDispatchStatusQueued, models.PlanningDispatchStatusExpired, models.PlanningRunStatusQueued, models.PlanningRunStatusRunning, models.PlanningDispatchStatusLeased, strings.TrimSpace(connectorID), strings.TrimSpace(connectorLabel), now, leaseExpiresAt, strings.TrimSpace(connectorID))
 	run, err := scanOnePlanningRun(row)
 	if err != nil {
 		return nil, err
@@ -352,7 +369,7 @@ func (s *PlanningRunStore) GetLeasedLocalConnectorRun(id, connectorID string) (*
 		       selection_source, binding_source, binding_label, requested_by_user_id,
 		       execution_mode, dispatch_status, connector_id, connector_label,
 		       lease_expires_at, dispatch_error, error_message, started_at, completed_at,
-		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info
+		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id
 		FROM planning_runs
 		WHERE id = $1
 		  AND connector_id = $2
@@ -571,7 +588,7 @@ func (s *PlanningRunStore) GetByID(id string) (*models.PlanningRun, error) {
 		       selection_source, binding_source, binding_label, requested_by_user_id,
 		       execution_mode, dispatch_status, connector_id, connector_label,
 		       lease_expires_at, dispatch_error, error_message, started_at, completed_at,
-		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info
+		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id
 		FROM planning_runs
 		WHERE id = $1
 	`, id)
@@ -590,7 +607,7 @@ func (s *PlanningRunStore) ListByRequirement(requirementID string, page, perPage
 		       selection_source, binding_source, binding_label, requested_by_user_id,
 		       execution_mode, dispatch_status, connector_id, connector_label,
 		       lease_expires_at, dispatch_error, error_message, started_at, completed_at,
-		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info
+		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id
 		FROM planning_runs
 		WHERE requirement_id = $1
 		ORDER BY created_at DESC, id DESC
@@ -657,6 +674,7 @@ func scanPlanningRun(scanner planningRunScanner) (*models.PlanningRun, error) {
 	var modelOverride sql.NullString
 	var accountBindingID sql.NullString
 	var connectorCliInfo sql.NullString
+	var targetConnectorID sql.NullString
 	err := scanner.Scan(
 		&run.ID,
 		&run.ProjectID,
@@ -684,6 +702,7 @@ func scanPlanningRun(scanner planningRunScanner) (*models.PlanningRun, error) {
 		&modelOverride,
 		&accountBindingID,
 		&connectorCliInfo,
+		&targetConnectorID,
 	)
 	if err != nil {
 		return nil, err
@@ -712,6 +731,10 @@ func scanPlanningRun(scanner planningRunScanner) (*models.PlanningRun, error) {
 	if accountBindingID.Valid && accountBindingID.String != "" {
 		bid := accountBindingID.String
 		run.AccountBindingID = &bid
+	}
+	if targetConnectorID.Valid && targetConnectorID.String != "" {
+		tid := targetConnectorID.String
+		run.TargetConnectorID = &tid
 	}
 	if connectorCliInfo.Valid && connectorCliInfo.String != "" {
 		// Path B S2: connector_cli_info now holds a richer envelope
