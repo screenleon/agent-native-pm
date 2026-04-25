@@ -299,6 +299,12 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 		if len(snippet) > 240 {
 			snippet = snippet[:240]
 		}
+		// Normalize newlines so the error message renders cleanly in
+		// stderr logs and the task result panel — matches the
+		// builtin_adapter.go pattern for the same snippet shape.
+		snippet = strings.ReplaceAll(snippet, "\r\n", " ")
+		snippet = strings.ReplaceAll(snippet, "\n", " ")
+		snippet = strings.ReplaceAll(snippet, "\r", " ")
 		errMsg := fmt.Sprintf("could not parse output as JSON: %v; first 240 chars: %s", extractErr, snippet)
 		fmt.Fprintf(s.Stderr, "task %s: %s\n", task.ID, errMsg)
 		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{

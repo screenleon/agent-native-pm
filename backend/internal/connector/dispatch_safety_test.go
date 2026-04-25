@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -48,6 +47,18 @@ func runTestHelper(mode string) {
 		// T-6c-C2-2: trap SIGTERM and ignore it; sleep until SIGKILL'd.
 		signal.Ignore(syscall.SIGTERM)
 		time.Sleep(10 * time.Minute)
+	case "ignore_sigterm_print_loop":
+		// T-6c-C2-15 (Copilot fix): trap SIGTERM, then continuously
+		// print stdout until SIGKILL'd. Triggers BOTH timeout AND
+		// boundedWriter truncation to verify runErr-over-truncated
+		// precedence in service.go RunOnceTask.
+		signal.Ignore(syscall.SIGTERM)
+		buf := bytes.Repeat([]byte("x"), 1024)
+		for {
+			if _, err := os.Stdout.Write(buf); err != nil {
+				return
+			}
+		}
 	case "echo_args":
 		// T-6c-C2-1: print the received -p prompt verbatim so the test
 		// can verify shell metacharacters were NOT expanded.
@@ -328,33 +339,35 @@ func TestInvokeBuiltinCLI_RaceFinishesBeforeTimeout(t *testing.T) {
 }
 
 func TestInvokeBuiltinCLI_TimeoutWithTruncationPrefersTimeout(t *testing.T) {
-	// Critic finding #4: when the CLI fills the output cap AND is
-	// killed by the timeout, the runErrMsg (timeout) carries more
-	// useful diagnostic info than truncation alone. The dispatch
-	// caller in service.go must prefer runErrMsg over truncated when
-	// both are set; this test pins the contract at invokeBuiltinCLI
-	// so any future refactor that swaps the precedence breaks here.
+	// Critic finding #4 + Copilot review #2: when the CLI fills the
+	// output cap AND is killed by the timeout, both `truncated=true`
+	// AND `runErrMsg!=""` are set. The dispatch caller in service.go
+	// must prefer runErrMsg (the timeout signal is more informative
+	// than the cap firing). This test now actually triggers BOTH
+	// conditions — earlier version used a sleep-only helper that
+	// printed nothing, so truncated stayed false and the test was
+	// theatrical. The new "ignore_sigterm_print_loop" helper traps
+	// SIGTERM and writes continuously, which trips the bounded
+	// writer well before SIGKILL escalation lands.
 	if testing.Short() {
 		t.Skip("subprocess test skipped in -short mode")
 	}
-	// Use a tight 1-byte cap so even minimal output trips truncation.
-	// The helper sleeps forever ignoring SIGTERM, so timeout fires
-	// after 1s+5s = 6s. The 1-byte cap is irrelevant to whether the
-	// CLI is truncated (it doesn't print anything before being killed),
-	// but if a future implementation accidentally signals truncation
-	// preemptively, this combination would catch it.
 	t.Setenv("ANPM_TEST_HELPER_GUARD", "1")
-	t.Setenv("ANPM_TEST_HELPER_MODE", "ignore_sigterm_sleep_forever")
-	t.Setenv("ANPM_DISPATCH_OUTPUT_MAX", "1")
-	_, _, errMsg := invokeBuiltinCLI(context.Background(), "claude", os.Args[0], "", "x", 1)
+	t.Setenv("ANPM_TEST_HELPER_MODE", "ignore_sigterm_print_loop")
+	t.Setenv("ANPM_DISPATCH_OUTPUT_MAX", "1024") // 1 KB — easy to trip
+	_, truncated, errMsg := invokeBuiltinCLI(context.Background(), "claude", os.Args[0], "", "x", 1)
 	if errMsg == "" {
 		t.Fatal("expected runErr (timeout); got empty")
+	}
+	if !truncated {
+		t.Error("expected truncated=true; print loop should have exceeded 1 KB cap")
 	}
 	if !strings.Contains(strings.ToLower(errMsg), "timed out") {
 		t.Errorf("errMsg = %q, want substring 'timed out'", errMsg)
 	}
 	// Verify dispatch classifier picks dispatch_timeout (the Phase
-	// 6c-specific kind), not adapter_timeout.
+	// 6c-specific kind), not adapter_timeout, even when truncated is
+	// also set — that's the precedence rule under test.
 	if got := classifyDispatchRunError(errMsg); got != "dispatch_timeout" {
 		t.Errorf("classifyDispatchRunError = %q, want dispatch_timeout", got)
 	}
@@ -383,7 +396,3 @@ func TestClassifyDispatchRunError(t *testing.T) {
 	}
 }
 
-// Compile-time guard: `io.Discard` is used elsewhere; keep an unused
-// reference here to avoid false-positive lint complaints if the imports
-// shift around during refactors.
-var _ io.Writer = io.Discard
