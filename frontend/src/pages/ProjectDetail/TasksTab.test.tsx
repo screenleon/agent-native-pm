@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import type { Task } from '../../types'
 import { TasksTab } from './TasksTab'
 
@@ -60,5 +60,45 @@ describe('<TasksTab />', () => {
     // Status badge cell (not the filter <option>)
     const [badge] = screen.getAllByText('in progress', { selector: 'span.badge' })
     expect(badge).toBeInTheDocument()
+  })
+
+  // --- Phase 6b: dispatch_status display ---
+
+  it('T-6b-UI-1: renders queued badge for dispatch_status=queued', () => {
+    const tasks = [makeTask({ id: 'q1', title: 'Queued task', dispatch_status: 'queued', source: 'role_dispatch:backend-architect' })]
+    render(<TasksTab {...baseProps} tasks={tasks} taskFilters={emptyFilters} />)
+    expect(screen.getByTestId('dispatch-badge-queued')).toBeInTheDocument()
+    expect(screen.getByTestId('dispatch-badge-queued').textContent).toBe('待執行')
+  })
+
+  it('T-6b-UI-2: renders running badge for dispatch_status=running', () => {
+    const tasks = [makeTask({ id: 'r1', title: 'Running task', dispatch_status: 'running', source: 'role_dispatch:backend-architect' })]
+    render(<TasksTab {...baseProps} tasks={tasks} taskFilters={emptyFilters} />)
+    expect(screen.getByTestId('dispatch-badge-running')).toBeInTheDocument()
+    expect(screen.getByTestId('dispatch-badge-running').textContent).toBe('執行中…')
+  })
+
+  it('T-6b-UI-3: renders completed badge with expandable result block; clicking shows file paths', () => {
+    const result = { files: ['src/api.go', 'src/store.go'] }
+    const tasks = [
+      makeTask({
+        id: 'c1',
+        title: 'Completed task',
+        dispatch_status: 'completed',
+        execution_result: result as Record<string, unknown>,
+        source: 'role_dispatch:backend-architect',
+      }),
+    ]
+    render(<TasksTab {...baseProps} tasks={tasks} taskFilters={emptyFilters} />)
+    const toggle = screen.getByTestId('dispatch-badge-completed')
+    expect(toggle).toBeInTheDocument()
+    // Result block not visible before click
+    expect(screen.queryByTestId('dispatch-result-block')).toBeNull()
+    fireEvent.click(toggle)
+    // Result block visible after click
+    const block = screen.getByTestId('dispatch-result-block')
+    expect(block).toBeInTheDocument()
+    expect(block.textContent).toContain('src/api.go')
+    expect(block.textContent).toContain('src/store.go')
   })
 })

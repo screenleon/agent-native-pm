@@ -31,6 +31,9 @@ type LocalConnectorHandler struct {
 	// CLI binding row so the connector receives cli_command + model_id. Wired
 	// in main.go via WithAccountBindingStore.
 	bindings *store.AccountBindingStore
+	// taskStore is optional; when set the Phase 6b dispatch endpoints are
+	// functional. Wired in main.go via WithTaskStore.
+	taskStore *store.TaskStore
 }
 
 // WithAccountBindingStore allows the probe-binding handler to look up the
@@ -39,6 +42,14 @@ type LocalConnectorHandler struct {
 // the server wiring).
 func (h *LocalConnectorHandler) WithAccountBindingStore(bindings *store.AccountBindingStore) *LocalConnectorHandler {
 	h.bindings = bindings
+	return h
+}
+
+// WithTaskStore wires the task store so the Phase 6b dispatch endpoints
+// (claim-next-task, execution-result) are functional. When nil those two
+// endpoints return 500.
+func (h *LocalConnectorHandler) WithTaskStore(tasks *store.TaskStore) *LocalConnectorHandler {
+	h.taskStore = tasks
 	return h
 }
 

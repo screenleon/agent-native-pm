@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { BacklogCandidate, PlanningProviderOptions, PlanningRun } from '../../../types'
 import { formatDateTime, formatRelativeTime } from '../../../utils/formatters'
 import Jargon from '../../../components/Jargon'
@@ -88,7 +89,8 @@ interface CandidateReviewPanelProps {
 
   onPersistReview: (nextStatus?: 'draft' | 'approved' | 'rejected') => void
   onApplyCandidate: () => void
-  onResetCandidateForm: () => void
+  onSkipCandidate: () => void
+  onResetCandidateForm?: () => void
 
   // Phase 5 B3: execution mode radio group. `manual` is the Phase 4
   // behaviour; `role_dispatch` is a forward-looking marker. Both props
@@ -139,12 +141,13 @@ export function CandidateReviewPanel({
   providerOptions,
   onPersistReview,
   onApplyCandidate,
-  onResetCandidateForm,
+  onSkipCandidate,
   selectedExecutionMode,
   onSelectedExecutionModeChange,
   onViewDocumentById,
   onViewDriftSignal,
 }: CandidateReviewPanelProps) {
+  const [showSkipped, setShowSkipped] = useState(false)
   const providerLabel = makeProviderLabeler(providerOptions)
   const modelLabel = makeModelLabeler(providerOptions)
 
@@ -182,7 +185,10 @@ export function CandidateReviewPanel({
             </p>
           )}
         </div>
-        {selectedRun && <span className="badge badge-todo">{candidates.length} candidate{candidates.length === 1 ? '' : 's'}</span>}
+        {selectedRun && (() => {
+          const activeCount = candidates.filter(c => c.status !== 'rejected').length
+          return <span className="badge badge-todo">{activeCount} candidate{activeCount === 1 ? '' : 's'}</span>
+        })()}
       </div>
 
       {candidatesError && <div className="error-banner" style={{ marginTop: '1rem' }}>{candidatesError}</div>}
@@ -229,7 +235,7 @@ export function CandidateReviewPanel({
       ) : (
         <div className="planning-candidate-review-layout">
           <div className="planning-candidate-list">
-            {candidates.map(candidate => (
+            {candidates.filter(c => c.status !== 'rejected').map(candidate => (
               <button
                 key={candidate.id}
                 type="button"
@@ -253,6 +259,34 @@ export function CandidateReviewPanel({
                 </div>
               </button>
             ))}
+
+            {(() => {
+              const skipped = candidates.filter(c => c.status === 'rejected')
+              if (skipped.length === 0) return null
+              return (
+                <div style={{ marginTop: '0.5rem', borderTop: '1px solid var(--border)', paddingTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ width: '100%', textAlign: 'left', fontSize: '0.82rem', color: 'var(--text-muted)' }}
+                    onClick={() => setShowSkipped(s => !s)}
+                  >
+                    {skipped.length} skipped {showSkipped ? '▴' : '▾'}
+                  </button>
+                  {showSkipped && skipped.map(c => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className="planning-candidate-card"
+                      style={{ opacity: 0.5 }}
+                      onClick={() => onSelectCandidate(c.id)}
+                    >
+                      <span style={{ fontSize: '0.88rem' }}>#{c.rank} {c.title}</span>
+                    </button>
+                  ))}
+                </div>
+              )
+            })()}
           </div>
 
           <div className="planning-candidate-detail-card">
@@ -300,19 +334,6 @@ export function CandidateReviewPanel({
                     onChange={e => onCandidateFormChange({ ...candidateForm, description: e.target.value })}
                     disabled={savingCandidate || applyingCandidate || selectedCandidateApplied}
                   />
-                </div>
-
-                <div className="form-group">
-                  <label>Review Status</label>
-                  <select
-                    value={candidateForm.status}
-                    onChange={e => onCandidateFormChange({ ...candidateForm, status: e.target.value as BacklogCandidate['status'] })}
-                    disabled={savingCandidate || applyingCandidate || selectedCandidateApplied}
-                  >
-                    <option value="draft">draft</option>
-                    <option value="approved">approved</option>
-                    <option value="rejected">rejected</option>
-                  </select>
                 </div>
 
                 {selectedCandidate.rationale && <div className="planning-candidate-rationale">{selectedCandidate.rationale}</div>}
@@ -533,47 +554,62 @@ export function CandidateReviewPanel({
                       />
                       Manual
                     </label>
-                    <label
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.3rem',
-                        cursor: 'not-allowed',
-                        color: 'var(--text-muted)',
-                      }}
-                      title="Reserved for Phase 6 — will auto-dispatch the task to the specialist named in execution_role"
-                    >
-                      <input
-                        type="radio"
-                        name="execution-mode"
-                        checked={selectedExecutionMode === 'role_dispatch'}
-                        onChange={() => onSelectedExecutionModeChange('role_dispatch')}
-                        disabled
-                        aria-disabled="true"
-                      />
-                      <Jargon term="dispatch">Auto-dispatch</Jargon> <span style={{ fontSize: '0.76rem' }}>(coming in Phase 6)</span>
-                    </label>
+                    {(() => {
+                      const hasRole = !!(selectedCandidate?.execution_role && selectedCandidate.execution_role.trim() !== '')
+                      return (
+                        <label
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            cursor: hasRole ? 'pointer' : 'not-allowed',
+                            color: hasRole ? undefined : 'var(--text-muted)',
+                          }}
+                          title={hasRole
+                            ? `Auto-dispatch to role: ${selectedCandidate?.execution_role}`
+                            : 'Set execution_role on this candidate to enable auto-dispatch'}
+                        >
+                          <input
+                            type="radio"
+                            name="execution-mode"
+                            checked={selectedExecutionMode === 'role_dispatch'}
+                            onChange={() => onSelectedExecutionModeChange('role_dispatch')}
+                            disabled={!hasRole}
+                            aria-disabled={!hasRole}
+                          />
+                          <Jargon term="dispatch">Auto-dispatch</Jargon>
+                        </label>
+                      )
+                    })()}
                   </div>
                 )}
 
                 <div className="planning-candidate-actions">
-                  <button className="btn btn-primary" onClick={() => onPersistReview()} disabled={savingCandidate || applyingCandidate || !candidateFormDirty || selectedCandidateApplied}>
-                    {savingCandidate ? 'Saving…' : 'Save Changes'}
+                  {candidateFormDirty && !selectedCandidateApplied && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => onPersistReview()}
+                      disabled={savingCandidate || applyingCandidate}
+                    >
+                      {savingCandidate ? 'Saving…' : 'Save edits'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={onSkipCandidate}
+                    disabled={savingCandidate || applyingCandidate || selectedCandidateApplied || selectedCandidate.status === 'rejected'}
+                  >
+                    {selectedCandidate.status === 'rejected' ? 'Skipped' : 'Skip'}
                   </button>
-                  <button className="btn btn-ghost" onClick={onResetCandidateForm} disabled={savingCandidate || applyingCandidate || !candidateFormDirty}>
-                    Reset
-                  </button>
-                  <button className="btn btn-ghost" onClick={() => onPersistReview('draft')} disabled={savingCandidate || applyingCandidate || selectedCandidateApplied}>
-                    Return To Draft
-                  </button>
-                  <button className="btn btn-primary" onClick={() => onPersistReview('approved')} disabled={savingCandidate || applyingCandidate || selectedCandidateApplied}>
-                    Approve
-                  </button>
-                  <button className="btn btn-danger" onClick={() => onPersistReview('rejected')} disabled={savingCandidate || applyingCandidate || selectedCandidateApplied}>
-                    Reject
-                  </button>
-                  <button className="btn btn-primary" onClick={onApplyCandidate} disabled={!canApplySelectedCandidate}>
-                    {applyingCandidate ? 'Applying…' : selectedCandidateApplied ? 'Applied' : 'Apply To Tasks'}
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={onApplyCandidate}
+                    disabled={!canApplySelectedCandidate || applyingCandidate}
+                  >
+                    {applyingCandidate ? 'Applying…' : selectedCandidateApplied ? 'Applied ✓' : 'Apply'}
                   </button>
                 </div>
               </>

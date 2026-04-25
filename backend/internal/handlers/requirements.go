@@ -105,6 +105,46 @@ func (h *RequirementHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, http.StatusCreated, requirement, nil)
 }
 
+func (h *RequirementHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	req, err := h.store.GetByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to verify requirement")
+		return
+	}
+	if req == nil {
+		writeError(w, http.StatusNotFound, "requirement not found")
+		return
+	}
+	if !requestAllowsProject(r, req.ProjectID) {
+		writeError(w, http.StatusForbidden, "api key not allowed for this project")
+		return
+	}
+	hasLineage, err := h.store.HasAppliedTasks(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check requirement lineage")
+		return
+	}
+	if hasLineage {
+		writeError(w, http.StatusConflict, "requirement has applied tasks and cannot be deleted; use archive instead")
+		return
+	}
+	hasActive, err := h.store.HasActiveRun(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check active runs")
+		return
+	}
+	if hasActive {
+		writeError(w, http.StatusConflict, "requirement has an active planning run; wait for it to complete before deleting")
+		return
+	}
+	if err := h.store.Delete(id); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete requirement")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *RequirementHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	requirement, err := h.store.GetByID(id)

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { AccountBinding, PlanningExecutionMode, PlanningProviderOptions, Requirement } from '../../../types'
+import type { PlanningExecutionMode, PlanningProviderOptions, Requirement } from '../../../types'
+import type { CliConfigOption } from './hooks/usePlanningWorkspaceData'
 import { formatRelativeTime } from '../../../utils/formatters'
 import Jargon from '../../../components/Jargon'
 import {
@@ -19,10 +20,10 @@ interface PlanningLauncherProps {
   executionMode: PlanningExecutionMode
   onExecutionModeChange: (mode: PlanningExecutionMode) => void
 
-  cliBindings: AccountBinding[]
-  cliBindingsLoading: boolean
-  selectedCliBindingId: string | null
-  onCliBindingChange: (id: string) => void
+  cliConfigs: CliConfigOption[]
+  cliConfigsLoading: boolean
+  selectedCliConfigKey: string | null
+  onCliConfigChange: (key: string) => void
 
   planningModelOverride: string
   onPlanningModelOverrideChange: (value: string) => void
@@ -36,6 +37,8 @@ interface PlanningLauncherProps {
   onStartRun: () => void
   onRefreshRuns: () => void
   onRunWhatsnext: () => void
+  /** Dispatch status of the current active run (if any), used to show connector badge state */
+  activeRunDispatchStatus?: string | null
 }
 
 /**
@@ -54,10 +57,10 @@ export function PlanningLauncher({
   providerOptionsError,
   executionMode,
   onExecutionModeChange,
-  cliBindings,
-  cliBindingsLoading,
-  selectedCliBindingId,
-  onCliBindingChange,
+  cliConfigs,
+  cliConfigsLoading,
+  selectedCliConfigKey,
+  onCliConfigChange,
   planningModelOverride,
   onPlanningModelOverrideChange,
   creatingRun,
@@ -68,6 +71,7 @@ export function PlanningLauncher({
   onStartRun,
   onRefreshRuns,
   onRunWhatsnext,
+  activeRunDispatchStatus,
 }: PlanningLauncherProps) {
   const [advanced, setAdvanced] = useState(() => localStorage.getItem('anpm_launcher_advanced_open') === '1')
 
@@ -118,10 +122,10 @@ export function PlanningLauncher({
 
       <div className="planning-duplicate-note" style={{ marginTop: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
-          <strong>Decomposition Settings</strong>
+          <strong>Run via</strong>
           <button
             type="button"
-            className="btn btn-secondary btn-sm"
+            className="btn btn-ghost btn-sm"
             onClick={toggleAdvanced}
             aria-expanded={advanced}
           >
@@ -129,11 +133,9 @@ export function PlanningLauncher({
           </button>
         </div>
 
-        {!advanced && (
+        {!advanced && !providerOptionsLoading && (
           <div style={{ marginTop: '0.5rem', fontSize: '0.88rem', color: 'var(--text-muted)' }}>
             <Jargon term="execution mode">{planningExecutionModeLabel(executionMode)}</Jargon>
-            {' · '}
-            {cliBindings.find(b => b.id === selectedCliBindingId)?.label ?? 'auto'}
           </div>
         )}
 
@@ -148,7 +150,7 @@ export function PlanningLauncher({
                 <select
                   value={executionMode}
                   onChange={e => onExecutionModeChange(e.target.value as PlanningExecutionMode)}
-                  disabled={creatingRun || providerOptionsLoading}
+                  disabled={creatingRun}
                 >
                   {providerOptions.available_execution_modes.map(mode => (
                     <option key={mode} value={mode}>{planningExecutionModeLabel(mode)}</option>
@@ -162,7 +164,15 @@ export function PlanningLauncher({
                 {providerOptions?.paired_connector_available ? (
                   <div className="connector-run-info connector-run-info-ready">
                     <div className="connector-run-row">
-                      <span className="connector-badge connector-badge-ready">● Online</span>
+                      {(() => {
+                        if (activeRunDispatchStatus === 'leased') {
+                          return <span className="connector-badge" style={{ background: 'rgba(251,191,36,0.15)', color: '#d97706' }}>● Running job…</span>
+                        }
+                        if (activeRunDispatchStatus === 'queued') {
+                          return <span className="connector-badge" style={{ background: 'rgba(147,197,253,0.15)', color: '#3b82f6' }}>⏳ Queued…</span>
+                        }
+                        return <span className="connector-badge connector-badge-ready">● Online</span>
+                      })()}
                       <strong>{providerOptions.active_connector_label ?? 'My Machine'}</strong>
                     </div>
                     <div className="connector-run-desc">
@@ -171,30 +181,30 @@ export function PlanningLauncher({
                     </div>
 
                     <div style={{ marginTop: '0.75rem', display: 'grid', gap: '0.5rem' }}>
-                      {cliBindingsLoading ? (
-                        <span style={{ fontSize: '0.88rem', color: 'var(--text-muted)' }}>Loading CLI bindings…</span>
-                      ) : cliBindings.length === 0 ? (
+                      {cliConfigsLoading ? (
+                        <span style={{ fontSize: '0.88rem', color: 'var(--text-muted)' }}>Loading CLI configs…</span>
+                      ) : cliConfigs.length === 0 ? (
                         <div style={{ fontSize: '0.88rem', color: 'var(--text-muted)' }}>
-                          No CLI binding configured.{' '}
-                          <Link to="/account-bindings">Set up a CLI binding</Link> to use your subscription.
+                          No CLI configured on this machine.{' '}
+                          <Link to="/settings/connector">Set up CLIs in My Connector →</Link>
                         </div>
                       ) : (
                         <label style={{ display: 'grid', gap: '0.3rem' }}>
-                          <span style={{ fontSize: '0.88rem' }}>CLI binding for this run</span>
+                          <span style={{ fontSize: '0.88rem' }}>CLI for this run</span>
                           <select
-                            value={selectedCliBindingId ?? ''}
-                            onChange={e => onCliBindingChange(e.target.value)}
+                            value={selectedCliConfigKey ?? ''}
+                            onChange={e => onCliConfigChange(e.target.value)}
                             disabled={creatingRun}
                             style={{ padding: '0.4rem 0.6rem', fontSize: '0.88rem', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '0.375rem', color: 'var(--text)' }}
                           >
-                            {cliBindings.map(b => (
-                              <option key={b.id} value={b.id}>
-                                {b.label}{b.model_id ? ` [${b.model_id}]` : ''}{b.is_primary ? ' (primary)' : ''}
+                            {cliConfigs.map(cfg => (
+                              <option key={cfg.key} value={cfg.key}>
+                                {cfg.connectorLabel} — {cfg.configLabel} [{cfg.modelId}]{cfg.isPrimary ? ' (primary)' : ''}{!cfg.isConnectorOnline ? ' (offline)' : ''}
                               </option>
                             ))}
                           </select>
                           <small style={{ color: 'var(--text-muted)' }}>
-                            Manage bindings in <Link to="/account-bindings">My Bindings</Link>.
+                            Manage CLIs in <Link to="/settings/connector">My Connector</Link>.
                           </small>
                         </label>
                       )}
@@ -260,7 +270,7 @@ export function PlanningLauncher({
         <button
           className="btn btn-primary"
           onClick={onStartRun}
-          disabled={creatingRun || !runReady || providerOptionsLoading || (usesLocalConnector && cliBindingsLoading)}
+          disabled={creatingRun || !runReady || providerOptionsLoading || (usesLocalConnector && cliConfigsLoading)}
         >
           {creatingRun ? 'Starting…' : 'Start Planning Run'}
         </button>

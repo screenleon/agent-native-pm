@@ -244,21 +244,18 @@ func (h *PlanningRunHandler) resolvePathBBinding(w http.ResponseWriter, r *http.
 			Label:      cfg.Label,
 			IsPrimary:  cfg.IsPrimary,
 		}
-		// Reject mismatched adapter_type / model_override rather than
-		// silently overwriting them. A row that says
-		// "adapter_type=whatsnext" but persists a binding_snapshot with
-		// provider_id=cli:claude is internally inconsistent and confuses
-		// downstream auditing (Critic SHOULD-FIX #3 / Copilot review on
-		// PR #23).
-		if at := strings.TrimSpace(req.AdapterType); at != "" && at != cfg.ProviderID {
-			writeError(w, http.StatusBadRequest, "adapter_type does not match the cli_config provider_id")
-			return nil, nil, false
+		// adapter_type is a semantic planning type ("backlog", "whatsnext")
+		// and is independent of cfg.ProviderID ("cli:claude", "cli:codex").
+		// Preserve the caller's intent; default to "backlog" if omitted.
+		// The provider identity is captured in the binding_snapshot.ProviderID
+		// — no need to overwrite adapter_type with it.
+		if strings.TrimSpace(req.AdapterType) == "" {
+			req.AdapterType = "backlog"
 		}
 		if mo := strings.TrimSpace(req.ModelOverride); mo != "" && cfg.ModelID != "" && mo != cfg.ModelID {
 			writeError(w, http.StatusBadRequest, "model_override does not match the cli_config model_id")
 			return nil, nil, false
 		}
-		req.AdapterType = cfg.ProviderID
 		req.ModelOverride = cfg.ModelID
 		// Clear any caller-supplied account_binding_id so it does not get
 		// persisted alongside the cli_config snapshot — otherwise the
@@ -557,7 +554,14 @@ func (h *PlanningRunHandler) decorateProviderOptions(r *http.Request, options mo
 	}
 	options.PairedConnectorAvailable = true
 	options.ActiveConnectorLabel = connector.Label
-	options.AvailableExecutionModes = append(options.AvailableExecutionModes, models.PlanningExecutionModeLocalConnector)
+	// local_connector goes first: for subscription-only users it is the
+	// only usable mode, so it should be the default (index 0).
+	// Users who have both a connector and an API key benefit from the
+	// local path too since it uses their existing CLI subscription.
+	options.AvailableExecutionModes = append(
+		[]string{models.PlanningExecutionModeLocalConnector},
+		options.AvailableExecutionModes...,
+	)
 	return options, nil
 }
 

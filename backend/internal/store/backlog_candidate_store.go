@@ -384,7 +384,7 @@ func (s *BacklogCandidateStore) ApplyToTaskWithMode(id, executionMode string) (*
 		}
 	}
 
-	if candidate.Status != models.BacklogCandidateStatusApproved && candidate.Status != models.BacklogCandidateStatusApplied {
+	if candidate.Status == models.BacklogCandidateStatusRejected {
 		return nil, ErrBacklogCandidateNotApproved
 	}
 
@@ -593,12 +593,24 @@ func cloneEvidenceDetail(detail models.PlanningEvidenceDetail) models.PlanningEv
 
 func scanTask(row rowScanner) (*models.Task, error) {
 	var task models.Task
-	err := row.Scan(&task.ID, &task.ProjectID, &task.Title, &task.Description, &task.Status, &task.Priority, &task.Assignee, &task.Source, &task.CreatedAt, &task.UpdatedAt)
+	var executionResultRaw sql.NullString
+	err := row.Scan(
+		&task.ID, &task.ProjectID, &task.Title, &task.Description,
+		&task.Status, &task.Priority, &task.Assignee, &task.Source,
+		&task.DispatchStatus, &executionResultRaw,
+		&task.CreatedAt, &task.UpdatedAt,
+	)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if executionResultRaw.Valid && executionResultRaw.String != "" {
+		task.ExecutionResult = json.RawMessage(executionResultRaw.String)
+	}
+	if task.DispatchStatus == "" {
+		task.DispatchStatus = models.TaskDispatchStatusNone
 	}
 	return &task, nil
 }
@@ -729,7 +741,8 @@ func getTaskLineageByCandidateID(tx *sql.Tx, candidateID string) (*models.TaskLi
 func getTaskByID(tx *sql.Tx, id string) (*models.Task, error) {
 	return scanTask(
 		tx.QueryRow(`
-			SELECT id, project_id, title, description, status, priority, assignee, source, created_at, updated_at
+			SELECT id, project_id, title, description, status, priority, assignee, source,
+			       dispatch_status, execution_result, created_at, updated_at
 			FROM tasks
 			WHERE id = $1
 		`, id),
@@ -773,7 +786,8 @@ func (s *BacklogCandidateStore) lockCandidateApplyKey(tx *sql.Tx, projectID, nor
 func findOpenTaskByNormalizedTitle(tx *sql.Tx, projectID, normalizedTitle string) (*models.Task, error) {
 	return scanTask(
 		tx.QueryRow(`
-			SELECT id, project_id, title, description, status, priority, assignee, source, created_at, updated_at
+			SELECT id, project_id, title, description, status, priority, assignee, source,
+			       dispatch_status, execution_result, created_at, updated_at
 			FROM tasks
 			WHERE project_id = $1
 			  AND status IN ('todo', 'in_progress')
@@ -791,6 +805,9 @@ func createAppliedCandidateTask(tx *sql.Tx, projectID, title, description string
 // createAppliedCandidateTaskWithSource is the Phase-5-aware variant.
 // Phase 4 callers go through createAppliedCandidateTask which pins the
 // source to the pre-existing AppliedCandidateTaskSource sentinel.
+//
+// Phase 6b: when source starts with "role_dispatch" the task is given
+// dispatch_status = 'queued' so the connector polling loop can claim it.
 func createAppliedCandidateTaskWithSource(tx *sql.Tx, projectID, title, description, source string) (*models.Task, error) {
 	id := uuid.New().String()
 	now := time.Now().UTC()
@@ -801,25 +818,32 @@ func createAppliedCandidateTaskWithSource(tx *sql.Tx, projectID, title, descript
 		trimmedSource = appliedCandidateTaskSource
 	}
 
+	// Phase 6b: role_dispatch tasks enter the connector queue immediately.
+	dispatchStatus := models.TaskDispatchStatusNone
+	if strings.HasPrefix(trimmedSource, "role_dispatch") {
+		dispatchStatus = models.TaskDispatchStatusQueued
+	}
+
 	_, err := tx.Exec(`
-		INSERT INTO tasks (id, project_id, title, description, status, priority, assignee, source, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-	`, id, projectID, trimmedTitle, trimmedDescription, "todo", "medium", "", trimmedSource, now)
+		INSERT INTO tasks (id, project_id, title, description, status, priority, assignee, source, dispatch_status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+	`, id, projectID, trimmedTitle, trimmedDescription, "todo", "medium", "", trimmedSource, dispatchStatus, now)
 	if err != nil {
 		return nil, err
 	}
 
 	return &models.Task{
-		ID:          id,
-		ProjectID:   projectID,
-		Title:       trimmedTitle,
-		Description: trimmedDescription,
-		Status:      "todo",
-		Priority:    "medium",
-		Assignee:    "",
-		Source:      trimmedSource,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:             id,
+		ProjectID:      projectID,
+		Title:          trimmedTitle,
+		Description:    trimmedDescription,
+		Status:         "todo",
+		Priority:       "medium",
+		Assignee:       "",
+		Source:         trimmedSource,
+		DispatchStatus: dispatchStatus,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}, nil
 }
 

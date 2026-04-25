@@ -62,7 +62,7 @@ func main() {
 	// Phase 1 stores
 	projectStore := store.NewProjectStore(db)
 	requirementStore := store.NewRequirementStore(db)
-	taskStore := store.NewTaskStore(db)
+	taskStore := store.NewTaskStoreWithDialect(db, dialect)
 	documentStore := store.NewDocumentStore(db)
 
 	// Phase 2 stores
@@ -145,7 +145,8 @@ func main() {
 		WithProjectStore(projectStore).
 		WithNotificationStore(notificationStore).
 		WithContextBuilder(planning.NewProjectContextBuilder(taskStore, documentStore, driftSignalStore, syncRunStore, agentRunStore)).
-		WithAccountBindingStore(accountBindingStore)
+		WithAccountBindingStore(accountBindingStore).
+		WithTaskStore(taskStore)
 
 	// Phase 4 handlers
 	notificationBroker := events.NewBroker()

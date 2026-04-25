@@ -7,11 +7,13 @@ import type {
   BacklogCandidate,
   PlanningProviderOptions,
   PlanningExecutionMode,
-  AccountBinding,
+  LocalConnector,
 } from '../../../../types'
 import {
   createRequirement,
   updateRequirement,
+  deleteRequirement,
+  listProjectTaskLineage,
   getPlanningProviderOptions,
   listPlanningRuns,
   createPlanningRun,
@@ -19,10 +21,23 @@ import {
   listPlanningRunBacklogCandidates,
   updateBacklogCandidate,
   applyBacklogCandidate,
-  listAccountBindings,
+  listLocalConnectors,
+  listConnectorCliConfigs,
 } from '../../../../api/client'
+import type { CliConfig } from '../../../../api/client'
 import type { RequirementIntakeForm } from '../RequirementIntake'
 import type { CandidateReviewForm } from '../CandidateReviewPanel'
+
+export interface CliConfigOption {
+  key: string            // composite: `${connectorId}:${configId}`
+  connectorId: string
+  connectorLabel: string
+  configId: string
+  configLabel: string
+  modelId: string
+  isPrimary: boolean
+  isConnectorOnline: boolean
+}
 
 export interface UsePlanningWorkspaceDataInput {
   projectId: string
@@ -67,9 +82,9 @@ export function usePlanningWorkspaceData({
   const [planningProviderOptionsError, setPlanningProviderOptionsError] = useState<string | null>(null)
   const [planningModelOverride, setPlanningModelOverride] = useState('')
   const [planningExecutionMode, setPlanningExecutionMode] = useState<PlanningExecutionMode>('server_provider')
-  const [cliBindings, setCliBindings] = useState<AccountBinding[]>([])
-  const [cliBindingsLoading, setCliBindingsLoading] = useState(false)
-  const [selectedCliBindingId, setSelectedCliBindingId] = useState<string | null>(null)
+  const [cliConfigs, setCliConfigs] = useState<CliConfigOption[]>([])
+  const [cliConfigsLoading, setCliConfigsLoading] = useState(false)
+  const [selectedCliConfigKey, setSelectedCliConfigKey] = useState<string | null>(null)
   const [planningCandidatesLoading, setPlanningCandidatesLoading] = useState(false)
   const [planningCandidatesError, setPlanningCandidatesError] = useState<string | null>(null)
   const [candidateReviewError, setCandidateReviewError] = useState<string | null>(null)
@@ -86,6 +101,8 @@ export function usePlanningWorkspaceData({
   const [candidateFormSourceId, setCandidateFormSourceId] = useState<string | null>(null)
   const [showRequirementIntake, setShowRequirementIntake] = useState(false)
   const [archivingRequirementId, setArchivingRequirementId] = useState<string | null>(null)
+  const [discardingRequirementId, setDiscardingRequirementId] = useState<string | null>(null)
+  const [requirementIdsWithAppliedTasks, setRequirementIdsWithAppliedTasks] = useState<Set<string>>(new Set())
   const [runningWhatsnext, setRunningWhatsnext] = useState(false)
   const [cancellingPlanningRunId, setCancellingPlanningRunId] = useState<string | null>(null)
   const [planningRunFlash, setPlanningRunFlash] = useState<{ runId: string; kind: 'success' | 'error'; message: string } | null>(null)
@@ -125,20 +142,61 @@ export function usePlanningWorkspaceData({
     loadProviderOptions()
   }, [loadProviderOptions])
 
-  async function loadCliBindings() {
-    setCliBindingsLoading(true)
+  async function loadCliConfigs() {
+    setCliConfigsLoading(true)
     try {
-      const res = await listAccountBindings()
-      const cli = res.data.filter(b => b.provider_id.startsWith('cli:') && b.is_active)
-      setCliBindings(cli)
-      const primary = cli.find(b => b.is_primary) ?? cli[0] ?? null
-      setSelectedCliBindingId(prev => prev ?? primary?.id ?? null)
+      const connectorsResp = await listLocalConnectors()
+      const activeConnectors = connectorsResp.data.filter((c: LocalConnector) => c.status !== 'revoked')
+      const entries = await Promise.all(
+        activeConnectors.map((c: LocalConnector) =>
+          listConnectorCliConfigs(c.id)
+            .then(r => ({ connector: c, configs: r.data as CliConfig[] }))
+            .catch(() => ({ connector: c, configs: [] as CliConfig[] }))
+        )
+      )
+      const options: CliConfigOption[] = []
+      for (const { connector, configs } of entries) {
+        for (const cfg of configs) {
+          options.push({
+            key: `${connector.id}:${cfg.id}`,
+            connectorId: connector.id,
+            connectorLabel: connector.label || 'Unnamed Connector',
+            configId: cfg.id,
+            configLabel: cfg.label || cfg.provider_id,
+            modelId: cfg.model_id,
+            isPrimary: cfg.is_primary,
+            isConnectorOnline: connector.status === 'online',
+          })
+        }
+      }
+      setCliConfigs(options)
+      const autoSelect = options.find(o => o.isPrimary && o.isConnectorOnline)
+        ?? options.find(o => o.isPrimary)
+        ?? options[0]
+        ?? null
+      setSelectedCliConfigKey(prev => prev ?? (autoSelect?.key ?? null))
     } catch {
-      // non-critical; leave empty
+      // non-critical
     } finally {
-      setCliBindingsLoading(false)
+      setCliConfigsLoading(false)
     }
   }
+
+  async function loadAppliedLineageMeta() {
+    try {
+      const resp = await listProjectTaskLineage(projectId)
+      const ids = new Set(resp.data.map((e: { requirement_id?: string }) => e.requirement_id).filter((id): id is string => Boolean(id)))
+      setRequirementIdsWithAppliedTasks(ids)
+    } catch {
+      // non-fatal, default to empty set (safe fallback = Archive only)
+    }
+  }
+
+  useEffect(() => {
+    void loadAppliedLineageMeta()
+  // Only re-run when projectId changes; the function is stable within a project mount.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId])
 
   useEffect(() => {
     if (requirements.length === 0) {
@@ -146,8 +204,15 @@ export function usePlanningWorkspaceData({
       return
     }
     if (!selectedRequirementId || !requirements.some(r => r.id === selectedRequirementId)) {
-      const first = requirements.find(r => r.status !== 'archived')
-      setSelectedRequirementId(first?.id ?? null)
+      const firstUserReq = requirements.find(
+        r => r.status !== 'archived' && r.source !== 'analysis' && r.source !== 'system'
+      )
+      // When no user requirements exist, fall back to the most recent analysis
+      // requirement (What's Next) so results remain accessible after reload.
+      const firstSelectable = firstUserReq ?? requirements.find(
+        r => r.status !== 'archived' && r.source === 'analysis'
+      )
+      setSelectedRequirementId(firstSelectable?.id ?? null)
     }
   }, [requirements, selectedRequirementId])
 
@@ -246,7 +311,8 @@ export function usePlanningWorkspaceData({
       return
     }
     if (!selectedPlanningCandidateId || !planningCandidates.some(c => c.id === selectedPlanningCandidateId)) {
-      setSelectedPlanningCandidateId(planningCandidates[0].id)
+      const firstActive = planningCandidates.find(c => c.status !== 'rejected')
+      setSelectedPlanningCandidateId(firstActive?.id ?? null)
     }
   }, [planningCandidates, selectedPlanningCandidateId, pendingSelection.candidateId])
 
@@ -290,6 +356,12 @@ export function usePlanningWorkspaceData({
 
   // --- Computed values ---
 
+  const activeRun = planningRuns.find(
+    r => r.status === 'queued' || r.status === 'running' ||
+         r.dispatch_status === 'queued' || r.dispatch_status === 'leased'
+  )
+  const activeRunDispatchStatus = activeRun?.dispatch_status ?? null
+
   const selectedRequirement = requirements.find(r => r.id === selectedRequirementId) ?? null
   const selectedPlanningRun = planningRuns.find(run => run.id === selectedPlanningRunId) ?? null
   const selectedPlanningCandidate = planningCandidates.find(c => c.id === selectedPlanningCandidateId) ?? null
@@ -323,8 +395,8 @@ export function usePlanningWorkspaceData({
   )
   const canApplySelectedCandidate = Boolean(
     selectedPlanningCandidate &&
-    selectedPlanningCandidate.status === 'approved' &&
-    !candidateFormDirty &&
+    selectedPlanningCandidate.status !== 'rejected' &&
+    selectedPlanningCandidate.status !== 'applied' &&
     !savingCandidate &&
     !applyingCandidate,
   )
@@ -362,9 +434,9 @@ export function usePlanningWorkspaceData({
 
   useEffect(() => {
     if (planningSelectedExecutionMode === 'local_connector') {
-      void loadCliBindings()
+      void loadCliConfigs()
     }
-  // loadCliBindings is defined in the same render scope but is not memoized.
+  // loadCliConfigs is defined in the same render scope but is not memoized.
   // The dep array intentionally contains only the mode to avoid re-fetching on
   // every render; the function reads current state via closure at call time.
   }, [planningSelectedExecutionMode])
@@ -482,6 +554,21 @@ export function usePlanningWorkspaceData({
     }
   }
 
+  async function handleDiscardRequirement(id: string) {
+    setDiscardingRequirementId(id)
+    try {
+      await deleteRequirement(id)
+      onRequirementsChange(requirements.filter(r => r.id !== id))
+      if (selectedRequirementId === id) setSelectedRequirementId(null)
+      onSuccess('Requirement discarded.')
+      await loadAppliedLineageMeta()
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to discard requirement')
+    } finally {
+      setDiscardingRequirementId(null)
+    }
+  }
+
   async function handleCreatePlanningRun() {
     if (!selectedRequirement || !planningRunReady) return
     try {
@@ -495,7 +582,12 @@ export function usePlanningWorkspaceData({
         ...(requestedModelID ? { model_id: requestedModelID } : {}),
         execution_mode: planningSelectedExecutionMode,
         ...(planningSelectedExecutionMode === 'local_connector' ? { adapter_type: 'backlog' } : {}),
-        ...(planningSelectedExecutionMode === 'local_connector' && selectedCliBindingId ? { account_binding_id: selectedCliBindingId } : {}),
+        ...(planningSelectedExecutionMode === 'local_connector' && selectedCliConfigKey
+          ? (() => {
+              const [connectorId, configId] = selectedCliConfigKey.split(':')
+              return { connector_id: connectorId, cli_config_id: configId }
+            })()
+          : {}),
       })
       setPlanningRuns(prev => [response.data, ...prev.filter(run => run.id !== response.data.id)])
       setSelectedPlanningRunId(response.data.id)
@@ -551,7 +643,12 @@ export function usePlanningWorkspaceData({
         trigger_source: 'manual',
         execution_mode: planningSelectedExecutionMode,
         adapter_type: 'whatsnext',
-        ...(planningSelectedExecutionMode === 'local_connector' && selectedCliBindingId ? { account_binding_id: selectedCliBindingId } : {}),
+        ...(planningSelectedExecutionMode === 'local_connector' && selectedCliConfigKey
+          ? (() => {
+              const [connectorId, configId] = selectedCliConfigKey.split(':')
+              return { connector_id: connectorId, cli_config_id: configId }
+            })()
+          : {}),
       })
       setPlanningRuns(prev => [runRes.data, ...prev.filter(r => r.id !== runRes.data.id)])
       setSelectedPlanningRunId(runRes.data.id)
@@ -610,18 +707,53 @@ export function usePlanningWorkspaceData({
   // so the backend records the task's `source` correctly for audit.
   const [selectedExecutionMode, setSelectedExecutionMode] = useState<'manual' | 'role_dispatch'>('manual')
 
+  async function handleSkipCandidate() {
+    if (!selectedPlanningCandidate || savingCandidate || applyingCandidate) return
+    const currentId = selectedPlanningCandidate.id
+
+    // Advance to next non-rejected candidate in list order, wrapping if at end
+    const currentIdx = planningCandidates.findIndex(c => c.id === currentId)
+    const rest = [
+      ...planningCandidates.slice(currentIdx + 1),
+      ...planningCandidates.slice(0, currentIdx),
+    ]
+    const next = rest.find(c => c.status !== 'rejected') ?? null
+
+    try {
+      setSavingCandidate(true)
+      setCandidateReviewError(null)
+      const response = await updateBacklogCandidate(currentId, { status: 'rejected' })
+      setPlanningCandidates(prev => prev.map(c => c.id === currentId ? response.data : c))
+      setSelectedPlanningCandidateId(next?.id ?? null)
+      syncCandidateForm(next ?? null)
+    } catch (err) {
+      setCandidateReviewError(err instanceof Error ? err.message : 'Failed to skip candidate')
+    } finally {
+      setSavingCandidate(false)
+    }
+  }
+
   async function handleApplyPlanningCandidate() {
     if (!selectedPlanningCandidate) return
-    if (candidateFormDirty) {
-      setCandidateReviewError('Save or reset candidate edits before applying it to tasks.')
-      setCandidateReviewMessage(null)
-      return
-    }
 
     try {
       setApplyingCandidate(true)
       setCandidateReviewError(null)
       setCandidateReviewMessage(null)
+
+      // Auto-save any dirty title/description edits before applying
+      if (candidateFormDirty) {
+        const editPayload: { title?: string; description?: string } = {}
+        const trimmedTitle = candidateForm.title.trim()
+        if (trimmedTitle !== selectedPlanningCandidate.title) editPayload.title = trimmedTitle
+        if (candidateForm.description !== selectedPlanningCandidate.description) editPayload.description = candidateForm.description
+        if (Object.keys(editPayload).length > 0) {
+          const saved = await updateBacklogCandidate(selectedPlanningCandidate.id, editPayload)
+          setPlanningCandidates(prev => prev.map(c => c.id === saved.data.id ? saved.data : c))
+          syncCandidateForm(saved.data)
+        }
+      }
+
       const response = await applyBacklogCandidate(selectedPlanningCandidate.id, {
         executionMode: selectedExecutionMode,
       })
@@ -630,6 +762,7 @@ export function usePlanningWorkspaceData({
       await Promise.all([
         onReload(),
         selectedPlanningRunId ? loadPlanningCandidates(selectedPlanningRunId) : Promise.resolve(),
+        loadAppliedLineageMeta(),
       ])
       setCandidateReviewMessage(
         response.data.already_applied
@@ -683,6 +816,7 @@ export function usePlanningWorkspaceData({
     applyingCandidate,
     onPersistCandidateReview: persistCandidateReview,
     onApplyCandidate: handleApplyPlanningCandidate,
+    onSkipCandidate: handleSkipCandidate,
     onResetCandidateForm: resetCandidateForm,
     // Phase 5 B3: apply execution mode + setter so the panel radio group
     // can drive the Apply request body.
@@ -694,10 +828,10 @@ export function usePlanningWorkspaceData({
     planningProviderOptionsError,
     planningSelectedExecutionMode,
     onPlanningExecutionModeChange: setPlanningExecutionMode,
-    cliBindings,
-    cliBindingsLoading,
-    selectedCliBindingId,
-    onCliBindingChange: setSelectedCliBindingId,
+    cliConfigs,
+    cliConfigsLoading,
+    selectedCliConfigKey,
+    onCliConfigChange: setSelectedCliConfigKey,
     planningModelOverride,
     onPlanningModelOverrideChange: setPlanningModelOverride,
     planningRunReady,
@@ -712,6 +846,10 @@ export function usePlanningWorkspaceData({
     onCreateRequirement: handleCreateRequirement,
     onArchiveRequirement: handleArchiveRequirement,
     archivingRequirementId,
+    onDiscardRequirement: handleDiscardRequirement,
+    discardingRequirementId,
+    requirementIdsWithAppliedTasks,
+    activeRunDispatchStatus,
     // run flash
     planningRunFlash,
     onDismissRunFlash: () => setPlanningRunFlash(null),

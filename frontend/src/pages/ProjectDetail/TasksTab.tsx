@@ -2,6 +2,128 @@ import { useState, useEffect } from 'react'
 import type { Task, ProjectSummary } from '../../types'
 import { createTask, updateTask, deleteTask, batchUpdateTasks, listProjectTaskLineage, type AppliedLineageEntry } from '../../api/client'
 
+// ---------------------------------------------------------------------------
+// DispatchStatusBadge — inline indicator for role_dispatch execution lifecycle
+// ---------------------------------------------------------------------------
+interface DispatchStatusBadgeProps { task: Task }
+
+function DispatchStatusBadge({ task }: DispatchStatusBadgeProps) {
+  const [expanded, setExpanded] = useState(false)
+  const ds = task.dispatch_status
+
+  if (!ds || ds === 'none') return null
+
+  const labelMap: Record<string, string> = {
+    queued: '待執行',
+    running: '執行中…',
+    completed: '已完成',
+    failed: '失敗',
+  }
+  const colorMap: Record<string, string> = {
+    queued: 'var(--text-muted)',
+    running: 'var(--color-info, #6366f1)',
+    completed: 'var(--color-success, #22c55e)',
+    failed: 'var(--color-danger, #ef4444)',
+  }
+  const label = labelMap[ds] ?? ds
+  const color = colorMap[ds] ?? 'var(--text-muted)'
+
+  if (ds === 'completed' && task.execution_result) {
+    const files: string[] = []
+    try {
+      const raw = task.execution_result as Record<string, unknown>
+      if (Array.isArray(raw['files'])) {
+        for (const f of raw['files'] as unknown[]) {
+          if (typeof f === 'string') files.push(f)
+        }
+      }
+    } catch { /* ignore */ }
+    return (
+      <span style={{ marginLeft: '0.5rem', verticalAlign: 'middle' }}>
+        <button
+          onClick={e => { e.stopPropagation(); setExpanded(v => !v) }}
+          style={{
+            fontSize: '0.7rem',
+            padding: '1px 6px',
+            borderRadius: '4px',
+            border: `1px solid ${color}`,
+            background: 'transparent',
+            color,
+            cursor: 'pointer',
+          }}
+          aria-expanded={expanded}
+          data-testid="dispatch-badge-completed"
+        >
+          {label} {expanded ? '▲' : '▼'}
+        </button>
+        {expanded && (
+          <span
+            onClick={e => e.stopPropagation()}
+            style={{
+              display: 'block',
+              marginTop: '4px',
+              fontSize: '0.72rem',
+              color: 'var(--text-muted)',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+            }}
+            data-testid="dispatch-result-block"
+          >
+            {files.length > 0
+              ? files.map(f => <span key={f} style={{ display: 'block' }}>{f}</span>)
+              : JSON.stringify(task.execution_result, null, 2)}
+          </span>
+        )}
+      </span>
+    )
+  }
+
+  if (ds === 'failed') {
+    const errMsg: string = (() => {
+      try {
+        const raw = task.execution_result as Record<string, unknown> | null | undefined
+        if (raw && typeof raw['error_message'] === 'string') return raw['error_message']
+      } catch { /* ignore */ }
+      return ''
+    })()
+    return (
+      <span style={{ marginLeft: '0.5rem', verticalAlign: 'middle' }}>
+        <span
+          style={{ fontSize: '0.7rem', padding: '1px 6px', borderRadius: '4px', border: `1px solid ${color}`, color }}
+          data-testid="dispatch-badge-failed"
+        >
+          {label}
+        </span>
+        {errMsg && (
+          <span
+            style={{ marginLeft: '4px', fontSize: '0.7rem', color }}
+            data-testid="dispatch-error-message"
+          >
+            {errMsg}
+          </span>
+        )}
+      </span>
+    )
+  }
+
+  return (
+    <span
+      style={{
+        marginLeft: '0.5rem',
+        fontSize: '0.7rem',
+        padding: '1px 6px',
+        borderRadius: '4px',
+        border: `1px solid ${color}`,
+        color,
+        verticalAlign: 'middle',
+      }}
+      data-testid={`dispatch-badge-${ds}`}
+    >
+      {label}
+    </span>
+  )
+}
+
 type TaskFilterState = { status: '' | Task['status']; priority: '' | Task['priority']; assignee: string }
 type BatchTaskFormState = { status: '' | Task['status']; priority: '' | Task['priority']; assignee: string; clearAssignee: boolean }
 
@@ -349,6 +471,9 @@ export function TasksTab({
                       >
                         {lineageByTask[task.id].lineage_kind === 'applied_candidate' ? '← Plan' : '← Req'}
                       </span>
+                    )}
+                    {task.dispatch_status && task.dispatch_status !== 'none' && (
+                      <DispatchStatusBadge task={task} />
                     )}
                   </td>
                   <td><span className={`badge badge-${task.status === 'done' ? 'fresh' : task.status === 'in_progress' ? 'low' : task.status === 'cancelled' ? 'stale' : 'todo'}`}>{task.status.replace('_', ' ')}</span></td>

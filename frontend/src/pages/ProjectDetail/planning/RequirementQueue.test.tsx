@@ -47,7 +47,8 @@ describe('<RequirementQueue />', () => {
     )
     expect(screen.getByText(/1 draft/i)).toBeInTheDocument()
     expect(screen.getByText(/1 planned/i)).toBeInTheDocument()
-    expect(screen.getByText(/1 archived/i)).toBeInTheDocument()
+    // "1 archived" appears twice: once in the header badge, once in the collapsed section toggle
+    expect(screen.getAllByText(/1 archived/i).length).toBeGreaterThanOrEqual(1)
     // Title appears as rendered text (original is in <strong>; the badge is a separate element)
     expect(screen.getByText('Improve sync failure UX')).toBeInTheDocument()
     expect(screen.getByText('Another')).toBeInTheDocument()
