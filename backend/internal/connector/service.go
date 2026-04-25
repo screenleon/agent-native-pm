@@ -14,6 +14,7 @@ import (
 
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/prompts"
+	"github.com/screenleon/agent-native-pm/internal/roles"
 )
 
 // cliInterpreterBlocklist is the set of bare command names that must NOT be
@@ -215,7 +216,7 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 	// PATH lookup, which is the correct behaviour for role_dispatch).
 	// The model is read from task or env; there is no per-task ModelID field
 	// in Phase 6b so we pass nil run.
-	_, cliPath, cliModel, _, resolveErr := resolveBuiltinCLI(nil, nil)
+	agent, cliPath, cliModel, _, resolveErr := resolveBuiltinCLI(nil, nil)
 	if resolveErr != "" {
 		fmt.Fprintf(s.Stderr, "task %s: CLI resolve failed: %s\n", task.ID, resolveErr)
 		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
@@ -250,18 +251,39 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 		return true, nil
 	}
 
-	// Read timeout.
-	timeoutSec := builtinDefaultTimeoutSec
+	// Read per-role timeout. The role catalog is the source of truth;
+	// ANPM_DISPATCH_TIMEOUT env can override (operators use this when
+	// they pre-know a task is unusually long). 0 = disabled. See
+	// docs/phase6c-plan.md §3 C2 for the resolution order.
+	timeoutSec := int(roles.TimeoutFor(roleID).Seconds())
 
-	// Invoke CLI.
-	output, runErrMsg := invokeBuiltinCLI(ctx, resolveAgentFromBinary(cliPath), cliPath, cliModel, rendered, timeoutSec)
+	// Invoke CLI. invokeBuiltinCLI applies signal escalation
+	// (SIGTERM → 5s → SIGKILL) and the bounded-writer output cap.
+	// Reuse the agent inferred by resolveBuiltinCLI rather than
+	// re-deriving from the binary path.
+	output, truncated, runErrMsg := invokeBuiltinCLI(ctx, agent, cliPath, cliModel, rendered, timeoutSec)
+	// Precedence: when the CLI both timed out / errored AND tripped
+	// the output cap, the runErrMsg is more informative (the user
+	// needs to know it timed out, not just that the cap fired). The
+	// cap-only path applies only when runErrMsg is empty.
 	if runErrMsg != "" {
-		errKind := classifyRunError(runErrMsg)
-		fmt.Fprintf(s.Stderr, "task %s: CLI failed: %s\n", task.ID, runErrMsg)
+		errKind := classifyDispatchRunError(runErrMsg)
+		fmt.Fprintf(s.Stderr, "task %s: CLI failed: %s (truncated=%v)\n", task.ID, runErrMsg, truncated)
 		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
 			Success:      false,
 			ErrorMessage: runErrMsg,
 			ErrorKind:    errKind,
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
+		return true, nil
+	}
+	if truncated {
+		fmt.Fprintf(s.Stderr, "task %s: CLI stdout exceeded dispatch output cap\n", task.ID)
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("CLI stdout exceeded the dispatch output cap (%d bytes)", dispatchOutputMaxBytes()),
+			ErrorKind:    models.ErrorKindOutputTooLarge,
 		}); err != nil {
 			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
 		}
@@ -282,7 +304,20 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
 			Success:      false,
 			ErrorMessage: errMsg,
-			ErrorKind:    "unknown",
+			ErrorKind:    models.ErrorKindInvalidResultSchema,
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
+		return true, nil
+	}
+
+	// Schema minimum validation (Phase 6c C2(c)).
+	if schemaErr := validateExecutionResult(parsed); schemaErr != nil {
+		fmt.Fprintf(s.Stderr, "task %s: result schema invalid: %v\n", task.ID, schemaErr)
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+			Success:      false,
+			ErrorMessage: schemaErr.Error(),
+			ErrorKind:    models.ErrorKindInvalidResultSchema,
 		}); err != nil {
 			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
 		}
@@ -300,6 +335,26 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 	}
 	fmt.Fprintf(s.Stdout, "completed task %s (role=%s)\n", task.ID, roleID)
 	return true, nil
+}
+
+// classifyDispatchRunError maps invokeBuiltinCLI error strings to the
+// dispatch-specific error_kind enum. Differs from classifyRunError
+// (used by planning runs) in that timeouts map to dispatch_timeout
+// rather than the generic adapter_timeout.
+func classifyDispatchRunError(msg string) string {
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "timed out"):
+		return models.ErrorKindDispatchTimeout
+	case strings.Contains(lower, "session") && strings.Contains(lower, "expired"):
+		return models.ErrorKindSessionExpired
+	case strings.Contains(lower, "rate limit"):
+		return models.ErrorKindRateLimited
+	case strings.Contains(lower, "context") && strings.Contains(lower, "overflow"):
+		return models.ErrorKindContextOverflow
+	default:
+		return models.ErrorKindUnknown
+	}
 }
 
 // buildConnectorRequirementContext formats the requirement summary for prompt injection.
