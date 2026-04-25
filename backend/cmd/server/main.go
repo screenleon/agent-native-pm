@@ -212,6 +212,7 @@ func main() {
 		RemoteModelsHandler:       remoteModelsHandler,
 		MetaHandler:               metaHandler,
 		HealthHandler:             healthHandler,
+		RolesHandler:              handlers.NewRolesHandler(),
 		AuthMiddleware:            sessionAuthMiddleware,
 		APIKeyMiddleware:          apiKeyAuthMiddleware,
 		LocalModeMiddleware:       localModeMiddleware,

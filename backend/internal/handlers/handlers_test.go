@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/screenleon/agent-native-pm/internal/audit"
 	"github.com/screenleon/agent-native-pm/internal/handlers"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/router"
@@ -1085,7 +1086,7 @@ func TestPlanningRunValidationAndConflict(t *testing.T) {
 
 	// REJECT the draft candidate, then verify rejected is blocked (400)
 	rejectedStatus := models.BacklogCandidateStatusRejected
-	if _, err := bcs.Update(draftCandidates[0].ID, models.UpdateBacklogCandidateRequest{Status: &rejectedStatus}); err != nil {
+	if _, err := bcs.Update(draftCandidates[0].ID, models.UpdateBacklogCandidateRequest{Status: &rejectedStatus}, audit.ActorInfo{}); err != nil {
 		t.Fatalf("reject conflict candidate: %v", err)
 	}
 	req = httptest.NewRequest("POST", "/api/backlog-candidates/"+draftCandidates[0].ID+"/apply", nil)
@@ -1098,7 +1099,7 @@ func TestPlanningRunValidationAndConflict(t *testing.T) {
 	// Reset to draft, set a unique title, create duplicate task, verify conflict (409)
 	draftStatus := models.BacklogCandidateStatusDraft
 	conflictTitle := "Conflict candidate"
-	if _, err := bcs.Update(draftCandidates[0].ID, models.UpdateBacklogCandidateRequest{Title: &conflictTitle, Status: &draftStatus}); err != nil {
+	if _, err := bcs.Update(draftCandidates[0].ID, models.UpdateBacklogCandidateRequest{Title: &conflictTitle, Status: &draftStatus}, audit.ActorInfo{}); err != nil {
 		t.Fatalf("reset conflict candidate: %v", err)
 	}
 	if _, err := ts.Create(project.ID, models.CreateTaskRequest{Title: conflictTitle, Status: "todo", Priority: "medium", Source: "human"}); err != nil {

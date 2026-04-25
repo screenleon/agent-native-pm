@@ -687,6 +687,10 @@ func (h *PlanningRunHandler) ListBacklogCandidates(w http.ResponseWriter, r *htt
 	if candidates == nil {
 		candidates = []models.BacklogCandidate{}
 	}
+	// Phase 6c PR-2 (risk-reviewer H1): surface execution_role
+	// authoring metadata so the frontend can render set-by/at/by-whom
+	// without a second round-trip.
+	h.candidateStore.EnrichWithAuthoring(r.Context(), candidates)
 
 	writeSuccess(w, http.StatusOK, candidates, models.PaginationMeta{Page: page, PerPage: perPage, Total: total})
 }
@@ -713,7 +717,13 @@ func (h *PlanningRunHandler) UpdateBacklogCandidate(w http.ResponseWriter, r *ht
 		return
 	}
 
-	updated, err := h.candidateStore.Update(id, req)
+	// Phase 6c PR-2: PATCH is now audit-aware when execution_role is
+	// the field being changed. The actor is the authenticated caller
+	// — distinguish session-user vs api-key per critic round 1 #3 +
+	// risk-reviewer M1 so the audit trail correctly attributes the
+	// change.
+	patchActor := buildAuthoringActor(r, "patch backlog candidate")
+	updated, err := h.candidateStore.Update(id, req, patchActor)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrBacklogCandidateNotMutable):
@@ -724,12 +734,20 @@ func (h *PlanningRunHandler) UpdateBacklogCandidate(w http.ResponseWriter, r *ht
 			writeError(w, http.StatusBadRequest, "title cannot be blank")
 		case errors.Is(err, store.ErrBacklogCandidateBadStatus):
 			writeError(w, http.StatusBadRequest, "invalid backlog candidate status")
+		case errors.Is(err, store.ErrBacklogCandidateUnknownExecutionRole):
+			writeError(w, http.StatusBadRequest, err.Error())
 		default:
 			writeError(w, http.StatusInternalServerError, "failed to update backlog candidate")
 		}
 		return
 	}
 
+	// Phase 6c PR-2 (risk-reviewer H1): surface authoring metadata.
+	if updated != nil {
+		one := []models.BacklogCandidate{*updated}
+		h.candidateStore.EnrichWithAuthoring(r.Context(), one)
+		updated = &one[0]
+	}
 	writeSuccess(w, http.StatusOK, updated, nil)
 }
 
@@ -890,32 +908,44 @@ func (h *PlanningRunHandler) ApplyBacklogCandidate(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// Phase 5 B3: optional request body carries execution_mode.
-	// Missing body / empty field = "manual" (back-compat with Phase 4
-	// and earlier callers that send no body at all).
+	// Phase 5 B3 + Phase 6c PR-2: request body carries execution_mode
+	// and (for role_dispatch) execution_role. Missing body / empty field
+	// = "manual" (back-compat with Phase 4 and earlier callers).
 	//
 	// Trim BEFORE enum comparison so `" manual "` behaves the same as
 	// `"manual"` — the previous code trimmed only for the empty-check
 	// and then forwarded the untrimmed value, which would have returned
 	// 400 for whitespace-only input differences (Copilot PR#22).
 	executionMode := models.ApplyExecutionModeManual
+	executionRole := ""
 	if r.ContentLength != 0 {
 		var req models.ApplyBacklogCandidateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		trimmed := strings.TrimSpace(req.ExecutionMode)
-		if trimmed != "" {
+		if trimmed := strings.TrimSpace(req.ExecutionMode); trimmed != "" {
 			executionMode = trimmed
 		}
+		executionRole = strings.TrimSpace(req.ExecutionRole)
 	}
 
-	result, err := h.candidateStore.ApplyToTaskWithMode(id, executionMode)
+	// Phase 6c PR-2: assemble actor info for the audit row. Distinguish
+	// session-authenticated humans from API-key automations — both
+	// pass through the same RequireAuth gate but the audit trail must
+	// be able to tell them apart (critic round 1 finding #3). API-key
+	// callers identify by the key's id rather than a user id.
+	actor := buildAuthoringActor(r, "apply backlog candidate")
+
+	result, err := h.candidateStore.ApplyToTaskWithMode(id, executionMode, executionRole, actor)
 	if err != nil {
 		var conflictErr *store.BacklogCandidateTaskConflictError
 		switch {
 		case errors.Is(err, store.ErrBacklogCandidateInvalidExecutionMode):
+			writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, store.ErrBacklogCandidateMissingExecutionRole):
+			writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, store.ErrBacklogCandidateUnknownExecutionRole):
 			writeError(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, store.ErrBacklogCandidateNotApproved):
 			writeError(w, http.StatusBadRequest, "only approved backlog candidates can be applied to tasks")
@@ -934,6 +964,13 @@ func (h *PlanningRunHandler) ApplyBacklogCandidate(w http.ResponseWriter, r *htt
 			log.Printf("apply-candidate: promote requirement %s: %v", result.Candidate.RequirementID, err)
 		}
 	}
+
+	// Phase 6c PR-2 (risk-reviewer H1): surface authoring metadata on
+	// the returned candidate so the frontend's apply-success view can
+	// render "set by ${actor.kind} just now" without a refetch.
+	one := []models.BacklogCandidate{result.Candidate}
+	h.candidateStore.EnrichWithAuthoring(r.Context(), one)
+	result.Candidate = one[0]
 
 	status := http.StatusCreated
 	if result.AlreadyApplied {

@@ -39,6 +39,7 @@ type Deps struct {
 	RemoteModelsHandler       *handlers.RemoteModelsHandler
 	MetaHandler               *handlers.MetaHandler
 	HealthHandler             *handlers.HealthHandler
+	RolesHandler              *handlers.RolesHandler
 	AuthMiddleware            func(http.Handler) http.Handler
 	APIKeyMiddleware          func(http.Handler) http.Handler
 	// LocalModeMiddleware, when non-nil, is applied before AuthMiddleware
@@ -86,6 +87,11 @@ func New(deps Deps) http.Handler {
 		}
 		if deps.AdapterModelsHandler != nil {
 			r.Get("/adapter-models", deps.AdapterModelsHandler.Get)
+		}
+		// Phase 6c PR-2: public role catalog (no auth — same data is
+		// in the source tree and shipped embedded in the binary).
+		if deps.RolesHandler != nil {
+			r.Get("/roles", deps.RolesHandler.List)
 		}
 		if deps.LocalConnectorHandler != nil {
 			r.Post("/connector/pair", deps.LocalConnectorHandler.Pair)

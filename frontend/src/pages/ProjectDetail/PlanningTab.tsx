@@ -159,6 +159,10 @@ export function PlanningTab({
                 onResetCandidateForm={ws.onResetCandidateForm}
                 selectedExecutionMode={ws.selectedExecutionMode}
                 onSelectedExecutionModeChange={ws.onSelectedExecutionModeChange}
+                chosenExecutionRole={ws.chosenExecutionRole}
+                onChosenExecutionRoleChange={ws.onChosenExecutionRoleChange}
+                availableRoles={ws.availableRoles}
+                onUpdateCandidateExecutionRole={ws.onUpdateCandidateExecutionRole}
                 onViewDocumentById={onViewDocumentById}
                 onViewDriftSignal={onViewDriftSignal}
               />
@@ -291,6 +295,10 @@ export function PlanningTab({
                   onResetCandidateForm={ws.onResetCandidateForm}
                   selectedExecutionMode={ws.selectedExecutionMode}
                   onSelectedExecutionModeChange={ws.onSelectedExecutionModeChange}
+                  chosenExecutionRole={ws.chosenExecutionRole}
+                  onChosenExecutionRoleChange={ws.onChosenExecutionRoleChange}
+                  availableRoles={ws.availableRoles}
+                  onUpdateCandidateExecutionRole={ws.onUpdateCandidateExecutionRole}
                   onViewDocumentById={onViewDocumentById}
                   onViewDriftSignal={onViewDriftSignal}
                 />

@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/screenleon/agent-native-pm/internal/audit"
 	"github.com/screenleon/agent-native-pm/internal/database"
 	"github.com/screenleon/agent-native-pm/internal/models"
+	"github.com/screenleon/agent-native-pm/internal/roles"
 )
 
 type TaskStore struct {
@@ -357,29 +359,74 @@ func (s *TaskStore) CountByProjectAndStatus(projectID string) (map[string]int, e
 // belonging to a project the connector's user is a member of, marks it as
 // "running", and returns the task together with its requirement.
 //
+// Phase 6c PR-2 enforcement: when the next queued task references a role
+// that is not in the current catalog (e.g. role rename happened after the
+// candidate was applied), the task is transitioned `queued → failed` with
+// error_kind=role_not_found inside the same transaction (plus an
+// actor_audit row with actor_kind=system), and the loop tries the next
+// queued task. The connector never sees stale-role tasks.
+//
 // Ownership check: the task's project_id must appear in project_members where
 // user_id = connectorUserID. A SQLite write-lock is acquired via a no-op
 // UPDATE before the SELECT so concurrent claim attempts serialise.
 //
-// Returns (nil, nil, nil) when the queue is empty for this connector's user.
-func (s *TaskStore) ClaimNextDispatchTask(connectorID, connectorUserID string) (*models.Task, *models.Requirement, error) {
-	var tx *sql.Tx
-	var err error
-	if s.dialect.IsSQLite() {
-		tx, err = s.db.Begin()
-	} else {
-		tx, err = s.db.Begin()
-	}
-	if err != nil {
-		return nil, nil, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+// Returns (nil, nil, nil) when the queue is empty (after stale-role tasks
+// have been drained) for this connector's user.
+//
+// Phase 6c PR-2 critic round 1 #6: the drain loop is bounded by
+// staleDrainCap to prevent a poisoned queue (many stale tasks) from
+// wedging the connector loop on one giant blocking call. After
+// hitting the cap, the function returns (nil, nil, nil) as if the
+// queue were empty; the connector polls again on its normal cadence
+// and the next call drains the next batch. Each batch is committed
+// independently so progress is durable.
+const staleDrainCap = 16
 
+func (s *TaskStore) ClaimNextDispatchTask(connectorID, connectorUserID string) (*models.Task, *models.Requirement, error) {
+	// Outer loop drains stale-role tasks. Each iteration opens its own
+	// short transaction; it either commits (claim succeeded OR stale-role
+	// task transitioned) and tries again, or finds an empty queue.
+	drained := 0
+	for {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return nil, nil, fmt.Errorf("begin transaction: %w", err)
+		}
+
+		shouldRetry, task, req, err := s.tryClaimNextDispatchTask(tx, connectorUserID)
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, nil, fmt.Errorf("commit claim: %w", err)
+		}
+		if shouldRetry {
+			drained++
+			if drained >= staleDrainCap {
+				// Yield back to the connector loop. The caller sees an
+				// empty queue this poll; next poll picks up where we
+				// left off (the failed tasks are durably written, so
+				// we won't see them again).
+				return nil, nil, nil
+			}
+			continue
+		}
+		return task, req, nil
+	}
+}
+
+// tryClaimNextDispatchTask is one iteration of the claim loop. Returns:
+//   - shouldRetry=true: this iteration transitioned a stale-role task; the
+//     caller should commit and retry to look for the next queued task.
+//   - task=nil, shouldRetry=false: queue empty, normal exit.
+//   - task!=nil: successful claim; caller commits and returns to connector.
+func (s *TaskStore) tryClaimNextDispatchTask(tx *sql.Tx, connectorUserID string) (shouldRetry bool, task *models.Task, req *models.Requirement, err error) {
 	// On SQLite force an immediate write lock before the SELECT so concurrent
 	// claim attempts serialise (same pattern as lockCandidateApplyKey).
 	if s.dialect.IsSQLite() {
 		if _, err := tx.Exec(`UPDATE tasks SET updated_at = updated_at WHERE 1 = 0`); err != nil {
-			return nil, nil, fmt.Errorf("sqlite write lock: %w", err)
+			return false, nil, nil, fmt.Errorf("sqlite write lock: %w", err)
 		}
 	}
 
@@ -402,14 +449,45 @@ func (s *TaskStore) ClaimNextDispatchTask(connectorID, connectorUserID string) (
 	`, forUpdate, skipLocked)
 
 	row := tx.QueryRow(query, models.TaskDispatchStatusQueued, connectorUserID, "role_dispatch%")
-	task, err := scanTaskFull(row)
+	task, err = scanTaskFull(row)
 	if err != nil {
-		return nil, nil, fmt.Errorf("query queued task: %w", err)
+		return false, nil, nil, fmt.Errorf("query queued task: %w", err)
 	}
 	if task == nil {
-		// Queue empty — commit and return nil.
-		_ = tx.Commit()
-		return nil, nil, nil
+		return false, nil, nil, nil
+	}
+
+	// Phase 6c PR-2: catalog enforcement. Parse role_id from source
+	// ("role_dispatch:<role>") and check IsKnown. Stale-role tasks are
+	// transitioned to failed in this same transaction and the outer
+	// loop retries to find the next valid task.
+	roleID := parseRoleIDFromSource(task.Source)
+	if !roles.IsKnown(roleID) {
+		now := time.Now().UTC()
+		execResultJSON, _ := json.Marshal(map[string]string{
+			"error_kind":    models.ErrorKindRoleNotFound,
+			"error_message": fmt.Sprintf("role %q is not in the current catalog", roleID),
+		})
+		if _, err := tx.Exec(
+			`UPDATE tasks SET dispatch_status = $1, execution_result = $2, updated_at = $3 WHERE id = $4`,
+			models.TaskDispatchStatusFailed, string(execResultJSON), now, task.ID,
+		); err != nil {
+			return false, nil, nil, fmt.Errorf("mark stale-role task failed: %w", err)
+		}
+		oldStatus := models.TaskDispatchStatusQueued
+		newStatus := models.TaskDispatchStatusFailed
+		if err := audit.Record(tx, audit.SubjectTask, task.ID, "dispatch_status",
+			&oldStatus, &newStatus,
+			audit.ActorInfo{
+				Kind:      audit.ActorSystem,
+				ID:        "claim-next-task",
+				Rationale: fmt.Sprintf("role %q not in catalog", roleID),
+			},
+		); err != nil {
+			return false, nil, nil, fmt.Errorf("audit stale-role transition: %w", err)
+		}
+		// Signal the outer loop to commit and try again.
+		return true, nil, nil, nil
 	}
 
 	// Mark as running.
@@ -418,23 +496,32 @@ func (s *TaskStore) ClaimNextDispatchTask(connectorID, connectorUserID string) (
 		`UPDATE tasks SET dispatch_status = $1, updated_at = $2 WHERE id = $3`,
 		models.TaskDispatchStatusRunning, now, task.ID,
 	); err != nil {
-		return nil, nil, fmt.Errorf("mark task running: %w", err)
+		return false, nil, nil, fmt.Errorf("mark task running: %w", err)
 	}
 	task.DispatchStatus = models.TaskDispatchStatusRunning
 	task.UpdatedAt = now
 
 	// Load the requirement via task_lineage so we can return context.
-	var req *models.Requirement
 	req, err = getRequirementForTask(tx, task.ID)
 	if err != nil {
 		// Non-fatal: we can proceed without requirement context.
 		req = nil
+		err = nil
 	}
+	return false, task, req, nil
+}
 
-	if err := tx.Commit(); err != nil {
-		return nil, nil, fmt.Errorf("commit claim: %w", err)
+// parseRoleIDFromSource extracts the role component of a task source
+// like "role_dispatch:backend-architect". Returns "" if the source has
+// no role suffix or is not a role_dispatch source. Mirrors the
+// connector-side parser in connector/service.go RunOnceTask so server
+// and connector apply the same catalog enforcement to identical inputs.
+func parseRoleIDFromSource(source string) string {
+	const prefix = "role_dispatch:"
+	if !strings.HasPrefix(source, prefix) {
+		return ""
 	}
-	return task, req, nil
+	return strings.TrimSpace(source[len(prefix):])
 }
 
 // getRequirementForTask joins task_lineage → requirements to find the

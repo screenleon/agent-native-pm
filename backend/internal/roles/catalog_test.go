@@ -29,9 +29,10 @@ func TestCatalogMatchesPromptDir(t *testing.T) {
 	}
 
 	type fmRole struct {
-		title   string
-		version int
-		useCase string
+		title    string
+		version  int
+		useCase  string
+		category string
 	}
 	fileRoles := map[string]fmRole{}
 	for _, e := range entries {
@@ -57,15 +58,16 @@ func TestCatalogMatchesPromptDir(t *testing.T) {
 		}
 		ver, _ := strconv.Atoi(fm["version"])
 		fileRoles[roleID] = fmRole{
-			title:   fm["title"],
-			version: ver,
-			useCase: fm["use_case"],
+			title:    fm["title"],
+			version:  ver,
+			useCase:  fm["use_case"],
+			category: fm["category"],
 		}
 	}
 
 	catalogRoles := map[string]fmRole{}
 	for _, r := range catalog {
-		catalogRoles[r.ID] = fmRole{title: r.Title, version: r.Version, useCase: r.UseCase}
+		catalogRoles[r.ID] = fmRole{title: r.Title, version: r.Version, useCase: r.UseCase, category: r.Category}
 	}
 
 	missing := setDiff(keys(fileRoles), keys(catalogRoles))
@@ -91,6 +93,16 @@ func TestCatalogMatchesPromptDir(t *testing.T) {
 		if fileR.useCase != catR.useCase {
 			t.Errorf("%s: use_case mismatch\nprompt:  %q\ncatalog: %q", id, fileR.useCase, catR.useCase)
 		}
+		// Phase 6c PR-2: category MUST be present in both and match.
+		// Files under prompts/roles/ are exclusively task-execution
+		// roles; meta-roles (e.g. dispatcher) live in prompts/meta/
+		// and are catalogued separately (PR-3).
+		if fileR.category != catR.category {
+			t.Errorf("%s: category mismatch — prompt %q vs catalog %q", id, fileR.category, catR.category)
+		}
+		if fileR.category != CategoryRole {
+			t.Errorf("%s: prompts/roles/ entries must have category=%q, got %q", id, CategoryRole, fileR.category)
+		}
 	}
 
 	// Every role MUST have a positive DefaultTimeoutSec. Zero would
@@ -99,6 +111,13 @@ func TestCatalogMatchesPromptDir(t *testing.T) {
 	for _, r := range catalog {
 		if r.DefaultTimeoutSec <= 0 {
 			t.Errorf("%s: DefaultTimeoutSec must be > 0, got %d", r.ID, r.DefaultTimeoutSec)
+		}
+		// Phase 6c PR-2: Category must be one of the recognised
+		// values. Empty Category would silently bypass the
+		// `/api/roles` filter and surface meta-roles in the apply
+		// dropdown (or hide task-roles).
+		if r.Category != CategoryRole && r.Category != CategoryMeta {
+			t.Errorf("%s: Category must be %q or %q, got %q", r.ID, CategoryRole, CategoryMeta, r.Category)
 		}
 	}
 }

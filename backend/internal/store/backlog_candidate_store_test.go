@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/screenleon/agent-native-pm/internal/audit"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/testutil"
 )
@@ -173,7 +174,7 @@ func TestBacklogCandidateStoreUpdate(t *testing.T) {
 		Title:       &title,
 		Description: &description,
 		Status:      &status,
-	})
+	}, audit.ActorInfo{})
 	if err != nil {
 		t.Fatalf("update candidate: %v", err)
 	}
@@ -208,7 +209,7 @@ func TestBacklogCandidateStoreUpdateRejectsAppliedCandidate(t *testing.T) {
 	}
 	candidate := created[0]
 	status := models.BacklogCandidateStatusApplied
-	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &status}); !errors.Is(err, ErrBacklogCandidateBadStatus) {
+	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &status}, audit.ActorInfo{}); !errors.Is(err, ErrBacklogCandidateBadStatus) {
 		t.Fatalf("expected invalid status for applied transition, got %v", err)
 	}
 
@@ -217,7 +218,7 @@ func TestBacklogCandidateStoreUpdateRejectsAppliedCandidate(t *testing.T) {
 		t.Fatalf("force candidate to applied: %v", err)
 	}
 	newTitle := "Should fail"
-	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Title: &newTitle}); !errors.Is(err, ErrBacklogCandidateNotMutable) {
+	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Title: &newTitle}, audit.ActorInfo{}); !errors.Is(err, ErrBacklogCandidateNotMutable) {
 		t.Fatalf("expected ErrBacklogCandidateNotMutable, got %v", err)
 	}
 }
@@ -231,10 +232,10 @@ func TestBacklogCandidateStoreUpdateRejectsBlankTitleAndNoChanges(t *testing.T) 
 	}
 	candidate := created[0]
 	blankTitle := "   "
-	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Title: &blankTitle}); !errors.Is(err, ErrBacklogCandidateBlankTitle) {
+	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Title: &blankTitle}, audit.ActorInfo{}); !errors.Is(err, ErrBacklogCandidateBlankTitle) {
 		t.Fatalf("expected ErrBacklogCandidateBlankTitle, got %v", err)
 	}
-	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{}); !errors.Is(err, ErrBacklogCandidateNoChanges) {
+	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{}, audit.ActorInfo{}); !errors.Is(err, ErrBacklogCandidateNoChanges) {
 		t.Fatalf("expected ErrBacklogCandidateNoChanges, got %v", err)
 	}
 }
@@ -248,7 +249,7 @@ func TestBacklogCandidateStoreApplyToTask(t *testing.T) {
 	}
 	candidate := created[0]
 	approved := models.BacklogCandidateStatusApproved
-	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &approved}); err != nil {
+	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &approved}, audit.ActorInfo{}); err != nil {
 		t.Fatalf("approve candidate: %v", err)
 	}
 
@@ -321,7 +322,7 @@ func TestBacklogCandidateStoreApplyToTaskRejectsDraftAndDuplicate(t *testing.T) 
 
 	// Rejected candidates must be blocked
 	rejected := models.BacklogCandidateStatusRejected
-	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &rejected}); err != nil {
+	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &rejected}, audit.ActorInfo{}); err != nil {
 		t.Fatalf("reject candidate: %v", err)
 	}
 	if _, err := store.ApplyToTask(candidate.ID); !errors.Is(err, ErrBacklogCandidateNotApproved) {
@@ -330,7 +331,7 @@ func TestBacklogCandidateStoreApplyToTaskRejectsDraftAndDuplicate(t *testing.T) 
 
 	// Reset to draft and test duplicate conflict (draft CAN be applied, but duplicate wins)
 	draft := models.BacklogCandidateStatusDraft
-	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &draft}); err != nil {
+	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &draft}, audit.ActorInfo{}); err != nil {
 		t.Fatalf("reset candidate to draft: %v", err)
 	}
 	taskStore := NewTaskStore(store.db)
@@ -360,7 +361,7 @@ func TestBacklogCandidateStoreApplyToTaskIsIdempotentUnderConcurrency(t *testing
 	}
 	candidate := created[0]
 	approved := models.BacklogCandidateStatusApproved
-	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &approved}); err != nil {
+	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &approved}, audit.ActorInfo{}); err != nil {
 		t.Fatalf("approve candidate: %v", err)
 	}
 
@@ -437,7 +438,7 @@ func TestBacklogCandidateStoreListAppliedLineageByProject(t *testing.T) {
 	}
 	approved := models.BacklogCandidateStatusApproved
 	candidate := created[0]
-	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &approved}); err != nil {
+	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &approved}, audit.ActorInfo{}); err != nil {
 		t.Fatalf("approve candidate: %v", err)
 	}
 	applyResult, err := store.ApplyToTask(candidate.ID)

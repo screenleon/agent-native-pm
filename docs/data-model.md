@@ -264,9 +264,44 @@ Notes:
 | `evidence` | JSONB | NOT NULL DEFAULT '[]' | Structured evidence snippets shown in review UI |
 | `evidence_detail` | JSONB | NOT NULL DEFAULT '{}' | Typed context evidence grouped by documents, drift, sync, agent runs, duplicates, and score breakdown |
 | `duplicate_titles` | JSONB | NOT NULL DEFAULT '[]' | Exact-title duplicate signals from current open work |
-| `execution_role` | TEXT | | (Phase 5 B2, migration 026) nullable hint naming the execution specialist from `backend/internal/prompts/roles/` that should run this candidate under Phase-6 auto-dispatch. Not enforced against the catalog today. |
+| `execution_role` | TEXT | | (Phase 5 B2 migration 026 + Phase 6c PR-2 enforcement) nullable; names the execution specialist from `backend/internal/roles/catalog.go`. **Phase 6c PR-2**: non-empty values are validated against the catalog at PATCH and apply boundaries; every change writes an `actor_audit` row in the same transaction. Pre-Phase-6c rows are grandfathered (no audit history). |
 | `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
+
+### Table: `actor_audit` (Phase 6c PR-2)
+
+Generic, append-only audit ledger for who/when/why a tracked field on
+a tracked subject row was changed. Today the only writer is the
+`execution_role` authoring path on `backlog_candidates` and the
+system-driven stale-role transitions on `tasks` (`claim-next-task`),
+but the table is generic via the `subject_kind` discriminator so
+future fields can adopt the same audit model without schema churn.
+
+No FK on `subject_id` (the table is intentionally history-preserving
+across subject deletes, per Phase 6c PR-2 DECISIONS entry).
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | TEXT | PRIMARY KEY | UUID v4 |
+| `subject_kind` | TEXT | NOT NULL | `backlog_candidate` \| `task` \| `planning_run` \| `connector` |
+| `subject_id` | TEXT | NOT NULL | The audited row's id |
+| `field` | TEXT | NOT NULL | Field name (e.g. `execution_role`, `dispatch_status`) |
+| `old_value` | TEXT | nullable | Pre-change value; NULL when previously unset |
+| `new_value` | TEXT | nullable | Post-change value; NULL when cleared |
+| `actor_kind` | TEXT | NOT NULL | `user` \| `api_key` \| `router` \| `system` \| `connector` |
+| `actor_id` | TEXT | nullable | user id, `api-key:<key id>`, router prompt version, etc |
+| `rationale` | TEXT | nullable | Free-form reason; for router writes carries the LLM's reasoning string (Phase 6d) |
+| `confidence` | REAL | nullable | 0.0–1.0; ONLY populated when `actor_kind=router` (validated at write time) |
+| `created_at` | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | Set Go-side via `time.Now().UTC()` for nanosecond precision |
+
+Indexes:
+- `idx_actor_audit_subject` on `(subject_kind, subject_id, created_at DESC)` — primary read path for "show me the latest audit row for this subject"
+- `idx_actor_audit_subject_field` on `(subject_kind, subject_id, field, created_at DESC)` — when narrowing to a specific field
+
+Read path: the `BacklogCandidateStore.EnrichWithAuthoring` helper
+joins the latest row for `field='execution_role'` onto each candidate
+and surfaces it as `BacklogCandidate.execution_role_authoring` in the
+JSON response. `audit.QueryLatest` is the underlying primitive.
 
 ### Table: `task_lineage`
 

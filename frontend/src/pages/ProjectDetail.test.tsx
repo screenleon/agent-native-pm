@@ -63,6 +63,8 @@ vi.mock('../api/client', () => ({
   listBacklogCandidatesByEvidence: vi.fn(() => Promise.resolve({ data: [] })),
   listProjectTaskLineage: vi.fn(() => Promise.resolve({ data: [] })),
   getProjectPendingReviewCount: vi.fn(() => Promise.resolve({ data: { count: 0 } })),
+  // Phase 6c PR-2: PlanningTab calls listRoles via usePlanningWorkspaceData.
+  listRoles: vi.fn(() => Promise.resolve({ data: [] })),
 }))
 
 function renderAt(path: string) {

@@ -400,11 +400,32 @@ type BacklogCandidate struct {
 	DuplicateTitles     []string               `json:"duplicate_titles"`
 	// ExecutionRole names the specialist that should execute this
 	// candidate if apply is dispatched via role_dispatch (Phase 5 B2).
-	// Nullable and unenforced by the DB today; catalog enforcement is a
-	// Phase 6 concern.
-	ExecutionRole *string   `json:"execution_role"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	// Phase 6c PR-2: catalog enforcement applies — non-empty values
+	// MUST be present in roles.IsKnown when written via PATCH or
+	// apply payload.
+	ExecutionRole *string `json:"execution_role"`
+	// ExecutionRoleAuthoring is the most recent actor_audit row for
+	// this candidate's `execution_role` field, populated server-side
+	// from audit.QueryLatest. Phase 6c PR-2 surfaces this so the
+	// frontend can show "set by ${actor.kind} at ${time}, ${rationale}"
+	// without a second round-trip. nil when no audit row exists yet
+	// (e.g. pre-Phase-6c rows where the role was set under the old
+	// no-audit contract — these display as "set manually" with no
+	// timestamp; backfill is intentionally not done).
+	ExecutionRoleAuthoring *ExecutionRoleAuthoring `json:"execution_role_authoring,omitempty"`
+	CreatedAt              time.Time               `json:"created_at"`
+	UpdatedAt              time.Time               `json:"updated_at"`
+}
+
+// ExecutionRoleAuthoring is the read-side projection of the latest
+// actor_audit row for a candidate's execution_role field.
+// Confidence is only populated when ActorKind == "router".
+type ExecutionRoleAuthoring struct {
+	ActorKind  string    `json:"actor_kind"`             // "user" | "api_key" | "router" | "system" | "connector"
+	ActorID    string    `json:"actor_id,omitempty"`     // user id, api-key id, etc
+	Rationale  string    `json:"rationale,omitempty"`
+	Confidence *float64  `json:"confidence,omitempty"`   // router-only
+	SetAt      time.Time `json:"set_at"`
 }
 
 type BacklogCandidateDraft struct {
@@ -470,6 +491,13 @@ type ApplyBacklogCandidateRequest struct {
 	// ExecutionMode selects how the applied task is marked.
 	// Empty or omitted = "manual" (back-compat).
 	ExecutionMode string `json:"execution_mode,omitempty"`
+	// ExecutionRole is the role id the operator confirmed at apply time.
+	// Required when ExecutionMode == "role_dispatch"; ignored for "manual".
+	// Phase 6c PR-2: this replaces the prior implicit read of
+	// candidate.execution_role at apply — the catch-22 ("no UI to set
+	// the candidate field, but apply gates on it") is closed by carrying
+	// the choice in the apply payload itself.
+	ExecutionRole string `json:"execution_role,omitempty"`
 }
 
 // CandidateEvidenceSummary is a lightweight view of a backlog candidate

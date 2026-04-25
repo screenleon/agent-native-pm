@@ -428,11 +428,25 @@ export interface BacklogCandidate {
   evidence: string[];
   evidence_detail: PlanningEvidenceDetail;
   duplicate_titles: string[];
-  // Phase 5 B2: execution specialist hint (nullable). Catalog enforcement
-  // lands in Phase 6; for now any string is accepted.
+  // Phase 5 B2 + Phase 6c PR-2: execution specialist hint (nullable).
+  // Phase 6c PR-2 added catalog enforcement — non-empty values must
+  // match a role in /api/roles.
   execution_role: string | null;
+  // Phase 6c PR-2: latest actor_audit row for this candidate's
+  // execution_role field, populated server-side. Nil when no audit
+  // row exists (pre-Phase-6c data; never set; cleared).
+  execution_role_authoring?: ExecutionRoleAuthoring | null;
   created_at: string;
   updated_at: string;
+}
+
+// Phase 6c PR-2: read-side projection of the authoring trail.
+export interface ExecutionRoleAuthoring {
+  actor_kind: 'user' | 'api_key' | 'router' | 'system' | 'connector';
+  actor_id?: string;
+  rationale?: string;
+  confidence?: number; // router-only
+  set_at: string;
 }
 
 export interface TaskLineage {

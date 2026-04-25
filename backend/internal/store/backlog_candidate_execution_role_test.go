@@ -1,10 +1,12 @@
 package store
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
+	"github.com/screenleon/agent-native-pm/internal/audit"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/testutil"
 )
@@ -103,7 +105,7 @@ func TestCreateAndUpdateCandidate_ExecutionRoleRoundTrip(t *testing.T) {
 	nextRole := "backend-architect"
 	updated, err := candStore.Update(created[0].ID, models.UpdateBacklogCandidateRequest{
 		ExecutionRole: &nextRole,
-	})
+	}, audit.ActorInfo{Kind: audit.ActorUser, ID: "test-user"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +117,7 @@ func TestCreateAndUpdateCandidate_ExecutionRoleRoundTrip(t *testing.T) {
 	empty := ""
 	cleared, err := candStore.Update(created[0].ID, models.UpdateBacklogCandidateRequest{
 		ExecutionRole: &empty,
-	})
+	}, audit.ActorInfo{Kind: audit.ActorUser, ID: "test-user"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,17 +126,18 @@ func TestCreateAndUpdateCandidate_ExecutionRoleRoundTrip(t *testing.T) {
 	}
 }
 
-// Copilot PR#22 C4: rune-aware truncation of task.source. Phase 5 does
-// not enforce a role catalog so execution_role can contain non-ASCII;
-// byte-slicing a role like "ui-scaffolder-日本語版" to 80 bytes could
-// split a multi-byte codepoint. This test sets a multi-byte role +
-// applies with role_dispatch and asserts the resulting task.source is
-// valid UTF-8 (no � replacement, round-trips through JSON).
-func TestApplyToTaskWithMode_RoleDispatchSourceIsValidUTF8(t *testing.T) {
+// Phase 6c PR-2: ApplyToTaskWithMode now requires the execution_role
+// payload argument and validates it against the catalog. Unknown roles
+// return ErrBacklogCandidateUnknownExecutionRole; missing roles return
+// ErrBacklogCandidateMissingExecutionRole. This replaces the Phase 5
+// "rune-aware truncation defends against non-ASCII roles" test —
+// catalog enforcement makes that defense moot because all roles are
+// catalogue-controlled ASCII identifiers.
+func TestApplyToTaskWithMode_RoleDispatchRequiresKnownRole(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 
 	projectStore := NewProjectStore(db)
-	project, err := projectStore.Create(models.CreateProjectRequest{Name: "Utf8Proj"})
+	project, err := projectStore.Create(models.CreateProjectRequest{Name: "EnforceCatalogProj"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,41 +157,58 @@ func TestApplyToTaskWithMode_RoleDispatchSourceIsValidUTF8(t *testing.T) {
 	}
 
 	candStore := NewBacklogCandidateStore(db, testutil.TestDialect())
-	// Role id long enough to force truncation when combined with the
-	// "role_dispatch:" prefix (14 bytes) + multi-byte runes.
-	longMultiByteRole := strings.Repeat("テストロール", 20) // each char is 3 bytes UTF-8
 	created, err := candStore.CreateDraftsForPlanningRun(req, run.ID, []models.BacklogCandidateDraft{
-		{Title: "t", Rank: 1, PriorityScore: 10, Confidence: 10, ExecutionRole: longMultiByteRole},
+		{Title: "t", Rank: 1, PriorityScore: 10, Confidence: 10},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	approved := "approved"
-	if _, err := candStore.Update(created[0].ID, models.UpdateBacklogCandidateRequest{Status: &approved}); err != nil {
+	if _, err := candStore.Update(created[0].ID, models.UpdateBacklogCandidateRequest{Status: &approved}, audit.ActorInfo{}); err != nil {
 		t.Fatal(err)
 	}
 
-	resp, err := candStore.ApplyToTaskWithMode(created[0].ID, models.ApplyExecutionModeRoleDispatch)
+	actor := audit.ActorInfo{Kind: audit.ActorUser, ID: "test-user"}
+
+	// Empty role for role_dispatch → typed error.
+	if _, err := candStore.ApplyToTaskWithMode(created[0].ID, models.ApplyExecutionModeRoleDispatch, "", actor); !errors.Is(err, ErrBacklogCandidateMissingExecutionRole) {
+		t.Fatalf("expected ErrBacklogCandidateMissingExecutionRole, got %v", err)
+	}
+
+	// Unknown role for role_dispatch → typed error.
+	if _, err := candStore.ApplyToTaskWithMode(created[0].ID, models.ApplyExecutionModeRoleDispatch, "not-in-catalog", actor); !errors.Is(err, ErrBacklogCandidateUnknownExecutionRole) {
+		t.Fatalf("expected ErrBacklogCandidateUnknownExecutionRole, got %v", err)
+	}
+
+	// Multi-byte non-catalog role → still rejected (catalog enforcement
+	// is the gate, rune-aware truncation is no longer the defense).
+	multiByteBogus := strings.Repeat("テストロール", 20)
+	if _, err := candStore.ApplyToTaskWithMode(created[0].ID, models.ApplyExecutionModeRoleDispatch, multiByteBogus, actor); !errors.Is(err, ErrBacklogCandidateUnknownExecutionRole) {
+		t.Fatalf("multi-byte non-catalog role: expected ErrBacklogCandidateUnknownExecutionRole, got %v", err)
+	}
+
+	// Valid catalog role → succeeds; task.source is "role_dispatch:<role>".
+	resp, err := candStore.ApplyToTaskWithMode(created[0].ID, models.ApplyExecutionModeRoleDispatch, "backend-architect", actor)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("valid role: %v", err)
+	}
+	wantSource := "role_dispatch:backend-architect"
+	if resp.Task.Source != wantSource {
+		t.Errorf("task.source = %q, want %q", resp.Task.Source, wantSource)
 	}
 	if !utf8.ValidString(resp.Task.Source) {
-		t.Fatalf("task.source is not valid UTF-8: %q (bytes=%v)", resp.Task.Source, []byte(resp.Task.Source))
-	}
-	if runeCount := utf8.RuneCountInString(resp.Task.Source); runeCount > 80 {
-		t.Fatalf("want <= 80 runes, got %d", runeCount)
+		t.Errorf("task.source is not valid UTF-8: %q", resp.Task.Source)
 	}
 }
 
-// T-P5-B2-4: unknown role strings are accepted today (no catalog
-// enforcement — plan §5 B2 / DECISIONS 2026-04-24). This test pins the
-// current contract so a future tightening in Phase 6 is a deliberate
-// change rather than a silent regression.
-func TestUpdateCandidate_UnknownExecutionRoleAcceptedInPhase5(t *testing.T) {
+// Phase 6c PR-2: PATCH /backlog-candidates/:id rejects unknown roles
+// (catalog enforcement). Replaces the Phase 5 "unknown roles accepted"
+// test which pinned the inverse contract.
+func TestUpdateCandidate_RejectsUnknownExecutionRole(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 
 	projectStore := NewProjectStore(db)
-	project, err := projectStore.Create(models.CreateProjectRequest{Name: "ProbeRole3"})
+	project, err := projectStore.Create(models.CreateProjectRequest{Name: "RejectUnknownRoleProj"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,13 +239,9 @@ func TestUpdateCandidate_UnknownExecutionRoleAcceptedInPhase5(t *testing.T) {
 	}
 
 	bogus := "not-a-real-role-name-in-the-catalog"
-	updated, err := candStore.Update(created[0].ID, models.UpdateBacklogCandidateRequest{
+	if _, err := candStore.Update(created[0].ID, models.UpdateBacklogCandidateRequest{
 		ExecutionRole: &bogus,
-	})
-	if err != nil {
-		t.Fatalf("Phase 5 must accept unknown role strings without catalog validation: %v", err)
-	}
-	if updated.ExecutionRole == nil || *updated.ExecutionRole != bogus {
-		t.Fatalf("unknown role not persisted; got %v", updated.ExecutionRole)
+	}, audit.ActorInfo{Kind: audit.ActorUser, ID: "test-user"}); !errors.Is(err, ErrBacklogCandidateUnknownExecutionRole) {
+		t.Fatalf("expected ErrBacklogCandidateUnknownExecutionRole, got %v", err)
 	}
 }
