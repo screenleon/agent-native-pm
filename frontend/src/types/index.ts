@@ -57,6 +57,10 @@ export interface Task {
   priority: 'low' | 'medium' | 'high';
   assignee: string;
   source: string;
+  /** Phase 6b — connector execution lifecycle status. */
+  dispatch_status?: 'none' | 'queued' | 'running' | 'completed' | 'failed';
+  /** Phase 6b — raw JSON result from connector execution. */
+  execution_result?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }

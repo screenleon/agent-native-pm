@@ -1083,22 +1083,27 @@ func TestPlanningRunValidationAndConflict(t *testing.T) {
 		t.Fatalf("seed draft candidate: %v", err)
 	}
 
+	// REJECT the draft candidate, then verify rejected is blocked (400)
+	rejectedStatus := models.BacklogCandidateStatusRejected
+	if _, err := bcs.Update(draftCandidates[0].ID, models.UpdateBacklogCandidateRequest{Status: &rejectedStatus}); err != nil {
+		t.Fatalf("reject conflict candidate: %v", err)
+	}
 	req = httptest.NewRequest("POST", "/api/backlog-candidates/"+draftCandidates[0].ID+"/apply", nil)
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("apply draft backlog candidate: expected 400, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("apply rejected backlog candidate: expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 
-	approvedTitle := "Approved conflict candidate"
-	approvedStatus := models.BacklogCandidateStatusApproved
-	if _, err := bcs.Update(draftCandidates[0].ID, models.UpdateBacklogCandidateRequest{Title: &approvedTitle, Status: &approvedStatus}); err != nil {
-		t.Fatalf("approve conflict candidate: %v", err)
+	// Reset to draft, set a unique title, create duplicate task, verify conflict (409)
+	draftStatus := models.BacklogCandidateStatusDraft
+	conflictTitle := "Conflict candidate"
+	if _, err := bcs.Update(draftCandidates[0].ID, models.UpdateBacklogCandidateRequest{Title: &conflictTitle, Status: &draftStatus}); err != nil {
+		t.Fatalf("reset conflict candidate: %v", err)
 	}
-	if _, err := ts.Create(project.ID, models.CreateTaskRequest{Title: approvedTitle, Status: "todo", Priority: "medium", Source: "human"}); err != nil {
+	if _, err := ts.Create(project.ID, models.CreateTaskRequest{Title: conflictTitle, Status: "todo", Priority: "medium", Source: "human"}); err != nil {
 		t.Fatalf("seed duplicate task: %v", err)
 	}
-
 	req = httptest.NewRequest("POST", "/api/backlog-candidates/"+draftCandidates[0].ID+"/apply", nil)
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)

@@ -319,15 +319,20 @@ func TestBacklogCandidateStoreApplyToTaskRejectsDraftAndDuplicate(t *testing.T) 
 	}
 	candidate := created[0]
 
+	// Rejected candidates must be blocked
+	rejected := models.BacklogCandidateStatusRejected
+	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &rejected}); err != nil {
+		t.Fatalf("reject candidate: %v", err)
+	}
 	if _, err := store.ApplyToTask(candidate.ID); !errors.Is(err, ErrBacklogCandidateNotApproved) {
-		t.Fatalf("expected ErrBacklogCandidateNotApproved, got %v", err)
+		t.Fatalf("expected ErrBacklogCandidateNotApproved for rejected candidate, got %v", err)
 	}
 
-	approved := models.BacklogCandidateStatusApproved
-	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &approved}); err != nil {
-		t.Fatalf("approve candidate: %v", err)
+	// Reset to draft and test duplicate conflict (draft CAN be applied, but duplicate wins)
+	draft := models.BacklogCandidateStatusDraft
+	if _, err := store.Update(candidate.ID, models.UpdateBacklogCandidateRequest{Status: &draft}); err != nil {
+		t.Fatalf("reset candidate to draft: %v", err)
 	}
-
 	taskStore := NewTaskStore(store.db)
 	if _, err := taskStore.Create(requirement.ProjectID, models.CreateTaskRequest{
 		Title:    candidate.Title,
@@ -337,7 +342,6 @@ func TestBacklogCandidateStoreApplyToTaskRejectsDraftAndDuplicate(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("seed duplicate task: %v", err)
 	}
-
 	var conflictErr *BacklogCandidateTaskConflictError
 	if _, err := store.ApplyToTask(candidate.ID); !errors.As(err, &conflictErr) {
 		t.Fatalf("expected BacklogCandidateTaskConflictError, got %v", err)

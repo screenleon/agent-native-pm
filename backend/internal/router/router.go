@@ -92,6 +92,9 @@ func New(deps Deps) http.Handler {
 			r.Post("/connector/heartbeat", deps.LocalConnectorHandler.Heartbeat)
 			r.Post("/connector/claim-next-run", deps.LocalConnectorHandler.ClaimNextRun)
 			r.Post("/connector/planning-runs/{id}/result", deps.LocalConnectorHandler.SubmitPlanningRunResult)
+			// Phase 6b: role_dispatch task execution loop.
+			r.Post("/connector/claim-next-task", deps.LocalConnectorHandler.ClaimNextTask)
+			r.Post("/connector/tasks/{task_id}/execution-result", deps.LocalConnectorHandler.SubmitTaskResult)
 		}
 
 		// ── Auth (public) ──────────────────────────────────────────────
@@ -121,6 +124,7 @@ func New(deps Deps) http.Handler {
 				r.Post("/projects/{id}/requirements", deps.RequirementHandler.Create)
 				r.Get("/requirements/{id}", deps.RequirementHandler.Get)
 				r.Patch("/requirements/{id}", deps.RequirementHandler.Update)
+				r.Delete("/requirements/{id}", deps.RequirementHandler.Delete)
 			}
 			if deps.PlanningRunHandler != nil {
 				r.Get("/projects/{id}/planning-provider-options", deps.PlanningRunHandler.ProviderOptions)

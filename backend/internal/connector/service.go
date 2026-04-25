@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/screenleon/agent-native-pm/internal/models"
+	"github.com/screenleon/agent-native-pm/internal/prompts"
 )
 
 // cliInterpreterBlocklist is the set of bare command names that must NOT be
@@ -140,6 +141,16 @@ func (s *Service) Run(ctx context.Context) error {
 		} else {
 			lastError = ""
 		}
+		// Phase 6b: when the planning-run queue is idle, also try the task
+		// dispatch queue. Both loops share the same poll/sleep cadence.
+		if !worked {
+			workedTask, taskErr := s.RunOnceTask(ctx)
+			if taskErr != nil {
+				lastError = taskErr.Error()
+				fmt.Fprintf(s.Stderr, "task dispatch loop error: %s\n", lastError)
+			}
+			worked = workedTask
+		}
 		if worked {
 			continue
 		}
@@ -148,6 +159,191 @@ func (s *Service) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-time.After(pollInterval):
 		}
+	}
+}
+
+// RunOnceTask implements the Phase 6b role_dispatch execution loop. It claims
+// one queued task, renders the role prompt, invokes the CLI, and submits the
+// result. Returns (true, nil) when a task was processed (regardless of
+// success/failure of the task itself), (false, nil) when the queue is empty,
+// and (false, err) on infrastructure errors.
+func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
+	resp, err := s.Client.ClaimNextTask(ctx)
+	if err != nil {
+		return false, err
+	}
+	if resp == nil || resp.Task == nil {
+		return false, nil
+	}
+	task := resp.Task
+
+	// Parse role_id from source ("role_dispatch:backend-architect" → "backend-architect").
+	roleID := ""
+	if after, ok := strings.CutPrefix(task.Source, "role_dispatch:"); ok {
+		roleID = strings.TrimSpace(after)
+	}
+	if roleID == "" {
+		fmt.Fprintf(s.Stderr, "task %s has invalid source %q — missing role_id\n", task.ID, task.Source)
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("invalid task source %q: missing role_id", task.Source),
+			ErrorKind:    "unknown",
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
+		return true, nil
+	}
+
+	// Catalog enforcement: role must exist in the embedded prompt library.
+	if !prompts.Exists("roles/" + roleID) {
+		fmt.Fprintf(s.Stderr, "task %s: role %q not found in catalog\n", task.ID, roleID)
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("role %q not found in catalog", roleID),
+			ErrorKind:    "unknown",
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
+		return true, nil
+	}
+
+	fmt.Fprintf(s.Stdout, "claimed task %s (role=%s title=%q)\n", task.ID, roleID, task.Title)
+
+	// Resolve CLI. Use the connector's primary CLI config if available (the
+	// connector state does not carry a binding for task dispatch, so we
+	// construct a nil selection and let resolveBuiltinCLI fall back to env /
+	// PATH lookup, which is the correct behaviour for role_dispatch).
+	// The model is read from task or env; there is no per-task ModelID field
+	// in Phase 6b so we pass nil run.
+	_, cliPath, cliModel, _, resolveErr := resolveBuiltinCLI(nil, nil)
+	if resolveErr != "" {
+		fmt.Fprintf(s.Stderr, "task %s: CLI resolve failed: %s\n", task.ID, resolveErr)
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+			Success:      false,
+			ErrorMessage: resolveErr,
+			ErrorKind:    "adapter_timeout",
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
+		return true, nil
+	}
+
+	// Build template vars.
+	vars := map[string]string{
+		"TASK_TITLE":       strings.TrimSpace(task.Title),
+		"TASK_DESCRIPTION": strings.TrimSpace(task.Description),
+		"REQUIREMENT":      buildConnectorRequirementContext(resp.Requirement),
+		"PROJECT_CONTEXT":  strings.TrimSpace(resp.ProjectContext),
+	}
+
+	// Render role prompt.
+	rendered, renderErr := prompts.Render("roles/"+roleID, vars)
+	if renderErr != nil {
+		fmt.Fprintf(s.Stderr, "task %s: prompt render failed: %v\n", task.ID, renderErr)
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("prompt render error: %v", renderErr),
+			ErrorKind:    "unknown",
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
+		return true, nil
+	}
+
+	// Read timeout.
+	timeoutSec := builtinDefaultTimeoutSec
+
+	// Invoke CLI.
+	output, runErrMsg := invokeBuiltinCLI(ctx, resolveAgentFromBinary(cliPath), cliPath, cliModel, rendered, timeoutSec)
+	if runErrMsg != "" {
+		errKind := classifyRunError(runErrMsg)
+		fmt.Fprintf(s.Stderr, "task %s: CLI failed: %s\n", task.ID, runErrMsg)
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+			Success:      false,
+			ErrorMessage: runErrMsg,
+			ErrorKind:    errKind,
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
+		return true, nil
+	}
+
+	output = stripANSI(output)
+
+	// Extract JSON from output.
+	parsed, extractErr := extractJSONFromOutput(output)
+	if extractErr != nil {
+		snippet := strings.TrimSpace(output)
+		if len(snippet) > 240 {
+			snippet = snippet[:240]
+		}
+		errMsg := fmt.Sprintf("could not parse output as JSON: %v; first 240 chars: %s", extractErr, snippet)
+		fmt.Fprintf(s.Stderr, "task %s: %s\n", task.ID, errMsg)
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+			Success:      false,
+			ErrorMessage: errMsg,
+			ErrorKind:    "unknown",
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
+		return true, nil
+	}
+
+	// Re-marshal the full parsed map as the result payload.
+	resultBytes, _ := json.Marshal(parsed)
+
+	if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+		Success: true,
+		Result:  json.RawMessage(resultBytes),
+	}); err != nil {
+		return true, fmt.Errorf("submit task result for %s: %w", task.ID, err)
+	}
+	fmt.Fprintf(s.Stdout, "completed task %s (role=%s)\n", task.ID, roleID)
+	return true, nil
+}
+
+// buildConnectorRequirementContext formats the requirement summary for prompt injection.
+func buildConnectorRequirementContext(req *ConnectorRequirementSummary) string {
+	if req == nil {
+		return ""
+	}
+	var parts []string
+	if t := strings.TrimSpace(req.Title); t != "" {
+		parts = append(parts, "Title: "+t)
+	}
+	if s := strings.TrimSpace(req.Summary); s != "" {
+		parts = append(parts, "Summary: "+s)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// resolveAgentFromBinary infers the agent name from the binary path.
+func resolveAgentFromBinary(binary string) string {
+	base := strings.ToLower(filepath.Base(binary))
+	switch {
+	case strings.HasPrefix(base, "claude"):
+		return "claude"
+	case strings.HasPrefix(base, "codex"):
+		return "codex"
+	default:
+		return "claude"
+	}
+}
+
+// classifyRunError maps common error substrings to error_kind values.
+func classifyRunError(msg string) string {
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "session") && strings.Contains(lower, "expired"):
+		return "session_expired"
+	case strings.Contains(lower, "rate limit"):
+		return "rate_limited"
+	case strings.Contains(lower, "context") && strings.Contains(lower, "overflow"):
+		return "context_overflow"
+	case strings.Contains(lower, "timed out"):
+		return "adapter_timeout"
+	default:
+		return "unknown"
 	}
 }
 

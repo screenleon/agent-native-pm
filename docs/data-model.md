@@ -87,9 +87,18 @@ Notes:
 | `status` | TEXT | NOT NULL DEFAULT 'todo' | `todo`, `in_progress`, `done`, `cancelled` |
 | `priority` | TEXT | DEFAULT 'medium' | `low`, `medium`, `high` |
 | `assignee` | TEXT | DEFAULT '' | Human name or agent identifier |
-| `source` | TEXT | DEFAULT '' | `human` or `agent:<name>` |
+| `source` | TEXT | DEFAULT '' | `human` or `agent:<name>` or `role_dispatch:<role_id>` |
+| `dispatch_status` | TEXT | NOT NULL DEFAULT 'none' | (Phase 6b, migration 029) `none`, `queued`, `running`, `completed`, `failed` |
+| `execution_result` | JSONB | | (Phase 6b, migration 029) Raw JSON result from connector execution; null until completed or failed |
 | `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
+
+Notes (tasks):
+- `dispatch_status = 'queued'` is set automatically at task creation when `source` starts with `role_dispatch:`.
+- `dispatch_status = 'running'` is set when a connector claims the task via `POST /api/connector/claim-next-task`.
+- Terminal states (`completed`, `failed`) are set by `POST /api/connector/tasks/:task_id/execution-result`.
+- Ownership check uses the `project_members` table (not `projects.user_id`); only connectors whose owner is a member of the task's project can claim or submit results.
+- Added by migration `029_task_dispatch.sql`.
 
 ## Planning Foundation Tables
 

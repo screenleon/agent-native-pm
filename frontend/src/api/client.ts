@@ -251,6 +251,10 @@ export async function updateRequirement(id: string, data: { status: string }) {
   });
 }
 
+export async function deleteRequirement(id: string): Promise<void> {
+  await request<null>(`/requirements/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
 export async function getPlanningProviderOptions(projectId: string) {
   return request<PlanningProviderOptions>(`/projects/${encodeURIComponent(projectId)}/planning-provider-options`);
 }

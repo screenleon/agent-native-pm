@@ -102,6 +102,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof CandidateRev
     providerOptions: null,
     onPersistReview: vi.fn(),
     onApplyCandidate: vi.fn(),
+    onSkipCandidate: vi.fn(),
     onResetCandidateForm: vi.fn(),
   }
   return {
@@ -125,13 +126,13 @@ describe('<CandidateReviewPanel />', () => {
     renderPanel()
     // Title appears in both the list and the detail form input
     expect(screen.getAllByText('Persist recovery options').length).toBeGreaterThan(0)
-    expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Reject/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Apply/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Skip/i })).toBeInTheDocument()
   })
 
   it('disables Apply to Tasks until canApplySelectedCandidate is true', () => {
     renderPanel({ canApplySelectedCandidate: false })
-    expect(screen.getByRole('button', { name: /Apply To Tasks/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Apply$/i })).toBeDisabled()
   })
 
   it('renders document evidence as a clickable link when onViewDocumentById is provided and the document has an id', async () => {
@@ -277,26 +278,31 @@ describe('<CandidateReviewPanel />', () => {
     expect(screen.queryByText(/Role: /i)).not.toBeInTheDocument()
   })
 
-  // T-P5-B3-7: Manual / Auto-dispatch radio group renders only when the
-  // onSelectedExecutionModeChange callback is provided. Auto-dispatch is
-  // disabled with the "(coming in Phase 6)" label.
+  // T-P5-B3-7 (updated Phase 6b): Manual / Auto-dispatch radio group renders
+  // only when the onSelectedExecutionModeChange callback is provided.
+  // Auto-dispatch is disabled when the selected candidate has no execution_role.
   it('renders the Manual + Auto-dispatch radio group only when onSelectedExecutionModeChange is provided', () => {
     const onChange = vi.fn()
     renderPanel({ selectedExecutionMode: 'manual', onSelectedExecutionModeChange: onChange })
     expect(screen.getByLabelText(/Manual/i)).toBeInTheDocument()
-    expect(screen.getByText(/coming in Phase 6/i)).toBeInTheDocument()
+    // Phase 6b: "coming in Phase 6" text removed; radio is dynamically enabled by execution_role.
+    expect(screen.queryByText(/coming in Phase 6/i)).not.toBeInTheDocument()
+    // Auto-dispatch radio exists but is disabled when candidate has no execution_role (default fixture).
+    const autoRadio = screen.getByRole('radio', { name: /Auto-dispatch/i })
+    expect(autoRadio).toBeInTheDocument()
   })
 
-  it('disables the Auto-dispatch radio even when selected, reserving real dispatch for Phase 6', () => {
+  it('disables the Auto-dispatch radio when candidate has no execution_role (Phase 6b)', () => {
     const onChange = vi.fn()
-    renderPanel({ selectedExecutionMode: 'role_dispatch', onSelectedExecutionModeChange: onChange })
-    // Query the Auto-dispatch radio specifically by its nested text label.
+    // Default renderPanel fixture has no execution_role on selectedCandidate.
+    renderPanel({ selectedExecutionMode: 'manual', onSelectedExecutionModeChange: onChange })
     const autoRadio = screen.getByRole('radio', { name: /Auto-dispatch/i })
     expect(autoRadio).toBeDisabled()
   })
 
   it('hides the execution mode radio group when onSelectedExecutionModeChange is not wired', () => {
     renderPanel()
-    expect(screen.queryByText(/coming in Phase 6/i)).not.toBeInTheDocument()
+    // No radio group rendered when callback not provided.
+    expect(screen.queryByRole('radio', { name: /Auto-dispatch/i })).not.toBeInTheDocument()
   })
 })

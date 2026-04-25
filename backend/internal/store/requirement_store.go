@@ -171,3 +171,37 @@ func (s *RequirementStore) PromoteToPlannedIfDraft(id string) error {
 	`, now, id)
 	return err
 }
+
+// HasAppliedTasks returns true if any task_lineage row references this requirement.
+func (s *RequirementStore) HasAppliedTasks(id string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM task_lineage WHERE requirement_id = $1`, id).Scan(&count)
+	return count > 0, err
+}
+
+// HasActiveRun returns true if any planning run for this requirement is in an active state
+// (status = queued/running or dispatch_status = queued/leased).
+func (s *RequirementStore) HasActiveRun(id string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM planning_runs
+		WHERE requirement_id = $1
+		  AND (status IN ('queued', 'running') OR dispatch_status IN ('queued', 'leased'))
+	`, id).Scan(&count)
+	return count > 0, err
+}
+
+// Delete permanently removes a requirement and cascades to planning_runs and backlog_candidates.
+// Callers must verify HasAppliedTasks and HasActiveRun return false before calling this.
+func (s *RequirementStore) Delete(id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.Exec(`DELETE FROM requirements WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}

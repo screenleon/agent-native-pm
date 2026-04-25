@@ -34,7 +34,6 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof WorkspaceOnb
   const props = {
     projectId: 'p1',
     onRunCreated: vi.fn(),
-    onWhatsnext: vi.fn(),
     planningRunsCount: 0,
     ...overrides,
   }
@@ -51,11 +50,10 @@ describe('<WorkspaceOnboardingPanel />', () => {
     localStorage.clear()
   })
 
-  it('T-6a-A1-1: renders input and both action buttons', () => {
+  it('T-6a-A1-1: renders input and primary action button', () => {
     renderPanel({ planningRunsCount: 1 })
-    expect(screen.getByLabelText(/What are you working on/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Start planning/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /What should I focus on next/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/What are you building/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Generate backlog/i })).toBeInTheDocument()
   })
 
   it('T-6a-A1-3: when provider has no usable selection → button disabled and link visible', async () => {
@@ -64,14 +62,14 @@ describe('<WorkspaceOnboardingPanel />', () => {
     getProvMock.mockResolvedValue(makeProviderOptions(false))
     renderPanel({ planningRunsCount: 1 })
 
-    const input = screen.getByLabelText(/What are you working on/i)
+    const input = screen.getByLabelText(/What are you building/i)
     await userEvent.type(input, 'My feature')
-    await userEvent.click(screen.getByRole('button', { name: /Start planning/i }))
+    await userEvent.click(screen.getByRole('button', { name: /Generate backlog/i }))
 
     await waitFor(() => {
       expect(screen.getByRole('link', { name: /Set one up/i })).toBeInTheDocument()
     })
-    expect(screen.getByRole('button', { name: /Start planning/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Generate backlog/i })).toBeDisabled()
   })
 
   it('T-6a-A1-5: after run created, calls onRunCreated callback', async () => {
@@ -83,9 +81,9 @@ describe('<WorkspaceOnboardingPanel />', () => {
 
     renderPanel({ planningRunsCount: 1, onRunCreated })
 
-    const input = screen.getByLabelText(/What are you working on/i)
+    const input = screen.getByLabelText(/What are you building/i)
     await userEvent.type(input, 'My feature')
-    await userEvent.click(screen.getByRole('button', { name: /Start planning/i }))
+    await userEvent.click(screen.getByRole('button', { name: /Generate backlog/i }))
 
     await waitFor(() => {
       expect(onRunCreated).toHaveBeenCalledWith('req-1', 'run-1')

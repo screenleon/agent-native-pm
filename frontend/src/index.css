@@ -597,6 +597,160 @@ a:hover {
   margin-top: 1rem;
 }
 
+/* Two-panel planning layout */
+.planning-welcome-view {
+  max-width: 640px;
+  padding: 2rem 0;
+  display: grid;
+  gap: 1.75rem;
+}
+
+.planning-welcome-how {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.planning-welcome-steps {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.planning-welcome-steps li strong {
+  color: var(--text);
+}
+
+.planning-welcome-demo {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  font-size: 0.88rem;
+}
+
+.planning-welcome-input-area {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.planning-welcome-input-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.planning-welcome-whatsnext {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+.planning-two-panel {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 0;
+  align-items: start;
+}
+
+.planning-sidebar {
+  border-right: 1px solid var(--border);
+  padding-right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.planning-sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.planning-sidebar-counts {
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+  margin-top: 0.5rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.planning-sidebar-count {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.2rem 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.planning-sidebar-count:hover {
+  color: var(--text);
+}
+
+.planning-main {
+  padding-left: 1.5rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.planning-main-empty {
+  padding: 2rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+/* Inline form inside sidebar — removes card wrapper styling */
+.planning-inline-form {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.5rem;
+}
+
+.planning-inline-form .form-group {
+  margin-bottom: 0.5rem;
+}
+
+@media (max-width: 1000px) {
+  .planning-two-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .planning-sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .planning-main {
+    padding-left: 0;
+  }
+}
+
 .planning-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);

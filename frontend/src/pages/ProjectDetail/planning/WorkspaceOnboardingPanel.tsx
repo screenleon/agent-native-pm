@@ -6,11 +6,13 @@ import { RequirementWizardModal } from './RequirementWizardModal'
 interface Props {
   projectId: string
   onRunCreated: (requirementId: string, runId: string) => void
-  onWhatsnext: () => void
   planningRunsCount: number
+  planningRunReady?: boolean
+  onRunWhatsnext?: () => void
+  runningWhatsnext?: boolean
 }
 
-export function WorkspaceOnboardingPanel({ projectId, onRunCreated, onWhatsnext, planningRunsCount }: Props) {
+export function WorkspaceOnboardingPanel({ projectId, onRunCreated, planningRunsCount, planningRunReady, onRunWhatsnext, runningWhatsnext }: Props) {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -81,82 +83,82 @@ export function WorkspaceOnboardingPanel({ projectId, onRunCreated, onWhatsnext,
   }
 
   return (
-    <div className="workspace-onboarding-panel">
+    <div className="planning-welcome-view">
+      <div className="planning-welcome-how">
+        <h3 style={{ margin: '0 0 0.35rem' }}>How it works</h3>
+        <ol className="planning-welcome-steps">
+          <li>Describe a feature or goal — this becomes a <strong>requirement</strong>.</li>
+          <li>The AI breaks it down into a prioritized <strong>backlog</strong> of draft tasks.</li>
+          <li>You review the draft, approve what fits, and apply them as real tasks.</li>
+        </ol>
+      </div>
+
       {showDemoBanner && (
-        <div className="helper-note" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
-          <span>
-            New here? Try the demo: we&apos;ll drop a sample requirement + approved backlog into this project so you can see the full loop.
-          </span>
+        <div className="planning-welcome-demo">
+          <span>Want to skip ahead? Load a sample requirement + backlog to see the full flow.</span>
           <div style={{ display: 'flex', gap: '0.5rem', whiteSpace: 'nowrap' }}>
             <button className="btn btn-primary btn-sm" onClick={handleDemoSeed} disabled={demoBusy}>
-              {demoBusy ? 'Loading…' : 'Show me'}
+              {demoBusy ? 'Loading…' : 'Load demo'}
             </button>
-            <button className="btn btn-secondary btn-sm" onClick={dismissDemo}>
-              Not now
-            </button>
+            <button className="btn btn-ghost btn-sm" onClick={dismissDemo}>Dismiss</button>
           </div>
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: '16rem' }}>
-          <label htmlFor="onboarding-input" style={{ display: 'block', marginBottom: '0.35rem', fontWeight: 500 }}>
-            What are you working on?
-          </label>
+      <div className="planning-welcome-input-area">
+        <label htmlFor="onboarding-input" style={{ fontWeight: 600, fontSize: '1rem' }}>
+          What are you building?
+        </label>
+        <div className="planning-welcome-input-row">
           <input
             id="onboarding-input"
             type="text"
             value={input}
             onChange={e => setInput(e.target.value)}
-            placeholder="Describe your goal or feature…"
-            style={{ width: '100%', boxSizing: 'border-box' }}
+            placeholder="e.g. Add Google SSO login for enterprise customers"
+            style={{ flex: 1, minWidth: '14rem' }}
             onKeyDown={e => { if (e.key === 'Enter' && !busy) void startPlanning(input) }}
+            autoFocus
           />
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <button
-            className="btn btn-primary"
-            onClick={() => startPlanning(input)}
-            disabled={busy || !input.trim() || noProvider}
-          >
-            {busy ? 'Starting…' : 'Start planning →'}
+          <button className="btn btn-primary" onClick={() => startPlanning(input)} disabled={busy || !input.trim() || noProvider}>
+            {busy ? 'Starting…' : 'Generate backlog →'}
           </button>
-          <button
-            className="btn btn-secondary"
-            onClick={() => setShowWizard(true)}
-            disabled={busy}
-            type="button"
-          >
-            Refine (audience + success)
-          </button>
-          <button
-            className="btn btn-ghost"
-            onClick={onWhatsnext}
-            disabled={busy}
-            type="button"
-          >
-            What should I focus on next?
+          <button className="btn btn-secondary" type="button" onClick={() => setShowWizard(true)} disabled={busy} title="Add audience and success criteria for better results">
+            Add context…
           </button>
         </div>
+
+        {noProvider && (
+          <div style={{ color: 'var(--danger)', fontSize: '0.88rem' }}>
+            No AI provider configured. <Link to="/settings/models-hub">Set one up in Model Settings →</Link>
+          </div>
+        )}
+
+        {!noProvider && planningRunReady === false && (
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+            No planning provider configured yet. <Link to="/settings/models-hub">Set up Model Settings →</Link> to run the AI step. You can still capture requirements now.
+          </div>
+        )}
+
+        {error && <div className="error-banner">{error}</div>}
       </div>
 
-      {noProvider && (
-        <div style={{ marginTop: '0.75rem', color: 'var(--danger)', fontSize: '0.88rem' }}>
-          No planning provider configured.{' '}
-          <Link to="/settings/models-hub">Set one up →</Link>
+      {planningRunReady && onRunWhatsnext && (
+        <div className="planning-welcome-whatsnext">
+          <span>Already have tasks and want a health check?</span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={onRunWhatsnext}
+            disabled={runningWhatsnext || busy}
+          >
+            {runningWhatsnext ? 'Starting…' : "Run What's Next →"}
+          </button>
         </div>
-      )}
-
-      {error && (
-        <div className="error-banner" style={{ marginTop: '0.75rem' }}>{error}</div>
       )}
 
       {showWizard && (
-        <RequirementWizardModal
-          initialTitle={input}
-          onSave={handleWizardSave}
-          onClose={() => setShowWizard(false)}
-        />
+        <RequirementWizardModal initialTitle={input} onSave={handleWizardSave} onClose={() => setShowWizard(false)} />
       )}
     </div>
   )

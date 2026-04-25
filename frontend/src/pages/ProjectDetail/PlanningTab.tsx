@@ -1,7 +1,5 @@
+import { Link } from 'react-router-dom'
 import type { Requirement, Task } from '../../types'
-import Jargon from '../../components/Jargon'
-import { PlanningStepper } from './PlanningStepper'
-import { AttentionRow } from './planning/AttentionRow'
 import { RequirementIntake } from './planning/RequirementIntake'
 import { RequirementQueue } from './planning/RequirementQueue'
 import { PlanningLauncher } from './planning/PlanningLauncher'
@@ -37,9 +35,11 @@ interface PlanningTabProps {
 /**
  * Planning Workspace shell. Composes presentational siblings under
  * `pages/ProjectDetail/planning/`; all planning-domain state + effects +
- * handlers live in `usePlanningWorkspaceData`. Per Phase 2 S1 acceptance
- * criteria (§8 of docs/phase2-planning-workspace-design.md) this shell
- * stays under 200 LOC; growth signals an architectural drift.
+ * handlers live in `usePlanningWorkspaceData`.
+ *
+ * Layout:
+ *  - Empty project (requirements.length === 0): centered welcome view via WorkspaceOnboardingPanel
+ *  - Non-empty project: two-panel layout (240px sidebar + flex main)
  */
 export function PlanningTab({
   projectId,
@@ -56,6 +56,11 @@ export function PlanningTab({
   onViewDocumentById,
   onViewDriftSignal,
 }: PlanningTabProps) {
+  // openDriftCount and onNavigateToDrift are kept in the props interface for
+  // parent compatibility (ProjectDetail passes them). They were previously used
+  // by AttentionRow which was removed in the two-panel redesign.
+  void openDriftCount
+  void onNavigateToDrift
   const ws = usePlanningWorkspaceData({
     projectId,
     requirements,
@@ -88,189 +93,241 @@ export function PlanningTab({
     const el = document.querySelector(selector) as HTMLElement | null
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
-  function focusSelector(selector: string) {
-    const el = document.querySelector(selector) as HTMLElement | null
-    if (el) el.focus()
-  }
   const jumpToRequirements = () => scrollToSelector('.requirement-list')
   const jumpToCandidates = () => scrollToSelector('.planning-candidate-panel')
-  const jumpToWorkspace = () => scrollToSelector('.planning-workspace-card')
-  const jumpToIntake = () => focusSelector('.planning-foundation-grid input')
+
+  const sidebarRequirements = requirements.filter(
+    r => r.source !== 'analysis' && r.source !== 'system'
+  )
+  const isEmpty = sidebarRequirements.length === 0
 
   return (
     <div className="planning-shell">
-      <AttentionRow
-        requirementsAwaitingPlanning={requirementsAwaitingPlanning}
-        candidatesAwaitingReview={candidatesAwaitingReview}
-        appliedOpenTasks={appliedOpenTasks}
-        openDriftCount={openDriftCount}
-        onJumpToRequirements={jumpToRequirements}
-        onJumpToCandidates={jumpToCandidates}
-        onJumpToTasks={onNavigateToTasks}
-        onJumpToDrift={onNavigateToDrift}
-        onRunWhatsnext={ws.onRunWhatsnext}
-        runningWhatsnext={ws.runningWhatsnext}
-        whatsnextReady={ws.planningRunReady}
-      />
+      {planningLoadError && (
+        <div className="error-banner" style={{ marginBottom: '1rem' }}>{planningLoadError}</div>
+      )}
 
-      <PlanningStepper
-        requirementCount={requirements.length}
-        selectedRequirement={ws.selectedRequirement}
-        selectedPlanningRun={ws.selectedPlanningRun}
-        candidateCount={ws.planningCandidates.length}
-        onJumpToIntake={jumpToIntake}
-        onJumpToWorkspace={jumpToWorkspace}
-        onJumpToCandidates={jumpToCandidates}
-      />
-
-      <div className="planning-foundation-grid">
-        <RequirementIntake
-          requirementCount={requirements.length}
-          form={ws.requirementForm}
-          onFormChange={ws.setRequirementForm}
-          creating={ws.creatingRequirement}
-          showForm={ws.showRequirementIntake}
-          onToggleForm={ws.onToggleRequirementIntake}
-          onSubmit={ws.onCreateRequirement}
-          onReset={ws.onResetRequirementForm}
-        />
-
-        <RequirementQueue
-          requirements={requirements}
-          selectedRequirementId={ws.selectedRequirementId}
-          onSelectRequirement={ws.onSelectRequirement}
-          planningLoadError={planningLoadError}
-          onArchiveRequirement={ws.onArchiveRequirement}
-          archivingRequirementId={ws.archivingRequirementId}
-        />
-      </div>
-
-      <div className="card planning-workspace-card">
-        <div className="planning-stage-header">
-          <div>
-            <h3 style={{ marginBottom: '0.25rem' }}>Planning Workspace</h3>
-            <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.88rem' }}>
-              Start a tracked planning run from the selected requirement, then review and apply its persisted draft backlog candidates without leaving this page.
-            </p>
-          </div>
-          <span className="badge badge-fresh">P2-07</span>
-        </div>
-
-        {ws.selectedRequirement ? (
-          <div className="planning-workspace-content">
-            <PlanningLauncher
-              selectedRequirement={ws.selectedRequirement}
-              providerOptions={ws.planningProviderOptions}
-              providerOptionsLoading={ws.planningProviderOptionsLoading}
-              providerOptionsError={ws.planningProviderOptionsError}
-              executionMode={ws.planningSelectedExecutionMode}
-              onExecutionModeChange={ws.onPlanningExecutionModeChange}
-              cliBindings={ws.cliBindings}
-              cliBindingsLoading={ws.cliBindingsLoading}
-              selectedCliBindingId={ws.selectedCliBindingId}
-              onCliBindingChange={ws.onCliBindingChange}
-              planningModelOverride={ws.planningModelOverride}
-              onPlanningModelOverrideChange={ws.onPlanningModelOverrideChange}
-              creatingRun={ws.creatingPlanningRun}
-              runningWhatsnext={ws.runningWhatsnext}
-              runsLoading={ws.planningRunsLoading}
-              runReady={ws.planningRunReady}
-              runBlockedReason={ws.planningRunBlockedReason}
-              onStartRun={ws.onCreatePlanningRun}
-              onRefreshRuns={() => ws.selectedRequirement && ws.loadPlanningRuns(ws.selectedRequirement.id)}
-              onRunWhatsnext={ws.onRunWhatsnext}
-            />
-
-            <PlanningRunList
-              runs={ws.planningRuns}
-              loading={ws.planningRunsLoading}
-              errorMessage={ws.planningRunsError}
-              selectedRunId={ws.selectedPlanningRunId}
-              cancellingRunId={ws.cancellingPlanningRunId}
-              providerOptions={ws.planningProviderOptions}
-              onSelectRun={ws.onSelectPlanningRun}
-              onCancelRun={ws.onCancelPlanningRun}
-            />
-
-            <CandidateReviewPanel
-              selectedRun={ws.selectedPlanningRun}
-              candidates={ws.planningCandidates}
-              candidatesLoading={ws.planningCandidatesLoading}
-              candidatesError={ws.planningCandidatesError}
-              selectedCandidate={ws.selectedPlanningCandidate}
-              selectedCandidateId={ws.selectedPlanningCandidateId}
-              onSelectCandidate={ws.onSelectPlanningCandidate}
-              candidateForm={ws.candidateForm}
-              onCandidateFormChange={ws.setCandidateForm}
-              candidateFormDirty={ws.candidateFormDirty}
-              selectedCandidateApplied={ws.selectedPlanningCandidateApplied}
-              canApplySelectedCandidate={ws.canApplySelectedCandidate}
-              savingCandidate={ws.savingCandidate}
-              applyingCandidate={ws.applyingCandidate}
-              candidateReviewError={ws.candidateReviewError}
-              candidateReviewMessage={ws.candidateReviewMessage}
-              candidateDuplicateTitles={ws.candidateDuplicateTitles}
-              runFlash={ws.planningRunFlash}
-              onDismissRunFlash={ws.onDismissRunFlash}
-              providerOptions={ws.planningProviderOptions}
-              onPersistReview={ws.onPersistCandidateReview}
-              onApplyCandidate={ws.onApplyCandidate}
-              onResetCandidateForm={ws.onResetCandidateForm}
-              selectedExecutionMode={ws.selectedExecutionMode}
-              onSelectedExecutionModeChange={ws.onSelectedExecutionModeChange}
-              onViewDocumentById={onViewDocumentById}
-              onViewDriftSignal={onViewDriftSignal}
-            />
-
-            <AppliedLineage
-              projectId={projectId}
-              reloadSignal={lineageReloadSignal}
-              onSelectLineage={(requirementId, runId, candidateId) => {
-                ws.onSelectLineage(requirementId, runId, candidateId)
-                // Scroll priority: candidate > requirement. If the click
-                // carried a candidate id we want the review panel visible;
-                // otherwise the requirement queue is the correct landing.
-                if (candidateId) {
-                  jumpToCandidates()
-                } else {
-                  jumpToRequirements()
-                }
-              }}
-              onJumpToTasks={onNavigateToTasks}
-            />
-          </div>
-        ) : requirements.length === 0 ? (
+      {isEmpty ? (
+        <>
           <WorkspaceOnboardingPanel
             projectId={projectId}
-            onRunCreated={(requirementId, runId) => ws.onSelectLineage(requirementId, runId)}
-            onWhatsnext={ws.onRunWhatsnext}
+            onRunCreated={async (requirementId, runId) => {
+              ws.onSelectLineage(requirementId, runId)
+              await onReload()
+            }}
             planningRunsCount={ws.planningRuns.length}
+            planningRunReady={ws.planningRunReady}
+            onRunWhatsnext={ws.onRunWhatsnext}
+            runningWhatsnext={ws.runningWhatsnext}
           />
-        ) : (
-          <div style={{ padding: '1.5rem 0.5rem', display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'flex-start' }}>
-            <div>
-              <h4 style={{ margin: '0 0 0.35rem' }}>Start here</h4>
-              <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.88rem' }}>
-                Select a <Jargon term="requirement">requirement</Jargon> above to plan a specific feature, or run a full project health check to surface the most urgent open work across tasks, drift signals, and stale docs.
-              </p>
+          {ws.selectedRequirement && (
+            <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <PlanningRunList
+                runs={ws.planningRuns}
+                loading={ws.planningRunsLoading}
+                errorMessage={ws.planningRunsError}
+                selectedRunId={ws.selectedPlanningRunId}
+                cancellingRunId={ws.cancellingPlanningRunId}
+                providerOptions={ws.planningProviderOptions}
+                onSelectRun={ws.onSelectPlanningRun}
+                onCancelRun={ws.onCancelPlanningRun}
+              />
+              <CandidateReviewPanel
+                selectedRun={ws.selectedPlanningRun}
+                candidates={ws.planningCandidates}
+                candidatesLoading={ws.planningCandidatesLoading}
+                candidatesError={ws.planningCandidatesError}
+                selectedCandidate={ws.selectedPlanningCandidate}
+                selectedCandidateId={ws.selectedPlanningCandidateId}
+                onSelectCandidate={ws.onSelectPlanningCandidate}
+                candidateForm={ws.candidateForm}
+                onCandidateFormChange={ws.setCandidateForm}
+                candidateFormDirty={ws.candidateFormDirty}
+                selectedCandidateApplied={ws.selectedPlanningCandidateApplied}
+                canApplySelectedCandidate={ws.canApplySelectedCandidate}
+                savingCandidate={ws.savingCandidate}
+                applyingCandidate={ws.applyingCandidate}
+                candidateReviewError={ws.candidateReviewError}
+                candidateReviewMessage={ws.candidateReviewMessage}
+                candidateDuplicateTitles={ws.candidateDuplicateTitles}
+                runFlash={ws.planningRunFlash}
+                onDismissRunFlash={ws.onDismissRunFlash}
+                providerOptions={ws.planningProviderOptions}
+                onPersistReview={ws.onPersistCandidateReview}
+                onApplyCandidate={ws.onApplyCandidate}
+                onSkipCandidate={ws.onSkipCandidate}
+                onResetCandidateForm={ws.onResetCandidateForm}
+                selectedExecutionMode={ws.selectedExecutionMode}
+                onSelectedExecutionModeChange={ws.onSelectedExecutionModeChange}
+                onViewDocumentById={onViewDocumentById}
+                onViewDriftSignal={onViewDriftSignal}
+              />
             </div>
-            {ws.planningRunReady ? (
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={ws.onRunWhatsnext}
-                disabled={ws.runningWhatsnext}
-              >
-                {ws.runningWhatsnext ? 'Starting analysis…' : "Run What's Next — full project health check"}
+          )}
+        </>
+      ) : (
+        <div className="planning-two-panel">
+          <aside className="planning-sidebar">
+            <div className="planning-sidebar-header">
+              <h4 style={{ margin: 0 }}>Requirements</h4>
+              <button className="btn btn-primary btn-sm" onClick={ws.onToggleRequirementIntake}>
+                {ws.showRequirementIntake ? '✕' : '+ New'}
               </button>
-            ) : (
-              <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                Configure a planning provider in Model Settings or connect a local connector to enable health-check runs.
-              </p>
+            </div>
+
+            {ws.showRequirementIntake && (
+              <RequirementIntake
+                variant="inline"
+                requirementCount={requirements.length}
+                form={ws.requirementForm}
+                onFormChange={ws.setRequirementForm}
+                creating={ws.creatingRequirement}
+                showForm={ws.showRequirementIntake}
+                onToggleForm={ws.onToggleRequirementIntake}
+                onSubmit={ws.onCreateRequirement}
+                onReset={ws.onResetRequirementForm}
+              />
             )}
-          </div>
-        )}
-      </div>
+
+            <RequirementQueue
+              compact
+              requirements={sidebarRequirements}
+              selectedRequirementId={ws.selectedRequirementId}
+              onSelectRequirement={ws.onSelectRequirement}
+              planningLoadError={null}
+              onArchiveRequirement={ws.onArchiveRequirement}
+              archivingRequirementId={ws.archivingRequirementId}
+              onDiscardRequirement={ws.onDiscardRequirement}
+              discardingRequirementId={ws.discardingRequirementId}
+              requirementIdsWithAppliedTasks={ws.requirementIdsWithAppliedTasks}
+            />
+
+            {(requirementsAwaitingPlanning > 0 || candidatesAwaitingReview > 0 || appliedOpenTasks > 0) && (
+              <div className="planning-sidebar-counts">
+                {requirementsAwaitingPlanning > 0 && (
+                  <button type="button" className="planning-sidebar-count" onClick={jumpToRequirements}>
+                    <span className="badge badge-stale">{requirementsAwaitingPlanning}</span>
+                    <span>awaiting planning</span>
+                  </button>
+                )}
+                {candidatesAwaitingReview > 0 && (
+                  <button type="button" className="planning-sidebar-count" onClick={jumpToCandidates}>
+                    <span className="badge badge-stale">{candidatesAwaitingReview}</span>
+                    <span>to review</span>
+                  </button>
+                )}
+                {appliedOpenTasks > 0 && (
+                  <button type="button" className="planning-sidebar-count" onClick={onNavigateToTasks}>
+                    <span className="badge badge-medium">{appliedOpenTasks}</span>
+                    <span>applied tasks open</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </aside>
+
+          <main className="planning-main">
+            {ws.selectedRequirement ? (
+              <>
+                <PlanningLauncher
+                  selectedRequirement={ws.selectedRequirement}
+                  providerOptions={ws.planningProviderOptions}
+                  providerOptionsLoading={ws.planningProviderOptionsLoading}
+                  providerOptionsError={ws.planningProviderOptionsError}
+                  executionMode={ws.planningSelectedExecutionMode}
+                  onExecutionModeChange={ws.onPlanningExecutionModeChange}
+                  cliConfigs={ws.cliConfigs}
+                  cliConfigsLoading={ws.cliConfigsLoading}
+                  selectedCliConfigKey={ws.selectedCliConfigKey}
+                  onCliConfigChange={ws.onCliConfigChange}
+                  planningModelOverride={ws.planningModelOverride}
+                  onPlanningModelOverrideChange={ws.onPlanningModelOverrideChange}
+                  creatingRun={ws.creatingPlanningRun}
+                  runningWhatsnext={ws.runningWhatsnext}
+                  runsLoading={ws.planningRunsLoading}
+                  runReady={ws.planningRunReady}
+                  runBlockedReason={ws.planningRunBlockedReason}
+                  onStartRun={ws.onCreatePlanningRun}
+                  onRefreshRuns={() => ws.selectedRequirement && ws.loadPlanningRuns(ws.selectedRequirement.id)}
+                  onRunWhatsnext={ws.onRunWhatsnext}
+                  activeRunDispatchStatus={ws.activeRunDispatchStatus}
+                />
+
+                <PlanningRunList
+                  runs={ws.planningRuns}
+                  loading={ws.planningRunsLoading}
+                  errorMessage={ws.planningRunsError}
+                  selectedRunId={ws.selectedPlanningRunId}
+                  cancellingRunId={ws.cancellingPlanningRunId}
+                  providerOptions={ws.planningProviderOptions}
+                  onSelectRun={ws.onSelectPlanningRun}
+                  onCancelRun={ws.onCancelPlanningRun}
+                />
+
+                <CandidateReviewPanel
+                  selectedRun={ws.selectedPlanningRun}
+                  candidates={ws.planningCandidates}
+                  candidatesLoading={ws.planningCandidatesLoading}
+                  candidatesError={ws.planningCandidatesError}
+                  selectedCandidate={ws.selectedPlanningCandidate}
+                  selectedCandidateId={ws.selectedPlanningCandidateId}
+                  onSelectCandidate={ws.onSelectPlanningCandidate}
+                  candidateForm={ws.candidateForm}
+                  onCandidateFormChange={ws.setCandidateForm}
+                  candidateFormDirty={ws.candidateFormDirty}
+                  selectedCandidateApplied={ws.selectedPlanningCandidateApplied}
+                  canApplySelectedCandidate={ws.canApplySelectedCandidate}
+                  savingCandidate={ws.savingCandidate}
+                  applyingCandidate={ws.applyingCandidate}
+                  candidateReviewError={ws.candidateReviewError}
+                  candidateReviewMessage={ws.candidateReviewMessage}
+                  candidateDuplicateTitles={ws.candidateDuplicateTitles}
+                  runFlash={ws.planningRunFlash}
+                  onDismissRunFlash={ws.onDismissRunFlash}
+                  providerOptions={ws.planningProviderOptions}
+                  onPersistReview={ws.onPersistCandidateReview}
+                  onApplyCandidate={ws.onApplyCandidate}
+                  onSkipCandidate={ws.onSkipCandidate}
+                  onResetCandidateForm={ws.onResetCandidateForm}
+                  selectedExecutionMode={ws.selectedExecutionMode}
+                  onSelectedExecutionModeChange={ws.onSelectedExecutionModeChange}
+                  onViewDocumentById={onViewDocumentById}
+                  onViewDriftSignal={onViewDriftSignal}
+                />
+
+                <AppliedLineage
+                  projectId={projectId}
+                  reloadSignal={lineageReloadSignal}
+                  onSelectLineage={(requirementId, runId, candidateId) => {
+                    ws.onSelectLineage(requirementId, runId, candidateId)
+                    if (candidateId) {
+                      jumpToCandidates()
+                    } else {
+                      jumpToRequirements()
+                    }
+                  }}
+                  onJumpToTasks={onNavigateToTasks}
+                />
+              </>
+            ) : (
+              <div className="planning-main-empty">
+                <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                  Select a requirement on the left to plan a specific feature.
+                </p>
+                {ws.planningRunReady ? (
+                  <button type="button" className="btn btn-secondary" onClick={ws.onRunWhatsnext} disabled={ws.runningWhatsnext}>
+                    {ws.runningWhatsnext ? 'Starting…' : "Run What's Next — full project health check"}
+                  </button>
+                ) : (
+                  <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                    <Link to="/settings/models-hub">Configure a planning provider</Link> or connect a local connector to enable health-check runs.
+                  </p>
+                )}
+              </div>
+            )}
+          </main>
+        </div>
+      )}
     </div>
   )
 }

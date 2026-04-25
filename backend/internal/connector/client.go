@@ -66,6 +66,24 @@ func (c *Client) SubmitRunResult(ctx context.Context, planningRunID string, req 
 	return &run, nil
 }
 
+// ClaimNextTask calls POST /api/connector/claim-next-task and returns the
+// next queued role_dispatch task for this connector's user, or nil when the
+// queue is empty. Phase 6b.
+func (c *Client) ClaimNextTask(ctx context.Context) (*ClaimNextTaskResponse, error) {
+	var resp ClaimNextTaskResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/api/connector/claim-next-task", c.ConnectorToken, nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// SubmitTaskResult calls POST /api/connector/tasks/:task_id/execution-result.
+// Phase 6b.
+func (c *Client) SubmitTaskResult(ctx context.Context, taskID string, req SubmitTaskResultRequest) error {
+	path := "/api/connector/tasks/" + strings.TrimSpace(taskID) + "/execution-result"
+	return c.doJSON(ctx, http.MethodPost, path, c.ConnectorToken, req, nil)
+}
+
 func (c *Client) doJSON(ctx context.Context, method, path, connectorToken string, requestBody any, responseBody any) error {
 	if c == nil {
 		return fmt.Errorf("connector client is required")

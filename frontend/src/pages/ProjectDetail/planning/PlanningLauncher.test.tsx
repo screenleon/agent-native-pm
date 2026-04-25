@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import type { AccountBinding, PlanningProviderOptions, Requirement } from '../../../types'
+import type { PlanningProviderOptions, Requirement } from '../../../types'
+import type { CliConfigOption } from './hooks/usePlanningWorkspaceData'
 import { PlanningLauncher } from './PlanningLauncher'
 
 function makeRequirement(overrides: Partial<Requirement> = {}): Requirement {
@@ -19,24 +20,16 @@ function makeRequirement(overrides: Partial<Requirement> = {}): Requirement {
   }
 }
 
-function makeBinding(overrides: Partial<AccountBinding> = {}): AccountBinding {
+function makeCliConfig(overrides: Partial<CliConfigOption> = {}): CliConfigOption {
   return {
-    id: 'b1',
-    user_id: 'u1',
-    provider_id: 'cli:claude',
-    label: 'My Claude',
-    base_url: '',
-    model_id: 'claude-sonnet-4-6',
-    configured_models: [],
-    api_key_configured: false,
-    is_active: true,
-    cli_command: 'claude',
-    is_primary: true,
-    created_at: '2026-04-22T00:00:00Z',
-    updated_at: '2026-04-22T00:00:00Z',
-    last_probe_at: null,
-    last_probe_ok: null,
-    last_probe_ms: null,
+    key: 'connector1:config1',
+    connectorId: 'connector1',
+    connectorLabel: 'My Machine',
+    configId: 'config1',
+    configLabel: 'My Claude',
+    modelId: 'claude-sonnet-4-6',
+    isPrimary: true,
+    isConnectorOnline: true,
     ...overrides,
   }
 }
@@ -49,10 +42,10 @@ function renderLauncher(overrides: Partial<React.ComponentProps<typeof PlanningL
     providerOptionsError: null,
     executionMode: 'server_provider',
     onExecutionModeChange: vi.fn(),
-    cliBindings: [],
-    cliBindingsLoading: false,
-    selectedCliBindingId: null,
-    onCliBindingChange: vi.fn(),
+    cliConfigs: [],
+    cliConfigsLoading: false,
+    selectedCliConfigKey: null,
+    onCliConfigChange: vi.fn(),
     planningModelOverride: '',
     onPlanningModelOverrideChange: vi.fn(),
     creatingRun: false,
@@ -177,7 +170,7 @@ describe('<PlanningLauncher />', () => {
     expect(btn).toBeDisabled()
   })
 
-  it('shows "No CLI binding configured" when cliBindings is empty and connector is online', () => {
+  it('shows "No CLI configured on this machine" when cliConfigs is empty and connector is online', () => {
     localStorage.setItem('anpm_launcher_advanced_open', '1')
     const providerOptions = {
       providers: [],
@@ -192,12 +185,12 @@ describe('<PlanningLauncher />', () => {
       resolved_binding_source: 'shared',
       resolved_binding_label: '',
     } as unknown as PlanningProviderOptions
-    renderLauncher({ providerOptions, executionMode: 'local_connector', runReady: true, cliBindings: [], selectedCliBindingId: null })
-    expect(screen.getByText(/No CLI binding configured/i)).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /Set up a CLI binding/i })).toBeInTheDocument()
+    renderLauncher({ providerOptions, executionMode: 'local_connector', runReady: true, cliConfigs: [], selectedCliConfigKey: null })
+    expect(screen.getByText(/No CLI configured on this machine/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Set up CLIs in My Connector/i })).toBeInTheDocument()
   })
 
-  it('shows CLI binding select with correct options when bindings exist', () => {
+  it('shows CLI config select with correct options when configs exist', () => {
     localStorage.setItem('anpm_launcher_advanced_open', '1')
     const providerOptions = {
       providers: [],
@@ -212,15 +205,15 @@ describe('<PlanningLauncher />', () => {
       resolved_binding_source: 'shared',
       resolved_binding_label: '',
     } as unknown as PlanningProviderOptions
-    const binding = makeBinding({ id: 'b1', label: 'My Claude', model_id: 'claude-sonnet-4-6', is_primary: true })
-    renderLauncher({ providerOptions, executionMode: 'local_connector', runReady: true, cliBindings: [binding], selectedCliBindingId: 'b1' })
-    expect(screen.getByText('My Claude [claude-sonnet-4-6] (primary)')).toBeInTheDocument()
-    expect(screen.getByLabelText(/CLI binding for this run/i)).toBeInTheDocument()
+    const config = makeCliConfig({ key: 'connector1:config1', connectorLabel: 'My Machine', configLabel: 'My Claude', modelId: 'claude-sonnet-4-6', isPrimary: true })
+    renderLauncher({ providerOptions, executionMode: 'local_connector', runReady: true, cliConfigs: [config], selectedCliConfigKey: 'connector1:config1' })
+    expect(screen.getByText('My Machine — My Claude [claude-sonnet-4-6] (primary)')).toBeInTheDocument()
+    expect(screen.getByLabelText(/CLI for this run/i)).toBeInTheDocument()
   })
 
-  it('calls onCliBindingChange when binding is changed', async () => {
+  it('calls onCliConfigChange when CLI config is changed', async () => {
     localStorage.setItem('anpm_launcher_advanced_open', '1')
-    const onCliBindingChange = vi.fn()
+    const onCliConfigChange = vi.fn()
     const { default: userEvent } = await import('@testing-library/user-event')
     const providerOptions = {
       providers: [],
@@ -235,18 +228,18 @@ describe('<PlanningLauncher />', () => {
       resolved_binding_source: 'shared',
       resolved_binding_label: '',
     } as unknown as PlanningProviderOptions
-    const binding1 = makeBinding({ id: 'b1', label: 'My Claude', model_id: 'claude-sonnet-4-6', is_primary: true })
-    const binding2 = makeBinding({ id: 'b2', label: 'My Codex', model_id: 'codex-mini-latest', is_primary: false, provider_id: 'cli:codex' })
-    renderLauncher({ providerOptions, executionMode: 'local_connector', runReady: true, cliBindings: [binding1, binding2], selectedCliBindingId: 'b1', onCliBindingChange })
-    const bindingSelect = screen.getByLabelText(/CLI binding for this run/i)
-    await userEvent.selectOptions(bindingSelect, 'b2')
-    expect(onCliBindingChange).toHaveBeenCalledWith('b2')
+    const config1 = makeCliConfig({ key: 'connector1:config1', connectorLabel: 'My Machine', configLabel: 'My Claude', modelId: 'claude-sonnet-4-6', isPrimary: true })
+    const config2 = makeCliConfig({ key: 'connector1:config2', connectorLabel: 'My Machine', configLabel: 'My Codex', modelId: 'codex-mini-latest', isPrimary: false })
+    renderLauncher({ providerOptions, executionMode: 'local_connector', runReady: true, cliConfigs: [config1, config2], selectedCliConfigKey: 'connector1:config1', onCliConfigChange })
+    const configSelect = screen.getByLabelText(/CLI for this run/i)
+    await userEvent.selectOptions(configSelect, 'connector1:config2')
+    expect(onCliConfigChange).toHaveBeenCalledWith('connector1:config2')
   })
 
   it('T-6a-A2-1: default render hides advanced controls', () => {
     renderLauncher()
     expect(screen.queryByLabelText(/Execution mode/i)).not.toBeInTheDocument()
-    expect(screen.queryByLabelText(/CLI binding for this run/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/CLI for this run/i)).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/Model override for this run/i)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Advanced/i })).toBeInTheDocument()
   })

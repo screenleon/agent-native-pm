@@ -353,6 +353,8 @@ Source: `[agent:backend-architect]`
 | POST | `/api/connector/heartbeat` | Refresh connector presence using `X-Connector-Token` |
 | POST | `/api/connector/claim-next-run` | Lease the next queued local-connector planning run for the connector owner |
 | POST | `/api/connector/planning-runs/:id/result` | Return success or failure for one leased planning run |
+| POST | `/api/connector/claim-next-task` | (Phase 6b) Claim the next queued role-dispatch task for the connector owner |
+| POST | `/api/connector/tasks/:task_id/execution-result` | (Phase 6b) Submit execution result for a claimed task |
 
 Behavior:
 
@@ -369,6 +371,8 @@ Behavior:
 - `POST /api/me/local-connectors/:id/probe-binding` (Phase 4 P4-4) is authenticated and takes `{ binding_id }`. The referenced binding MUST belong to the same user and MUST have a `cli:*` provider_id; otherwise 400/404 is returned. The server enqueues a pending-probe entry on the named connector's `metadata.pending_cli_probe_requests[]`. If a probe for the same binding is already in-flight on that connector, the existing `probe_id` is returned (idempotent). Returns `{ probe_id }`. If the connector's pending-probe list is already at the hard cap (64 entries, see `DECISIONS.md` 2026-04-24 "P4-4 probe pipeline"), the handler returns HTTP 429.
 - `GET /api/me/local-connectors/:id/probe-binding/:probe_id` (Phase 4 P4-4) returns `{ status: "pending" | "completed" | "not_found", result? }`. The `result` block is populated only when `status == "completed"` and matches the `CliProbeResult` shape. Stored results are retained for 24 hours; callers that poll past that window receive `not_found`.
 - Connector tokens are distinct from session tokens and API keys.
+- `POST /api/connector/claim-next-task` (Phase 6b) requires `X-Connector-Token`. Claims one task with `dispatch_status = 'queued'` whose project has the connector's owner as a `project_members` row. Returns `{ task, requirement }` where `task` is null when the queue is empty. Sets the task's `dispatch_status = 'running'` atomically.
+- `POST /api/connector/tasks/:task_id/execution-result` (Phase 6b) requires `X-Connector-Token`. Accepts `{ success, result?, error_message?, error_kind? }`. The task MUST already be in `dispatch_status = 'running'` (owned by the connector's user); otherwise 400. On success: `dispatch_status = 'completed'`, `execution_result` stored as JSON. On failure: `dispatch_status = 'failed'`. `error_kind` is validated against the same allowlist as planning runs (`session_expired`, `rate_limited`, `context_overflow`, `adapter_timeout`, `unknown`); values outside the list are normalised to `"unknown"`.
 
 ### Planning Settings
 
