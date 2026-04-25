@@ -48,7 +48,7 @@ func ExecuteProbe(ctx context.Context, req models.PendingCliProbeRequest) models
 	}
 
 	start := time.Now()
-	output, runErr := invokeBuiltinCLI(ctx, agent, binary, model, probePromptText, probeTimeoutSeconds)
+	output, _, runErr := invokeBuiltinCLI(ctx, agent, binary, model, probePromptText, probeTimeoutSeconds)
 	latency := time.Since(start).Milliseconds()
 
 	if runErr != "" {

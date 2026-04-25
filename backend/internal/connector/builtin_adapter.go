@@ -62,11 +62,23 @@ func ExecuteBuiltin(ctx context.Context, input ExecJSONInput) models.LocalConnec
 	}
 
 	// Run CLI.
-	output, runErr := invokeBuiltinCLI(ctx, agent, binary, model, prompt, timeoutSec)
+	output, truncated, runErr := invokeBuiltinCLI(ctx, agent, binary, model, prompt, timeoutSec)
+	// Precedence: when both runErr and truncation are set, runErr is
+	// more informative (likely a timeout that produced partial output).
+	// The truncation-only branch fires when the CLI exited normally
+	// but produced more than the cap.
 	if runErr != "" {
 		return models.LocalConnectorSubmitRunResultRequest{
 			Success:      false,
 			ErrorMessage: runErr,
+			CliInfo:      &models.CliUsageInfo{Agent: agent, Model: model, ModelSource: modelSource},
+		}
+	}
+	if truncated {
+		return models.LocalConnectorSubmitRunResultRequest{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("CLI stdout exceeded the dispatch output cap (%d bytes); raise ANPM_DISPATCH_OUTPUT_MAX or set 0 to disable", dispatchOutputMaxBytes()),
+			ErrorKind:    models.ErrorKindOutputTooLarge,
 			CliInfo:      &models.CliUsageInfo{Agent: agent, Model: model, ModelSource: modelSource},
 		}
 	}
@@ -565,11 +577,27 @@ func buildScopeSnippet(req *models.Requirement) string {
 	return strings.Join(parts, "\n")
 }
 
-// invokeBuiltinCLI runs the CLI and returns (output, errorMessage).
+// invokeBuiltinCLI runs the CLI and returns (output, truncated, errorMessage).
+//
+// Phase 6c L0 safety boundary:
+//   - timeoutSec <= 0 → no wall-clock limit (escape hatch); the caller
+//     resolved this from roles.TimeoutFor (env=0) or chose to disable.
+//   - timeoutSec > 0  → context.WithTimeout wrapped with SIGTERM →
+//     sigtermGracePeriod → SIGKILL escalation (applyDispatchKillEscalation).
+//   - stdout is wrapped in boundedWriter using dispatchOutputMaxBytes;
+//     when the cap is exceeded, output is truncated and the second
+//     return value is true (caller maps to ErrorKindOutputTooLarge).
+//
 // For Claude: uses exec.CommandContext with -p flag.
 // For Codex: uses creack/pty because Codex checks stdin.isTTY.
-func invokeBuiltinCLI(ctx context.Context, agent, binary, model, prompt string, timeoutSec int) (string, string) {
-	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+func invokeBuiltinCLI(ctx context.Context, agent, binary, model, prompt string, timeoutSec int) (string, bool, string) {
+	var runCtx context.Context
+	var cancel context.CancelFunc
+	if timeoutSec > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+	} else {
+		runCtx, cancel = context.WithCancel(ctx)
+	}
 	defer cancel()
 
 	switch agent {
@@ -578,26 +606,28 @@ func invokeBuiltinCLI(ctx context.Context, agent, binary, model, prompt string, 
 	case "codex":
 		return invokeCodexCLI(runCtx, binary, model, prompt, timeoutSec)
 	default:
-		return "", fmt.Sprintf("unsupported agent %q (expected 'claude' or 'codex')", agent)
+		return "", false, fmt.Sprintf("unsupported agent %q (expected 'claude' or 'codex')", agent)
 	}
 }
 
 // invokeClaudeCLI runs: claude -p <prompt> [--model <model>]
-func invokeClaudeCLI(ctx context.Context, binary, model, prompt string, timeoutSec int) (string, string) {
+func invokeClaudeCLI(ctx context.Context, binary, model, prompt string, timeoutSec int) (string, bool, string) {
 	args := []string{"-p", prompt}
 	if model != "" {
 		args = append(args, "--model", model)
 	}
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Stdin = nil // disconnected
+	applyDispatchKillEscalation(cmd)
 
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	bw := newBoundedWriter(&stdout, dispatchOutputMaxBytes())
+	cmd.Stdout = bw
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return "", fmt.Sprintf("claude CLI timed out after %ds", timeoutSec)
+			return "", bw.Truncated(), fmt.Sprintf("claude CLI timed out after %ds", timeoutSec)
 		}
 		detail := strings.TrimSpace(stderr.String())
 		if detail == "" {
@@ -609,33 +639,49 @@ func invokeClaudeCLI(ctx context.Context, binary, model, prompt string, timeoutS
 		if len(detail) > 400 {
 			detail = detail[:400]
 		}
-		return "", fmt.Sprintf("claude CLI failed: %s", detail)
+		return stdout.String(), bw.Truncated(), fmt.Sprintf("claude CLI failed: %s", detail)
 	}
-	return stdout.String(), ""
+	return stdout.String(), bw.Truncated(), ""
 }
 
 // invokeCodexCLI runs codex inside a PTY because Codex checks stdin.isTTY.
-func invokeCodexCLI(ctx context.Context, binary, model, prompt string, timeoutSec int) (string, string) {
+//
+// PTY-specific concurrency: the io.Copy that drains the PTY master is
+// run on a separate goroutine so we can Wait() on the process FIRST.
+// On a CLI that ignores SIGTERM, exec sends SIGKILL after WaitDelay;
+// once the process dies the kernel will eventually close its end of
+// the PTY which lets io.Copy return — but on some platforms that close
+// is delayed. Closing ptmx explicitly after Wait returns guarantees
+// the goroutine unblocks immediately, and the copyDone channel ensures
+// we capture all output before reading buf.
+func invokeCodexCLI(ctx context.Context, binary, model, prompt string, timeoutSec int) (string, bool, string) {
 	args := []string{prompt}
 	if model != "" {
 		args = append(args, "--model", model)
 	}
 	cmd := exec.CommandContext(ctx, binary, args...)
+	applyDispatchKillEscalation(cmd)
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
-		return "", fmt.Sprintf("pty unavailable for codex: %v", err)
+		return "", false, fmt.Sprintf("pty unavailable for codex: %v", err)
 	}
-	defer func() { _ = ptmx.Close() }()
 
-	// Drain all output from the PTY master into a buffer.
 	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, ptmx)
+	bw := newBoundedWriter(&buf, dispatchOutputMaxBytes())
+	copyDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(bw, ptmx)
+		close(copyDone)
+	}()
 
-	// Wait for the command to finish.
-	if waitErr := cmd.Wait(); waitErr != nil {
+	waitErr := cmd.Wait()
+	_ = ptmx.Close() // unblock the copy goroutine if it has not already returned
+	<-copyDone       // ensure all output is captured before reading buf
+
+	if waitErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return "", fmt.Sprintf("codex CLI timed out after %ds", timeoutSec)
+			return "", bw.Truncated(), fmt.Sprintf("codex CLI timed out after %ds", timeoutSec)
 		}
 		raw := stripANSI(buf.String())
 		raw = strings.ReplaceAll(raw, "\r\n", "\n")
@@ -644,13 +690,13 @@ func invokeCodexCLI(ctx context.Context, binary, model, prompt string, timeoutSe
 		if len(tail) > 600 {
 			tail = tail[len(tail)-600:]
 		}
-		return "", fmt.Sprintf("codex CLI failed (%v): %s", waitErr, tail)
+		return raw, bw.Truncated(), fmt.Sprintf("codex CLI failed (%v): %s", waitErr, tail)
 	}
 
 	raw := buf.String()
 	raw = strings.ReplaceAll(raw, "\r\n", "\n")
 	raw = strings.ReplaceAll(raw, "\r", "\n")
-	return raw, ""
+	return raw, bw.Truncated(), ""
 }
 
 // stripANSI removes ANSI escape codes from s.

@@ -238,30 +238,44 @@ type PlanningRunCliInfo struct {
 }
 
 const (
-	ErrorKindUnknown            = "unknown"
-	ErrorKindSessionExpired     = "session_expired"
-	ErrorKindRateLimited        = "rate_limited"
-	ErrorKindContextOverflow    = "context_overflow"
-	ErrorKindAdapterTimeout     = "adapter_timeout"
-	ErrorKindCliNotFound        = "cli_not_found"
-	ErrorKindCliTimeout         = "cli_timeout"
-	ErrorKindModelNotAvailable  = "model_not_available"
-	ErrorKindAdapterProtocol    = "adapter_protocol_error"
+	ErrorKindUnknown             = "unknown"
+	ErrorKindSessionExpired      = "session_expired"
+	ErrorKindRateLimited         = "rate_limited"
+	ErrorKindContextOverflow     = "context_overflow"
+	ErrorKindAdapterTimeout      = "adapter_timeout"
+	ErrorKindCliNotFound         = "cli_not_found"
+	ErrorKindCliTimeout          = "cli_timeout"
+	ErrorKindModelNotAvailable   = "model_not_available"
+	ErrorKindAdapterProtocol     = "adapter_protocol_error"
+	// Phase 6c: dispatch safety boundary error kinds. These are produced
+	// by the role_dispatch loop in connector/service.go (NOT by planning
+	// runs) — see docs/phase6c-plan.md §3 C2.
+	ErrorKindDispatchTimeout     = "dispatch_timeout"
+	ErrorKindOutputTooLarge      = "output_too_large"
+	ErrorKindInvalidResultSchema = "invalid_result_schema"
+	// Phase 6c PR-2 will populate role_not_found from the server-side
+	// claim-next-task enforcement; the constant ships in PR-1 so the
+	// allowlist + remediation catalog is finalised in one place.
+	ErrorKindRoleNotFound        = "role_not_found"
 )
 
 // AllowedErrorKinds is the server-side allowlist for error_kind values
 // submitted by the adapter. Anything outside this set is normalised to
 // ErrorKindUnknown (S5a/S5b, design §5 D7).
 var AllowedErrorKinds = map[string]bool{
-	ErrorKindUnknown:           true,
-	ErrorKindSessionExpired:    true,
-	ErrorKindRateLimited:       true,
-	ErrorKindContextOverflow:   true,
-	ErrorKindAdapterTimeout:    true,
-	ErrorKindCliNotFound:       true,
-	ErrorKindCliTimeout:        true,
-	ErrorKindModelNotAvailable: true,
-	ErrorKindAdapterProtocol:   true,
+	ErrorKindUnknown:             true,
+	ErrorKindSessionExpired:      true,
+	ErrorKindRateLimited:         true,
+	ErrorKindContextOverflow:     true,
+	ErrorKindAdapterTimeout:      true,
+	ErrorKindCliNotFound:         true,
+	ErrorKindCliTimeout:          true,
+	ErrorKindModelNotAvailable:   true,
+	ErrorKindAdapterProtocol:     true,
+	ErrorKindDispatchTimeout:     true,
+	ErrorKindOutputTooLarge:      true,
+	ErrorKindInvalidResultSchema: true,
+	ErrorKindRoleNotFound:        true,
 }
 
 // ErrorKindRemediations is the static server-side catalog of human-readable
@@ -269,14 +283,18 @@ var AllowedErrorKinds = map[string]bool{
 // computes the hint from this map and persists it alongside error_kind in
 // connector_cli_info — adapters never supply free-text hints.
 var ErrorKindRemediations = map[string]string{
-	ErrorKindSessionExpired:    "Re-authenticate your CLI (run `claude` or `codex` once interactively) then retry the planning run.",
-	ErrorKindRateLimited:       "Your CLI subscription has hit a rate limit. Wait a few minutes before retrying.",
-	ErrorKindContextOverflow:   "The planning context was too large for the model. Try reducing the number of open requirements or documents in scope.",
-	ErrorKindAdapterTimeout:    "The adapter timed out waiting for the CLI. Check that your CLI is healthy (`anpm-connector doctor`) and retry.",
-	ErrorKindCliNotFound:       "The CLI command was not found on the connector's PATH. Check the cli_command field on your CLI binding and ensure the binary is installed.",
-	ErrorKindCliTimeout:        "The CLI process timed out. Check that your CLI is healthy and retry.",
-	ErrorKindModelNotAvailable: "The requested model is not available for this CLI. Check the model_id on your CLI binding.",
-	ErrorKindAdapterProtocol:   "The adapter produced unexpected output. Check your adapter script and retry.",
+	ErrorKindSessionExpired:      "Re-authenticate your CLI (run `claude` or `codex` once interactively) then retry the planning run.",
+	ErrorKindRateLimited:         "Your CLI subscription has hit a rate limit. Wait a few minutes before retrying.",
+	ErrorKindContextOverflow:     "The planning context was too large for the model. Try reducing the number of open requirements or documents in scope.",
+	ErrorKindAdapterTimeout:      "The adapter timed out waiting for the CLI. Check that your CLI is healthy (`anpm-connector doctor`) and retry.",
+	ErrorKindCliNotFound:         "The CLI command was not found on the connector's PATH. Check the cli_command field on your CLI binding and ensure the binary is installed.",
+	ErrorKindCliTimeout:          "The CLI process timed out. Check that your CLI is healthy and retry.",
+	ErrorKindModelNotAvailable:   "The requested model is not available for this CLI. Check the model_id on your CLI binding.",
+	ErrorKindAdapterProtocol:     "The adapter produced unexpected output. Check your adapter script and retry.",
+	ErrorKindDispatchTimeout:     "The role-dispatch CLI ran past its wall-clock budget and was killed. The role's typical budget is shown in the Apply panel; set ANPM_DISPATCH_TIMEOUT (seconds) to override globally for unusually long tasks, or 0 to disable.",
+	ErrorKindOutputTooLarge:      "The CLI produced more output than the dispatch boundary allows (default 5 MB). Re-run with a tighter task scope, or set ANPM_DISPATCH_OUTPUT_MAX (bytes) to raise the limit (0 disables).",
+	ErrorKindInvalidResultSchema: "The CLI returned output that does not match the role result schema (must include a `files` array). Check the role prompt and retry.",
+	ErrorKindRoleNotFound:        "The task references an execution role that is not in the current catalog. The role may have been renamed or removed; create a new candidate with a current role.",
 }
 
 // PlanningRunBindingSnapshot freezes the fields of an account_bindings row
