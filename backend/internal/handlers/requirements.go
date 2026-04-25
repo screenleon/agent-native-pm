@@ -142,7 +142,7 @@ func (h *RequirementHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete requirement")
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeSuccess(w, http.StatusOK, nil, nil)
 }
 
 func (h *RequirementHandler) Update(w http.ResponseWriter, r *http.Request) {

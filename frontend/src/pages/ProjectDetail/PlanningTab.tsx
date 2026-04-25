@@ -320,7 +320,7 @@ export function PlanningTab({
                   </button>
                 ) : (
                   <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                    <Link to="/settings/models">Configure a planning provider</Link> or connect a local connector to enable health-check runs.
+                    <Link to="/settings/models-hub">Configure a planning provider</Link> or connect a local connector to enable health-check runs.
                   </p>
                 )}
               </div>

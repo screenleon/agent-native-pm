@@ -98,6 +98,10 @@ func (h *PlanningRunHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid execution mode")
 		return
 	}
+	if req.AdapterType != "" && req.AdapterType != "backlog" && req.AdapterType != "whatsnext" {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid adapter_type %q: must be backlog or whatsnext", req.AdapterType))
+		return
+	}
 	req.ProviderID = ""
 	requestingUserID := ""
 	if apiKey := middleware.APIKeyFromContext(r.Context()); apiKey != nil && strings.TrimSpace(req.ExecutionMode) == models.PlanningExecutionModeLocalConnector {

@@ -14,10 +14,10 @@ function DispatchStatusBadge({ task }: DispatchStatusBadgeProps) {
   if (!ds || ds === 'none') return null
 
   const labelMap: Record<string, string> = {
-    queued: '待執行',
-    running: '執行中…',
-    completed: '已完成',
-    failed: '失敗',
+    queued: 'Queued',
+    running: 'Running…',
+    completed: 'Completed',
+    failed: 'Failed',
   }
   const colorMap: Record<string, string> = {
     queued: 'var(--text-muted)',
@@ -83,6 +83,7 @@ function DispatchStatusBadge({ task }: DispatchStatusBadgeProps) {
       try {
         const raw = task.execution_result as Record<string, unknown> | null | undefined
         if (raw && typeof raw['error_message'] === 'string') return raw['error_message']
+        if (raw && typeof raw['error'] === 'string') return raw['error']
       } catch { /* ignore */ }
       return ''
     })()

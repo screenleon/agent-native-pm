@@ -102,7 +102,7 @@ export function usePlanningWorkspaceData({
   const [showRequirementIntake, setShowRequirementIntake] = useState(false)
   const [archivingRequirementId, setArchivingRequirementId] = useState<string | null>(null)
   const [discardingRequirementId, setDiscardingRequirementId] = useState<string | null>(null)
-  const [requirementIdsWithAppliedTasks, setRequirementIdsWithAppliedTasks] = useState<Set<string>>(new Set())
+  const [requirementIdsWithAppliedTasks, setRequirementIdsWithAppliedTasks] = useState<Set<string> | undefined>(undefined)
   const [runningWhatsnext, setRunningWhatsnext] = useState(false)
   const [cancellingPlanningRunId, setCancellingPlanningRunId] = useState<string | null>(null)
   const [planningRunFlash, setPlanningRunFlash] = useState<{ runId: string; kind: 'success' | 'error'; message: string } | null>(null)
@@ -188,7 +188,7 @@ export function usePlanningWorkspaceData({
       const ids = new Set(resp.data.map((e: { requirement_id?: string }) => e.requirement_id).filter((id): id is string => Boolean(id)))
       setRequirementIdsWithAppliedTasks(ids)
     } catch {
-      // non-fatal, default to empty set (safe fallback = Archive only)
+      // non-fatal, leave as undefined so RequirementQueue shows Archive-only until load succeeds
     }
   }
 

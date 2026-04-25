@@ -184,22 +184,26 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 	}
 	if roleID == "" {
 		fmt.Fprintf(s.Stderr, "task %s has invalid source %q — missing role_id\n", task.ID, task.Source)
-		_ = s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("invalid task source %q: missing role_id", task.Source),
 			ErrorKind:    "unknown",
-		})
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
 		return true, nil
 	}
 
 	// Catalog enforcement: role must exist in the embedded prompt library.
 	if !prompts.Exists("roles/" + roleID) {
 		fmt.Fprintf(s.Stderr, "task %s: role %q not found in catalog\n", task.ID, roleID)
-		_ = s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("role %q not found in catalog", roleID),
 			ErrorKind:    "unknown",
-		})
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
 		return true, nil
 	}
 
@@ -214,11 +218,13 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 	_, cliPath, cliModel, _, resolveErr := resolveBuiltinCLI(nil, nil)
 	if resolveErr != "" {
 		fmt.Fprintf(s.Stderr, "task %s: CLI resolve failed: %s\n", task.ID, resolveErr)
-		_ = s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
 			Success:      false,
 			ErrorMessage: resolveErr,
 			ErrorKind:    "adapter_timeout",
-		})
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
 		return true, nil
 	}
 
@@ -234,11 +240,13 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 	rendered, renderErr := prompts.Render("roles/"+roleID, vars)
 	if renderErr != nil {
 		fmt.Fprintf(s.Stderr, "task %s: prompt render failed: %v\n", task.ID, renderErr)
-		_ = s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("prompt render error: %v", renderErr),
 			ErrorKind:    "unknown",
-		})
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
 		return true, nil
 	}
 
@@ -250,11 +258,13 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 	if runErrMsg != "" {
 		errKind := classifyRunError(runErrMsg)
 		fmt.Fprintf(s.Stderr, "task %s: CLI failed: %s\n", task.ID, runErrMsg)
-		_ = s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
 			Success:      false,
 			ErrorMessage: runErrMsg,
 			ErrorKind:    errKind,
-		})
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
 		return true, nil
 	}
 
@@ -269,11 +279,13 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 		}
 		errMsg := fmt.Sprintf("could not parse output as JSON: %v; first 240 chars: %s", extractErr, snippet)
 		fmt.Fprintf(s.Stderr, "task %s: %s\n", task.ID, errMsg)
-		_ = s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
+		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
 			Success:      false,
 			ErrorMessage: errMsg,
 			ErrorKind:    "unknown",
-		})
+		}); err != nil {
+			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
 		return true, nil
 	}
 

@@ -354,18 +354,15 @@ func (s *TaskStore) CountByProjectAndStatus(projectID string) (map[string]int, e
 // ─── Phase 6b: dispatch methods ──────────────────────────────────────────────
 
 // ClaimNextDispatchTask atomically finds the next queued role_dispatch task
-// belonging to a project the connector's user owns, marks it as "running",
-// and returns the task together with its requirement.
+// belonging to a project the connector's user is a member of, marks it as
+// "running", and returns the task together with its requirement.
 //
-// Ownership check: the task's project_id must appear in a project where
-// user_id = connectorUserID (checked via the projects table direct ownership
-// column — this project assumes a single-owner model per project).
+// Ownership check: the task's project_id must appear in project_members where
+// user_id = connectorUserID. A SQLite write-lock is acquired via a no-op
+// UPDATE before the SELECT so concurrent claim attempts serialise.
 //
 // Returns (nil, nil, nil) when the queue is empty for this connector's user.
 func (s *TaskStore) ClaimNextDispatchTask(connectorID, connectorUserID string) (*models.Task, *models.Requirement, error) {
-	// Use BEGIN IMMEDIATE on SQLite to get a write lock immediately so no two
-	// connectors can race to claim the same task. On Postgres the FOR UPDATE
-	// inside the transaction achieves the same.
 	var tx *sql.Tx
 	var err error
 	if s.dialect.IsSQLite() {
@@ -495,7 +492,10 @@ func (s *TaskStore) CompleteDispatchTask(taskID, connectorUserID string, result 
 // FailDispatchTask marks a task as failed and records an error message in the
 // result JSON.
 func (s *TaskStore) FailDispatchTask(taskID, connectorUserID, errorMsg string) error {
-	errJSON, _ := json.Marshal(map[string]string{"error": errorMsg})
+	errJSON, _ := json.Marshal(map[string]string{
+		"error_message": errorMsg,
+		"error_kind":    "dispatch_failed",
+	})
 	return s.updateDispatchStatus(taskID, connectorUserID, models.TaskDispatchStatusFailed, "", json.RawMessage(errJSON))
 }
 

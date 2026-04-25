@@ -68,14 +68,14 @@ describe('<TasksTab />', () => {
     const tasks = [makeTask({ id: 'q1', title: 'Queued task', dispatch_status: 'queued', source: 'role_dispatch:backend-architect' })]
     render(<TasksTab {...baseProps} tasks={tasks} taskFilters={emptyFilters} />)
     expect(screen.getByTestId('dispatch-badge-queued')).toBeInTheDocument()
-    expect(screen.getByTestId('dispatch-badge-queued').textContent).toBe('待執行')
+    expect(screen.getByTestId('dispatch-badge-queued').textContent).toBe('Queued')
   })
 
   it('T-6b-UI-2: renders running badge for dispatch_status=running', () => {
     const tasks = [makeTask({ id: 'r1', title: 'Running task', dispatch_status: 'running', source: 'role_dispatch:backend-architect' })]
     render(<TasksTab {...baseProps} tasks={tasks} taskFilters={emptyFilters} />)
     expect(screen.getByTestId('dispatch-badge-running')).toBeInTheDocument()
-    expect(screen.getByTestId('dispatch-badge-running').textContent).toBe('執行中…')
+    expect(screen.getByTestId('dispatch-badge-running').textContent).toBe('Running…')
   })
 
   it('T-6b-UI-3: renders completed badge with expandable result block; clicking shows file paths', () => {
