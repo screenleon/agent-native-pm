@@ -111,9 +111,21 @@ type dbQuerier interface {
 // ActorInfo.Kind is not in the recognised enum.
 var ErrInvalidActorKind = errors.New("audit: invalid actor_kind")
 
-// ErrInvalidConfidence is returned when ActorInfo.Confidence is set
-// but outside [0, 1], or when actor_kind=router but Confidence is nil.
+// ErrInvalidConfidence is returned by Record for router-side confidence
+// errors: actor_kind=router with Confidence=nil, or Confidence outside
+// [0, 1]. The message text is router-specific because that is the only
+// branch that produces this sentinel.
 var ErrInvalidConfidence = errors.New("audit: confidence must be set in [0,1] for actor_kind=router")
+
+// ErrConfidenceNotAllowed is returned when a non-router actor passes a
+// non-nil Confidence value. Confidence is provenance-typed: it ONLY
+// belongs on actor_kind=router rows. Allowing other kinds to carry a
+// confidence value would silently corrupt downstream queries that
+// filter on "router decisions with confidence ≥ X" (critic round 1
+// finding #1). Split from ErrInvalidConfidence per Copilot review #6
+// so logs/debug output describe the actual failure mode rather than
+// reusing router-specific wording.
+var ErrConfidenceNotAllowed = errors.New("audit: confidence is only allowed for actor_kind=router")
 
 // Record inserts an audit row inside the supplied transaction. The
 // caller is responsible for tx lifecycle (commit/rollback). The audit
@@ -136,7 +148,10 @@ func Record(tx *sql.Tx, subjectKind SubjectKind, subjectID, field string, oldVal
 	// classifier confidence. Allowing user/system/connector rows to
 	// carry a confidence value would silently corrupt downstream
 	// queries that filter on "router decisions with confidence ≥ X"
-	// (critic round 1 finding #1).
+	// (critic round 1 finding #1). Two distinct sentinels per
+	// Copilot review #6 — router-specific failures wrap
+	// ErrInvalidConfidence; non-router-with-confidence wraps
+	// ErrConfidenceNotAllowed.
 	if actor.Kind == ActorRouter {
 		if actor.Confidence == nil {
 			return ErrInvalidConfidence
@@ -145,7 +160,7 @@ func Record(tx *sql.Tx, subjectKind SubjectKind, subjectID, field string, oldVal
 			return fmt.Errorf("%w: got %f", ErrInvalidConfidence, *actor.Confidence)
 		}
 	} else if actor.Confidence != nil {
-		return fmt.Errorf("%w: confidence must be nil for actor_kind=%q", ErrInvalidConfidence, actor.Kind)
+		return fmt.Errorf("%w: actor_kind=%q passed confidence=%f", ErrConfidenceNotAllowed, actor.Kind, *actor.Confidence)
 	}
 
 	id := uuid.NewString()

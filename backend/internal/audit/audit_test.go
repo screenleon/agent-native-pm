@@ -105,6 +105,29 @@ func TestRecordConfidenceOutOfRange(t *testing.T) {
 	}
 }
 
+func TestRecordNonRouterRejectsConfidence(t *testing.T) {
+	// Copilot review #6: non-router actors that pass Confidence must
+	// produce ErrConfidenceNotAllowed (NOT the router-specific
+	// ErrInvalidConfidence). Loosely: the sentinel describes the
+	// actual failure mode so log readers are not misled.
+	db := testutil.OpenTestDB(t)
+
+	v := "x"
+	conf := 0.5
+	for _, kind := range []audit.ActorKind{audit.ActorUser, audit.ActorAPIKey, audit.ActorSystem, audit.ActorConnector} {
+		err := recordTx(t, db, audit.SubjectBacklogCandidate, "cand-non-router", "execution_role",
+			nil, &v,
+			audit.ActorInfo{Kind: kind, ID: "actor", Confidence: &conf},
+		)
+		if !errors.Is(err, audit.ErrConfidenceNotAllowed) {
+			t.Errorf("kind=%s: expected ErrConfidenceNotAllowed, got %v", kind, err)
+		}
+		if errors.Is(err, audit.ErrInvalidConfidence) {
+			t.Errorf("kind=%s: should NOT be ErrInvalidConfidence (router-specific), got %v", kind, err)
+		}
+	}
+}
+
 func TestRecordRouterRoundTripsConfidence(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	ctx := context.Background()

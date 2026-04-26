@@ -21,10 +21,16 @@ import { isKnownRoleId } from '../../../types/roles'
 
 interface CandidateRoleEditorProps {
   candidate: BacklogCandidate
-  // null = catalog still loading; the chip suppresses the stale
-  // warning while loading to avoid the false-positive flash that
-  // critic round 1 #5 / risk-reviewer L1 flagged on the panel.
+  // null = catalog still loading OR fetch failed (see availableRolesError);
+  // either way, the stale-warning is suppressed to avoid a
+  // false-positive flash. Critic round 1 #5 / risk-reviewer L1 +
+  // Copilot review #3.
   availableRoles: ReadonlyArray<RoleInfo> | null
+  // When the /api/roles fetch fails the parent keeps availableRoles=null
+  // AND populates this string. The chip surfaces it inline so operators
+  // know the catalog never loaded (vs "loaded but empty"). null when no
+  // failure has occurred.
+  availableRolesError?: string | null
   // onUpdateRole receives the new role id. Empty string clears.
   // The parent persists via updateBacklogCandidate and refreshes
   // the candidate list state — this component is purely
@@ -39,6 +45,7 @@ interface CandidateRoleEditorProps {
 export function CandidateRoleEditor({
   candidate,
   availableRoles,
+  availableRolesError,
   onUpdateRole,
   disabled,
 }: CandidateRoleEditorProps) {
@@ -48,14 +55,19 @@ export function CandidateRoleEditor({
   const [draftRole, setDraftRole] = useState<string>(candidate.execution_role ?? '')
 
   const currentRole = candidate.execution_role ?? ''
-  // Stale check uses both the local KNOWN_ROLE_IDS mirror AND (when
-  // loaded) the runtime catalog. The local mirror is the safe-on-mount
-  // signal: even before /api/roles resolves, we know unambiguously
-  // whether the role is in the static list. Once the runtime list
-  // arrives, both sources should agree (the drift test guards that).
+  // Treat the runtime /api/roles response as the source of truth once
+  // it has loaded. Under a staggered deploy the backend catalog can be
+  // updated before the frontend bundle ships (or vice-versa), so the
+  // static KNOWN_ROLE_IDS mirror can disagree with the live server.
+  // While availableRoles === null (still loading) we fall back to the
+  // local mirror to suppress a false-positive stale-warning flash on
+  // mount for obviously valid roles. This matches the panel-level
+  // staleness check in CandidateReviewPanel.
   const catalogReady = availableRoles !== null
-  const isStale = currentRole !== '' && catalogReady && !isKnownRoleId(currentRole)
   const matchedRole = catalogReady ? availableRoles!.find(r => r.id === currentRole) : undefined
+  const isStale =
+    currentRole !== '' &&
+    (catalogReady ? matchedRole === undefined : !isKnownRoleId(currentRole))
   const dropdownRoles = availableRoles ?? []
 
   function openEditor() {
@@ -111,10 +123,24 @@ export function CandidateRoleEditor({
               {r.title} (v{r.version})
             </option>
           ))}
-          {availableRoles === null && (
+          {availableRoles === null && !availableRolesError && (
             <option disabled>Loading roles…</option>
           )}
+          {availableRoles === null && availableRolesError && (
+            <option disabled>Failed to load roles</option>
+          )}
         </select>
+        {availableRolesError && (
+          <span
+            role="alert"
+            style={{
+              color: 'var(--danger, #ef4444)',
+              fontSize: '0.78rem',
+            }}
+          >
+            {availableRolesError}
+          </span>
+        )}
         <button
           type="button"
           className="btn btn-primary btn-small"

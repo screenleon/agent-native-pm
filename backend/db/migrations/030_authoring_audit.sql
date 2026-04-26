@@ -9,9 +9,13 @@
 --
 -- subject_kind values: backlog_candidate, task, planning_run, connector
 -- field examples: execution_role, status, po_decision (caller chooses)
--- actor_kind values: user, router, system, connector
---   router is reserved for Phase 6d auto-apply, NO writer in 6c
---   PR-3 suggest writes user after operator confirms
+-- actor_kind values: user, api_key, router, system, connector
+--   user      session-authenticated human operator
+--   api_key   automation-authenticated request via API key
+--   router    reserved for Phase 6d auto-apply (LLM router) -- NO writer in 6c
+--             PR-3 suggest writes "user" after operator confirms
+--   system    server-side enforcement (e.g. claim-next-task stale-role)
+--   connector connector-initiated change
 -- confidence: 0.0-1.0, only set when actor_kind=router
 CREATE TABLE actor_audit (
     id TEXT PRIMARY KEY,

@@ -115,6 +115,13 @@ interface CandidateReviewPanelProps {
     default_timeout_sec: number
     category: 'role' | 'meta'
   }> | null
+  // Phase 6c PR-2 (Copilot review #3): when /api/roles fetch fails,
+  // availableRoles stays null (== loading sentinel) AND this string is
+  // populated. The panel renders the message in the dropdown / chip
+  // area so operators understand the catalog never loaded; otherwise
+  // an empty dropdown with no roles would silently look like "the
+  // server has no roles configured", which is a different failure.
+  availableRolesError?: string | null
   // Phase 6c PR-2: optional callback to PATCH the candidate's
   // execution_role outside the apply flow. When provided, the
   // candidate row renders an inline CandidateRoleEditor (chip + edit
@@ -170,6 +177,7 @@ export function CandidateReviewPanel({
   chosenExecutionRole,
   onChosenExecutionRoleChange,
   availableRoles,
+  availableRolesError,
   onUpdateCandidateExecutionRole,
   onViewDocumentById,
   onViewDriftSignal,
@@ -549,7 +557,8 @@ export function CandidateReviewPanel({
                   {onUpdateCandidateExecutionRole ? (
                     <CandidateRoleEditor
                       candidate={selectedCandidate}
-                      availableRoles={availableRoles ?? []}
+                      availableRoles={availableRoles ?? null}
+                      availableRolesError={availableRolesError ?? null}
                       onUpdateRole={role => onUpdateCandidateExecutionRole(selectedCandidate.id, role)}
                       disabled={selectedCandidateApplied || savingCandidate || applyingCandidate}
                     />
@@ -628,10 +637,25 @@ export function CandidateReviewPanel({
                               {r.title} (v{r.version}) — 預估 {Math.round(r.default_timeout_sec / 60)} min
                             </option>
                           ))}
-                          {availableRoles === null && (
+                          {availableRoles === null && !availableRolesError && (
                             <option disabled>Loading roles…</option>
                           )}
+                          {availableRoles === null && availableRolesError && (
+                            <option disabled>Failed to load roles</option>
+                          )}
                         </select>
+                        {availableRolesError && (
+                          <div
+                            role="alert"
+                            style={{
+                              marginTop: '0.35rem',
+                              fontSize: '0.78rem',
+                              color: 'var(--danger, #ef4444)',
+                            }}
+                          >
+                            Failed to load roles: {availableRolesError}
+                          </div>
+                        )}
                       </div>
                     )}
 

@@ -461,12 +461,30 @@ func (s *TaskStore) tryClaimNextDispatchTask(tx *sql.Tx, connectorUserID string)
 	// ("role_dispatch:<role>") and check IsKnown. Stale-role tasks are
 	// transitioned to failed in this same transaction and the outer
 	// loop retries to find the next valid task.
-	roleID := parseRoleIDFromSource(task.Source)
-	if !roles.IsKnown(roleID) {
+	//
+	// Two distinct failure modes (Copilot review #4):
+	//   - source has no ":" suffix (legacy "role_dispatch" task created
+	//     before suffix was required) → role_dispatch_malformed,
+	//     pointing operators at the source field, not the role catalog.
+	//   - role id present but absent from the catalog (rename / removal
+	//     after the candidate was applied) → role_not_found.
+	roleID, hasSuffix := parseRoleIDFromSource(task.Source)
+	roleKnown := hasSuffix && roles.IsKnown(roleID)
+	if !roleKnown {
+		var errorKind, errorMessage, rationale string
+		if !hasSuffix {
+			errorKind = models.ErrorKindRoleDispatchMalformed
+			errorMessage = fmt.Sprintf("task source %q is missing a role suffix (expected role_dispatch:<role>)", task.Source)
+			rationale = fmt.Sprintf("source %q has no role suffix", task.Source)
+		} else {
+			errorKind = models.ErrorKindRoleNotFound
+			errorMessage = fmt.Sprintf("role %q is not in the current catalog", roleID)
+			rationale = fmt.Sprintf("role %q not in catalog", roleID)
+		}
 		now := time.Now().UTC()
 		execResultJSON, _ := json.Marshal(map[string]string{
-			"error_kind":    models.ErrorKindRoleNotFound,
-			"error_message": fmt.Sprintf("role %q is not in the current catalog", roleID),
+			"error_kind":    errorKind,
+			"error_message": errorMessage,
 		})
 		if _, err := tx.Exec(
 			`UPDATE tasks SET dispatch_status = $1, execution_result = $2, updated_at = $3 WHERE id = $4`,
@@ -481,7 +499,7 @@ func (s *TaskStore) tryClaimNextDispatchTask(tx *sql.Tx, connectorUserID string)
 			audit.ActorInfo{
 				Kind:      audit.ActorSystem,
 				ID:        "claim-next-task",
-				Rationale: fmt.Sprintf("role %q not in catalog", roleID),
+				Rationale: rationale,
 			},
 		); err != nil {
 			return false, nil, nil, fmt.Errorf("audit stale-role transition: %w", err)
@@ -512,16 +530,33 @@ func (s *TaskStore) tryClaimNextDispatchTask(tx *sql.Tx, connectorUserID string)
 }
 
 // parseRoleIDFromSource extracts the role component of a task source
-// like "role_dispatch:backend-architect". Returns "" if the source has
-// no role suffix or is not a role_dispatch source. Mirrors the
-// connector-side parser in connector/service.go RunOnceTask so server
-// and connector apply the same catalog enforcement to identical inputs.
-func parseRoleIDFromSource(source string) string {
+// like "role_dispatch:backend-architect". Returns:
+//
+//	(roleID, true)  — source has the "role_dispatch:" prefix; roleID is
+//	                   the trimmed suffix (may be empty if the suffix
+//	                   was empty, which is itself malformed).
+//	("", false)     — source does not have the "role_dispatch:" prefix
+//	                   at all (e.g. legacy "role_dispatch" without the
+//	                   colon, or a non-dispatch source picked up by the
+//	                   LIKE clause). Caller emits
+//	                   ErrorKindRoleDispatchMalformed for this case
+//	                   (Copilot review #4: clearer than reusing
+//	                   role_not_found with an empty role).
+//
+// Mirrors the connector-side parser in connector/service.go RunOnceTask
+// so server and connector apply the same catalog enforcement to
+// identical inputs.
+func parseRoleIDFromSource(source string) (string, bool) {
 	const prefix = "role_dispatch:"
 	if !strings.HasPrefix(source, prefix) {
-		return ""
+		return "", false
 	}
-	return strings.TrimSpace(source[len(prefix):])
+	roleID := strings.TrimSpace(source[len(prefix):])
+	if roleID == "" {
+		// Has the prefix but no suffix payload — also malformed.
+		return "", false
+	}
+	return roleID, true
 }
 
 // getRequirementForTask joins task_lineage → requirements to find the

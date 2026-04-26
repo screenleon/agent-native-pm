@@ -257,6 +257,15 @@ const (
 	// claim-next-task enforcement; the constant ships in PR-1 so the
 	// allowlist + remediation catalog is finalised in one place.
 	ErrorKindRoleNotFound        = "role_not_found"
+	// Phase 6c PR-2 (Copilot review #4): distinct kind for tasks whose
+	// source string does NOT carry a "<role>" suffix after
+	// "role_dispatch:". This is structurally different from
+	// role_not_found (which means the role id is well-formed but absent
+	// from the catalog) — typically a legacy task created before the
+	// suffix was required, or a programming error in a candidate
+	// applier. Operators see a clearer remediation that points at the
+	// source field rather than the role catalog.
+	ErrorKindRoleDispatchMalformed = "role_dispatch_malformed"
 )
 
 // AllowedErrorKinds is the server-side allowlist for error_kind values
@@ -274,8 +283,9 @@ var AllowedErrorKinds = map[string]bool{
 	ErrorKindAdapterProtocol:     true,
 	ErrorKindDispatchTimeout:     true,
 	ErrorKindOutputTooLarge:      true,
-	ErrorKindInvalidResultSchema: true,
-	ErrorKindRoleNotFound:        true,
+	ErrorKindInvalidResultSchema:   true,
+	ErrorKindRoleNotFound:          true,
+	ErrorKindRoleDispatchMalformed: true,
 }
 
 // ErrorKindRemediations is the static server-side catalog of human-readable
@@ -294,7 +304,8 @@ var ErrorKindRemediations = map[string]string{
 	ErrorKindDispatchTimeout:     "The role-dispatch CLI ran past its wall-clock budget and was killed. The role's typical budget is shown in the Apply panel; set ANPM_DISPATCH_TIMEOUT (seconds) to override globally for unusually long tasks, or 0 to disable.",
 	ErrorKindOutputTooLarge:      "The CLI produced more output than the dispatch boundary allows (default 5 MB). Re-run with a tighter task scope, or set ANPM_DISPATCH_OUTPUT_MAX (bytes) to raise the limit (0 disables).",
 	ErrorKindInvalidResultSchema: "The CLI returned output that does not match the role result schema (must include a `files` array). Check the role prompt and retry.",
-	ErrorKindRoleNotFound:        "The task references an execution role that is not in the current catalog. The role may have been renamed or removed; create a new candidate with a current role.",
+	ErrorKindRoleNotFound:          "The task references an execution role that is not in the current catalog. The role may have been renamed or removed; create a new candidate with a current role.",
+	ErrorKindRoleDispatchMalformed: "The task source is missing a role suffix (expected `role_dispatch:<role>`). This typically means the task was created before role suffixes were required; create a new candidate with a current role.",
 }
 
 // PlanningRunBindingSnapshot freezes the fields of an account_bindings row

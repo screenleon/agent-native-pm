@@ -744,16 +744,34 @@ export function usePlanningWorkspaceData({
   // server-side static data) and the response feeds the drift test
   // catch in roles.test.ts.
   //
-  // Loading sentinel: `null` distinguishes "fetch in flight" from
-  // "fetch succeeded with an empty list" (per critic round 1 #5 +
-  // risk-reviewer L1). The CandidateReviewPanel suppresses the
-  // stale-role warning while loading to avoid false positives on
-  // mount / on transient network failure.
+  // State machine (Copilot review #3 — keep failure distinguishable):
+  //
+  //   availableRoles  | availableRolesError | meaning
+  //   ----------------+---------------------+-----------------------------
+  //   null            | null                | fetch in flight
+  //   RoleInfo[]      | null                | fetch succeeded
+  //   null            | string              | fetch failed; show message
+  //
+  // Importantly, on failure availableRoles stays `null`, NOT `[]`. An
+  // empty array would (a) defeat the loading sentinel that suppresses
+  // the stale-role warning and (b) silently render an empty dropdown
+  // with no indication that the catalog never loaded. The panel reads
+  // both fields and renders an explicit error string in the dropdown +
+  // chip area when error is set.
   const [availableRoles, setAvailableRoles] = useState<RoleInfo[] | null>(null)
+  const [availableRolesError, setAvailableRolesError] = useState<string | null>(null)
   useEffect(() => {
     listRoles()
-      .then(resp => setAvailableRoles(resp.data ?? []))
-      .catch(() => setAvailableRoles([]))
+      .then(resp => {
+        setAvailableRoles(resp.data ?? [])
+        setAvailableRolesError(null)
+      })
+      .catch(err => {
+        setAvailableRoles(null)
+        setAvailableRolesError(
+          err instanceof Error ? err.message : 'Failed to load roles',
+        )
+      })
   }, [])
 
   async function handleSkipCandidate() {
@@ -877,6 +895,7 @@ export function usePlanningWorkspaceData({
     chosenExecutionRole,
     onChosenExecutionRoleChange: setChosenExecutionRole,
     availableRoles,
+    availableRolesError,
     onUpdateCandidateExecutionRole: handleUpdateCandidateExecutionRole,
     // provider options
     planningProviderOptions,
