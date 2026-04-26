@@ -126,4 +126,35 @@ describe('<CandidateRoleEditor />', () => {
     render(<CandidateRoleEditor candidate={makeCandidate()} availableRoles={roles} onUpdateRole={onUpdate} disabled />)
     expect(screen.queryByRole('button', { name: /set role/i })).not.toBeInTheDocument()
   })
+
+  // Copilot review #3: when /api/roles fetch fails, the parent keeps
+  // availableRoles=null AND populates availableRolesError. The editor
+  // surfaces the failure in the dropdown + chip area so operators can
+  // distinguish "loaded but empty" from "never loaded".
+  it('shows error message in editor when availableRolesError is set', () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined)
+    render(
+      <CandidateRoleEditor
+        candidate={makeCandidate()}
+        availableRoles={null}
+        availableRolesError="network error"
+        onUpdateRole={onUpdate}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /set role/i }))
+    expect(screen.getByText(/failed to load roles/i)).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('network error')
+  })
+
+  it('does NOT flag stale while availableRoles is loading (null) without error', () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined)
+    render(
+      <CandidateRoleEditor
+        candidate={makeCandidate({ execution_role: 'backend-architect' })}
+        availableRoles={null}
+        onUpdateRole={onUpdate}
+      />,
+    )
+    expect(screen.queryByText(/stale role/i)).not.toBeInTheDocument()
+  })
 })

@@ -178,17 +178,29 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 	}
 	task := resp.Task
 
-	// Parse role_id from source ("role_dispatch:backend-architect" → "backend-architect").
+	// Parse role_id from source ("role_dispatch:backend-architect" →
+	// "backend-architect"). Mirrors the server-side parser in
+	// store.parseRoleIDFromSource — same input → same error_kind, so
+	// operators see consistent diagnostics whether the stale-role
+	// check fired in the server claim path or made it through to the
+	// connector. Two distinct kinds (Phase 6c PR-2 Copilot review #4):
+	//   - source missing role suffix → role_dispatch_malformed
+	//   - role id absent from catalog → role_not_found
 	roleID := ""
+	hasSuffix := false
 	if after, ok := strings.CutPrefix(task.Source, "role_dispatch:"); ok {
-		roleID = strings.TrimSpace(after)
+		trimmed := strings.TrimSpace(after)
+		if trimmed != "" {
+			roleID = trimmed
+			hasSuffix = true
+		}
 	}
-	if roleID == "" {
+	if !hasSuffix {
 		fmt.Fprintf(s.Stderr, "task %s has invalid source %q — missing role_id\n", task.ID, task.Source)
 		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
 			Success:      false,
-			ErrorMessage: fmt.Sprintf("invalid task source %q: missing role_id", task.Source),
-			ErrorKind:    "unknown",
+			ErrorMessage: fmt.Sprintf("task source %q is missing a role suffix (expected role_dispatch:<role>)", task.Source),
+			ErrorKind:    models.ErrorKindRoleDispatchMalformed,
 		}); err != nil {
 			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
 		}
@@ -200,8 +212,8 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 		fmt.Fprintf(s.Stderr, "task %s: role %q not found in catalog\n", task.ID, roleID)
 		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
 			Success:      false,
-			ErrorMessage: fmt.Sprintf("role %q not found in catalog", roleID),
-			ErrorKind:    "unknown",
+			ErrorMessage: fmt.Sprintf("role %q is not in the current catalog", roleID),
+			ErrorKind:    models.ErrorKindRoleNotFound,
 		}); err != nil {
 			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
 		}

@@ -63,6 +63,12 @@ export function CandidateRoleEditor({
   // local mirror to suppress a false-positive stale-warning flash on
   // mount for obviously valid roles. This matches the panel-level
   // staleness check in CandidateReviewPanel.
+  //
+  // NOTE: this assumes availableRoles is fetched once on hook mount
+  // and never mutated mid-session. If a future change adds server-push
+  // catalog updates (e.g. via SSE in Phase 6c PR-4 / PR-5), the
+  // operator-facing chip can become stale relative to the live catalog
+  // until the next full reload — revisit this check at that point.
   const catalogReady = availableRoles !== null
   const matchedRole = catalogReady ? availableRoles!.find(r => r.id === currentRole) : undefined
   const isStale =
