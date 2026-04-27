@@ -1073,12 +1073,10 @@ func (h *PlanningRunHandler) SuggestRole(w http.ResponseWriter, r *http.Request)
 
 	result := h.roleSuggester(r.Context(), candidate.Title, candidate.Description, requirementCtx, projectCtx, nil)
 
-	// On failure, return 422 with structured error detail so the frontend
-	// can render a user-actionable message rather than a generic toast.
-	if result.ErrorKind != "" {
-		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("[%s] %s", result.ErrorKind, result.ErrorMessage))
-		return
-	}
-
+	// Always return 200. Advisory LLM endpoints express failure in the
+	// response body (error_kind + error_message) rather than via HTTP status
+	// codes, so the frontend can render a user-actionable message and the
+	// call is never treated as a network error by the fetch layer.
+	// Per API-008 (rules/domain/backend-api.md).
 	writeSuccess(w, http.StatusOK, result, nil)
 }

@@ -22,10 +22,10 @@ export function PlanningRunContextDrawer({ runId, open, onToggle }: PlanningRunC
 
   const load = useCallback(async () => {
     if (fetched.current) return
-    fetched.current = true
     setLoading(true)
     try {
       const res = await getContextSnapshot(runId)
+      fetched.current = true  // only after success so transient errors can be retried
       setSnapshot(res.data)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load context snapshot')
