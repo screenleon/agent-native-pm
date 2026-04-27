@@ -2,15 +2,19 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/screenleon/agent-native-pm/internal/audit"
 	"github.com/screenleon/agent-native-pm/internal/database"
 	"github.com/screenleon/agent-native-pm/internal/models"
+	"github.com/screenleon/agent-native-pm/internal/roles"
 )
 
 var (
@@ -20,6 +24,10 @@ var (
 	ErrBacklogCandidateBadStatus   = errors.New("invalid backlog candidate status")
 	ErrBacklogCandidateNotApproved         = errors.New("backlog candidate must be approved before applying")
 	ErrBacklogCandidateInvalidExecutionMode = errors.New("invalid execution_mode (expected 'manual' or 'role_dispatch')")
+	// Phase 6c PR-2: apply payload now carries execution_role; these
+	// errors fire when the role is missing or unknown for role_dispatch.
+	ErrBacklogCandidateMissingExecutionRole = errors.New("execution_role required when execution_mode='role_dispatch'")
+	ErrBacklogCandidateUnknownExecutionRole = errors.New("execution_role is not in the role catalog")
 )
 
 const appliedCandidateTaskSource = "agent:planning-orchestrator"
@@ -208,12 +216,50 @@ func (s *BacklogCandidateStore) ListByPlanningRun(planningRunID string, page, pe
 	return candidates, total, rows.Err()
 }
 
+// EnrichWithAuthoring populates ExecutionRoleAuthoring on the supplied
+// candidates by joining against the latest actor_audit row for the
+// `execution_role` field. Candidates with no role set, or with no
+// matching audit row (pre-Phase-6c data), are left with a nil
+// pointer. Errors from the audit lookup are best-effort: a single
+// failed lookup logs and skips that candidate without poisoning the
+// whole list. Phase 6c PR-2 risk-reviewer H1 fix.
+func (s *BacklogCandidateStore) EnrichWithAuthoring(ctx context.Context, candidates []models.BacklogCandidate) {
+	for i := range candidates {
+		c := &candidates[i]
+		if c.ExecutionRole == nil || strings.TrimSpace(*c.ExecutionRole) == "" {
+			continue
+		}
+		entry, err := audit.QueryLatest(ctx, s.db, audit.SubjectBacklogCandidate, c.ID, "execution_role")
+		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				log.Printf("backlog_candidate_store: enrich authoring failed for %s: %v", c.ID, err)
+			}
+			continue
+		}
+		c.ExecutionRoleAuthoring = &models.ExecutionRoleAuthoring{
+			ActorKind:  string(entry.Actor.Kind),
+			ActorID:    entry.Actor.ID,
+			Rationale:  entry.Actor.Rationale,
+			Confidence: entry.Actor.Confidence,
+			SetAt:      entry.CreatedAt,
+		}
+	}
+}
+
 func (s *BacklogCandidateStore) DeleteByPlanningRun(planningRunID string) error {
 	_, err := s.db.Exec(`DELETE FROM backlog_candidates WHERE planning_run_id = $1`, planningRunID)
 	return err
 }
 
-func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandidateRequest) (*models.BacklogCandidate, error) {
+// Update applies a partial update to a backlog candidate. Phase 6c
+// PR-2: when the patch changes execution_role, the change is validated
+// against the role catalog (empty clears, non-empty MUST be in
+// roles.IsKnown) and an actor_audit row is written inside the same
+// transaction as the column update. The actor argument is required
+// for any patch that mutates execution_role; for patches that change
+// other fields only (title/description/status), actor may be the zero
+// value and is ignored.
+func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandidateRequest, actor audit.ActorInfo) (*models.BacklogCandidate, error) {
 	candidate, err := s.GetByID(id)
 	if err != nil {
 		return nil, err
@@ -234,6 +280,13 @@ func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandid
 		executionRoleValue = *candidate.ExecutionRole
 	}
 	changed := false
+	executionRoleChanged := false
+	var oldExecutionRole *string
+	if candidate.ExecutionRole != nil {
+		v := *candidate.ExecutionRole
+		oldExecutionRole = &v
+	}
+	var newExecutionRole *string
 
 	if req.Title != nil {
 		normalizedTitle := strings.TrimSpace(*req.Title)
@@ -266,22 +319,28 @@ func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandid
 
 	if req.ExecutionRole != nil {
 		trimmed := strings.TrimSpace(*req.ExecutionRole)
-		// Empty string clears the column (NULL). Non-empty sets it.
-		// Catalog validation is deliberately deferred to Phase 6 (see
-		// docs/phase5-plan.md §8 Q2). Do NOT add a role-allowlist check
-		// here without bumping the Phase 5 DECISIONS entry — the contract
-		// explicitly allows unknown role strings today so Phase 6 can
-		// introduce catalog enforcement as a single atomic change with
-		// migration of any existing rows.
+		// Phase 6c PR-2: catalog enforcement at the PATCH boundary.
+		// Empty string clears the column (allowed); any non-empty
+		// value MUST be in roles.IsKnown. This replaces the Phase 5
+		// "unknown role accepted" contract, which Phase 5 DECISIONS
+		// §(d) flagged as a Phase 6 must-do.
+		if trimmed != "" && !roles.IsKnown(trimmed) {
+			return nil, ErrBacklogCandidateUnknownExecutionRole
+		}
 		if trimmed == "" {
 			if candidate.ExecutionRole != nil {
 				executionRoleValue = nil
 				changed = true
+				executionRoleChanged = true
+				newExecutionRole = nil
 			}
 		} else {
 			if candidate.ExecutionRole == nil || *candidate.ExecutionRole != trimmed {
 				executionRoleValue = trimmed
 				changed = true
+				executionRoleChanged = true
+				v := trimmed
+				newExecutionRole = &v
 			}
 		}
 	}
@@ -290,18 +349,48 @@ func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandid
 		return nil, ErrBacklogCandidateNoChanges
 	}
 
+	// Phase 6c PR-2: when execution_role is the field being changed we
+	// MUST commit the column update and the actor_audit row atomically.
+	// For non-execution_role patches the audit table is untouched and a
+	// transaction is unnecessary; we keep the pre-Phase-6c single-Exec
+	// path to avoid forcing every status/title patch through a tx.
 	now := time.Now().UTC()
-	_, err = s.db.Exec(`
-		UPDATE backlog_candidates
-		SET title = $1,
-		    description = $2,
-		    status = $3,
-		    execution_role = $4,
-		    updated_at = $5
-		WHERE id = $6
-	`, title, description, status, executionRoleValue, now, id)
-	if err != nil {
-		return nil, err
+	if executionRoleChanged {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		if _, err := tx.Exec(`
+			UPDATE backlog_candidates
+			SET title = $1,
+			    description = $2,
+			    status = $3,
+			    execution_role = $4,
+			    updated_at = $5
+			WHERE id = $6
+		`, title, description, status, executionRoleValue, now, id); err != nil {
+			return nil, err
+		}
+		if err := audit.Record(tx, audit.SubjectBacklogCandidate, id, "execution_role", oldExecutionRole, newExecutionRole, actor); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err := s.db.Exec(`
+			UPDATE backlog_candidates
+			SET title = $1,
+			    description = $2,
+			    status = $3,
+			    execution_role = $4,
+			    updated_at = $5
+			WHERE id = $6
+		`, title, description, status, executionRoleValue, now, id); err != nil {
+			return nil, err
+		}
 	}
 
 	return s.GetByID(id)
@@ -311,20 +400,42 @@ func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandid
 // execution mode "manual". Kept as a shim so existing call sites compile
 // without change. New callers should use ApplyToTaskWithMode.
 func (s *BacklogCandidateStore) ApplyToTask(id string) (*models.ApplyBacklogCandidateResponse, error) {
-	return s.ApplyToTaskWithMode(id, models.ApplyExecutionModeManual)
+	return s.ApplyToTaskWithMode(id, models.ApplyExecutionModeManual, "", audit.ActorInfo{})
 }
 
-// ApplyToTaskWithMode (Phase 5 B3) applies the candidate with an explicit
-// execution mode. "manual" behaves identically to the pre-Phase-5 flow.
-// "role_dispatch" marks the created task's `source` with the candidate's
-// execution_role so the audit trail distinguishes dispatch-earmarked
-// tasks; actual dispatch is Phase 6.
-func (s *BacklogCandidateStore) ApplyToTaskWithMode(id, executionMode string) (*models.ApplyBacklogCandidateResponse, error) {
+// ApplyToTaskWithMode applies the candidate with an explicit execution
+// mode and (for role_dispatch) execution role.
+//
+// Phase 6c PR-2 changes:
+//   - executionRole is now a payload-carried argument, not implicitly
+//     read from candidate.execution_role. This closes the catch-22
+//     where the prior flow required the candidate.execution_role to
+//     be set first but had no UI to set it.
+//   - When mode=role_dispatch, executionRole MUST be non-empty and
+//     in the role catalog (roles.IsKnown). Empty / unknown returns a
+//     typed error; the handler maps to 400.
+//   - When mode=role_dispatch, the candidate.execution_role is updated
+//     to the supplied role inside the same transaction (so the row is
+//     internally consistent), and an actor_audit row is recorded with
+//     the supplied actor info.
+//   - When mode=manual, executionRole is ignored entirely and no audit
+//     row is written for execution_role (the field was not the subject
+//     of this apply).
+func (s *BacklogCandidateStore) ApplyToTaskWithMode(id, executionMode, executionRole string, actor audit.ActorInfo) (*models.ApplyBacklogCandidateResponse, error) {
 	if executionMode == "" {
 		executionMode = models.ApplyExecutionModeManual
 	}
 	if !models.ValidApplyExecutionModes[executionMode] {
 		return nil, ErrBacklogCandidateInvalidExecutionMode
+	}
+	role := strings.TrimSpace(executionRole)
+	if executionMode == models.ApplyExecutionModeRoleDispatch {
+		if role == "" {
+			return nil, ErrBacklogCandidateMissingExecutionRole
+		}
+		if !roles.IsKnown(role) {
+			return nil, ErrBacklogCandidateUnknownExecutionRole
+		}
 	}
 
 	tx, err := s.db.Begin()
@@ -397,21 +508,13 @@ func (s *BacklogCandidateStore) ApplyToTaskWithMode(id, executionMode string) (*
 	}
 
 	// Compute the task source. Manual = the pre-Phase-5 constant.
-	// role_dispatch = append the candidate's execution_role (if any) so
-	// the audit trail reflects the dispatch intent.
+	// role_dispatch = "role_dispatch:" + payload-supplied role. Role is
+	// validated against roles.IsKnown above so this string is always
+	// ASCII and short, but keep the rune-aware truncation as defensive
+	// armor for any future catalog entries with non-ASCII ids.
 	source := appliedCandidateTaskSource
 	if executionMode == models.ApplyExecutionModeRoleDispatch {
-		if candidate.ExecutionRole != nil && strings.TrimSpace(*candidate.ExecutionRole) != "" {
-			source = "role_dispatch:" + strings.TrimSpace(*candidate.ExecutionRole)
-		} else {
-			source = "role_dispatch"
-		}
-		// Rune-aware truncation — Phase 5 does not enforce a role
-		// catalog so execution_role can contain non-ASCII. Byte-slicing
-		// could split a multi-byte codepoint and produce invalid UTF-8
-		// in task.source (Copilot PR#22). Convert to []rune and slice
-		// by rune count; 80 codepoints is a generous cap that still
-		// fits any sensible role id.
+		source = "role_dispatch:" + role
 		if runes := []rune(source); len(runes) > 80 {
 			source = string(runes[:80])
 		}
@@ -432,6 +535,32 @@ func (s *BacklogCandidateStore) ApplyToTaskWithMode(id, executionMode string) (*
 	}
 	candidate.Status = models.BacklogCandidateStatusApplied
 	candidate.UpdatedAt = now
+
+	// For role_dispatch: persist the chosen role on the candidate and
+	// write an audit row. We only audit when the value actually
+	// changed — apply with the same role that was already set is not a
+	// new authoring event (the previous PATCH that set it is already
+	// audited).
+	if executionMode == models.ApplyExecutionModeRoleDispatch {
+		var oldRole *string
+		if candidate.ExecutionRole != nil && *candidate.ExecutionRole != "" {
+			s := *candidate.ExecutionRole
+			oldRole = &s
+		}
+		if oldRole == nil || *oldRole != role {
+			if _, err := tx.Exec(
+				`UPDATE backlog_candidates SET execution_role = $1, updated_at = $2 WHERE id = $3`,
+				role, now, candidate.ID,
+			); err != nil {
+				return nil, err
+			}
+			candidate.ExecutionRole = &role
+			newRole := role
+			if err := audit.Record(tx, audit.SubjectBacklogCandidate, candidate.ID, "execution_role", oldRole, &newRole, actor); err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, err

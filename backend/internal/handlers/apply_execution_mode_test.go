@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/screenleon/agent-native-pm/internal/audit"
 	"github.com/screenleon/agent-native-pm/internal/handlers"
 	"github.com/screenleon/agent-native-pm/internal/middleware"
 	"github.com/screenleon/agent-native-pm/internal/models"
@@ -101,7 +102,7 @@ func (fx applyFixture) seedApprovedCandidate(t *testing.T, executionRole string)
 		t.Fatalf("create draft: %v", err)
 	}
 	approved := "approved"
-	updated, err := fx.candidates.Update(drafts[0].ID, models.UpdateBacklogCandidateRequest{Status: &approved})
+	updated, err := fx.candidates.Update(drafts[0].ID, models.UpdateBacklogCandidateRequest{Status: &approved}, audit.ActorInfo{})
 	if err != nil {
 		t.Fatalf("approve: %v", err)
 	}
@@ -178,11 +179,16 @@ func TestApplyBacklogCandidate_ExplicitManual(t *testing.T) {
 	}
 }
 
-// T-P5-B3-3: role_dispatch + role on candidate → task.source carries the role.
+// Phase 6c PR-2 T-6c-C1-A3: role_dispatch + execution_role in payload
+// → task.source carries the role. Replaces the Phase 5 contract where
+// the role was implicitly read from the candidate row.
 func TestApplyBacklogCandidate_RoleDispatchWithRole(t *testing.T) {
 	fx := newApplyFixture(t)
 	candidate := fx.seedApprovedCandidate(t, "backend-architect")
-	w := fx.apply(t, candidate.ID, map[string]string{"execution_mode": "role_dispatch"})
+	w := fx.apply(t, candidate.ID, map[string]string{
+		"execution_mode": "role_dispatch",
+		"execution_role": "backend-architect",
+	})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d body=%s", w.Code, w.Body.String())
 	}
@@ -202,26 +208,31 @@ func TestApplyBacklogCandidate_RoleDispatchWithRole(t *testing.T) {
 	}
 }
 
-// T-P5-B3-4: role_dispatch + no role set on candidate → plain "role_dispatch" source.
+// Phase 6c PR-2 T-6c-C1-A1: role_dispatch + no execution_role in payload
+// → 400 (catalog enforcement at apply boundary). Replaces the Phase 5
+// behaviour where the missing role silently produced source="role_dispatch".
 func TestApplyBacklogCandidate_RoleDispatchWithoutRole(t *testing.T) {
 	fx := newApplyFixture(t)
 	candidate := fx.seedApprovedCandidate(t, "")
 	w := fx.apply(t, candidate.ID, map[string]string{"execution_mode": "role_dispatch"})
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 (missing execution_role), got %d body=%s", w.Code, w.Body.String())
 	}
-	var resp struct {
-		Data struct {
-			Task struct {
-				Source string `json:"source"`
-			} `json:"task"`
-		} `json:"data"`
+	if !strings.Contains(w.Body.String(), "execution_role") {
+		t.Errorf("error body should mention execution_role, got %s", w.Body.String())
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v body=%s", err, w.Body.String())
-	}
-	if resp.Data.Task.Source != "role_dispatch" {
-		t.Fatalf("expected bare 'role_dispatch', got %q", resp.Data.Task.Source)
+}
+
+// Phase 6c PR-2 T-6c-C1-A2: role_dispatch + execution_role NOT in catalog → 400.
+func TestApplyBacklogCandidate_RoleDispatchWithUnknownRole(t *testing.T) {
+	fx := newApplyFixture(t)
+	candidate := fx.seedApprovedCandidate(t, "")
+	w := fx.apply(t, candidate.ID, map[string]string{
+		"execution_mode": "role_dispatch",
+		"execution_role": "not-in-catalog",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 (unknown role), got %d body=%s", w.Code, w.Body.String())
 	}
 }
 

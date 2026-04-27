@@ -20,6 +20,8 @@ vi.mock('../../api/client', () => ({
   listPlanningRunBacklogCandidates: vi.fn().mockResolvedValue({ data: { candidates: [] } }),
   updateBacklogCandidate: vi.fn().mockResolvedValue({ data: null }),
   applyBacklogCandidate: vi.fn().mockResolvedValue({ data: null }),
+  // Phase 6c PR-2: usePlanningWorkspaceData fetches /api/roles on mount.
+  listRoles: vi.fn().mockResolvedValue({ data: [] }),
 }))
 
 vi.mock('./PlanningStepper', () => ({

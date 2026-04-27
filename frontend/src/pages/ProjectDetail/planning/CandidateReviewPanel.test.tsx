@@ -292,17 +292,99 @@ describe('<CandidateReviewPanel />', () => {
     expect(autoRadio).toBeInTheDocument()
   })
 
-  it('disables the Auto-dispatch radio when candidate has no execution_role (Phase 6b)', () => {
+  // Phase 6c PR-2: Auto-dispatch radio is ALWAYS enabled (catch-22
+  // resolved). The role choice now travels in the apply payload, so
+  // the radio no longer gates on candidate.execution_role being
+  // pre-set. Replaces the Phase 6b "disabled when no role" test.
+  it('keeps the Auto-dispatch radio enabled regardless of candidate.execution_role (Phase 6c PR-2)', () => {
     const onChange = vi.fn()
-    // Default renderPanel fixture has no execution_role on selectedCandidate.
     renderPanel({ selectedExecutionMode: 'manual', onSelectedExecutionModeChange: onChange })
     const autoRadio = screen.getByRole('radio', { name: /Auto-dispatch/i })
-    expect(autoRadio).toBeDisabled()
+    expect(autoRadio).not.toBeDisabled()
   })
 
   it('hides the execution mode radio group when onSelectedExecutionModeChange is not wired', () => {
     renderPanel()
     // No radio group rendered when callback not provided.
     expect(screen.queryByRole('radio', { name: /Auto-dispatch/i })).not.toBeInTheDocument()
+  })
+
+  // Phase 6c PR-2 T-6c-C1-F2 / F3: when role_dispatch is selected,
+  // an inline role <select> appears, populated from availableRoles.
+  it('renders the role <select> with version + timeout label when role_dispatch is chosen (Phase 6c PR-2)', () => {
+    const onChange = vi.fn()
+    const onRoleChange = vi.fn()
+    const roles = [
+      { id: 'backend-architect', title: 'Backend Architect', version: 1, use_case: 'BE', default_timeout_sec: 5400, category: 'role' as const },
+      { id: 'code-reviewer', title: 'Code Reviewer', version: 1, use_case: 'CR', default_timeout_sec: 900, category: 'role' as const },
+    ]
+    renderPanel({
+      selectedExecutionMode: 'role_dispatch',
+      onSelectedExecutionModeChange: onChange,
+      chosenExecutionRole: '',
+      onChosenExecutionRoleChange: onRoleChange,
+      availableRoles: roles,
+    })
+    const select = screen.getByLabelText(/select execution role/i)
+    expect(select).toBeInTheDocument()
+    // Option labels include the timeout estimate ("預估 N min" → 90 / 15 min).
+    expect(screen.getByRole('option', { name: /Backend Architect.*v1.*90 min/i })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /Code Reviewer.*v1.*15 min/i })).toBeInTheDocument()
+  })
+
+  // Phase 6c PR-2 T-6c-C1-F4: Apply button is disabled when
+  // role_dispatch is selected but no role chosen yet.
+  it('disables Apply when role_dispatch is selected without a chosen role (Phase 6c PR-2)', () => {
+    const onChange = vi.fn()
+    const onRoleChange = vi.fn()
+    renderPanel({
+      selectedExecutionMode: 'role_dispatch',
+      onSelectedExecutionModeChange: onChange,
+      chosenExecutionRole: '',
+      onChosenExecutionRoleChange: onRoleChange,
+      availableRoles: [],
+      // canApplySelectedCandidate must be true so the Apply button
+      // wouldn't be disabled by the legacy gate; we want to prove the
+      // Phase 6c PR-2 gate fires independently.
+      canApplySelectedCandidate: true,
+    })
+    const applyBtn = screen.getByRole('button', { name: /^Apply$/ })
+    expect(applyBtn).toBeDisabled()
+  })
+
+  // Phase 6c PR-2 T-6c-C1-F4 (positive): Apply enabled when role chosen.
+  it('enables Apply when role_dispatch + chosen role is set (Phase 6c PR-2)', () => {
+    const onChange = vi.fn()
+    const onRoleChange = vi.fn()
+    renderPanel({
+      selectedExecutionMode: 'role_dispatch',
+      onSelectedExecutionModeChange: onChange,
+      chosenExecutionRole: 'backend-architect',
+      onChosenExecutionRoleChange: onRoleChange,
+      availableRoles: [
+        { id: 'backend-architect', title: 'Backend Architect', version: 1, use_case: '', default_timeout_sec: 5400, category: 'role' as const },
+      ],
+      canApplySelectedCandidate: true,
+    })
+    const applyBtn = screen.getByRole('button', { name: /^Apply$/ })
+    expect(applyBtn).not.toBeDisabled()
+  })
+
+  // Phase 6c PR-2 T-6c-C1-F7: stale-role warning fires when the
+  // candidate has an execution_role no longer in the catalog.
+  it('shows stale-role warning when candidate.execution_role is not in catalog (Phase 6c PR-2)', () => {
+    const onChange = vi.fn()
+    const onRoleChange = vi.fn()
+    renderPanel({
+      selectedCandidate: makeCandidate({ execution_role: 'no-longer-exists' }),
+      selectedExecutionMode: 'role_dispatch',
+      onSelectedExecutionModeChange: onChange,
+      chosenExecutionRole: '',
+      onChosenExecutionRoleChange: onRoleChange,
+      availableRoles: [
+        { id: 'backend-architect', title: 'Backend Architect', version: 1, use_case: '', default_timeout_sec: 5400, category: 'role' as const },
+      ],
+    })
+    expect(screen.getByText(/no longer in the catalog/i)).toBeInTheDocument()
   })
 })

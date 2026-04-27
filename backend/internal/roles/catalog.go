@@ -25,13 +25,29 @@ import (
 )
 
 // Role describes a single execution role.
+//
+// Category distinguishes the two layers Phase 6c introduces:
+//
+//   - "role" — a task-execution role (backend-architect, code-reviewer,
+//     etc). Surfaces in the apply panel dropdown; runs the role prompt
+//     against a task's title/description/context.
+//   - "meta" — a non-executing helper role (e.g. the dispatcher, which
+//     only classifies tasks, never executes them). Filtered OUT of
+//     `/api/roles` and the apply UI. Phase 6c PR-3 introduces the
+//     dispatcher meta-role; future meta-roles share this category.
 type Role struct {
 	ID                string
 	Title             string
 	Version           int
 	UseCase           string
 	DefaultTimeoutSec int
+	Category          string // "role" | "meta"
 }
+
+const (
+	CategoryRole = "role"
+	CategoryMeta = "meta"
+)
 
 // catalog is the hand-maintained source of truth. The drift test in
 // catalog_test.go ensures this matches the markdown files under
@@ -48,6 +64,7 @@ var catalog = []Role{
 		Version:           1,
 		UseCase:           "Adversarial pre-merge review against a diff. Finds bugs the author did not consider — not style polish.",
 		DefaultTimeoutSec: 900, // 15 min — read + comment, smallest surface
+		Category:          CategoryRole,
 	},
 	{
 		ID:                "test-writer",
@@ -55,6 +72,7 @@ var catalog = []Role{
 		Version:           1,
 		UseCase:           "Write tests for a specific code surface — unit, integration, or contract — matching the project's existing test style.",
 		DefaultTimeoutSec: 1200, // 20 min
+		Category:          CategoryRole,
 	},
 	{
 		ID:                "api-contract-writer",
@@ -62,6 +80,7 @@ var catalog = []Role{
 		Version:           1,
 		UseCase:           "Write a precise API contract — endpoint, request/response shape, error cases — BEFORE the implementation lands.",
 		DefaultTimeoutSec: 1800, // 30 min
+		Category:          CategoryRole,
 	},
 	{
 		ID:                "ui-scaffolder",
@@ -69,6 +88,7 @@ var catalog = []Role{
 		Version:           1,
 		UseCase:           "Scaffold a new page, component, or form. React/Vue/Svelte stack-aware, but defaults to the project's existing framework.",
 		DefaultTimeoutSec: 2700, // 45 min
+		Category:          CategoryRole,
 	},
 	{
 		ID:                "db-schema-designer",
@@ -76,6 +96,7 @@ var catalog = []Role{
 		Version:           1,
 		UseCase:           "Propose a DB schema change — new tables, column additions, constraints, indexes — and emit the migration file.",
 		DefaultTimeoutSec: 2700, // 45 min
+		Category:          CategoryRole,
 	},
 	{
 		ID:                "backend-architect",
@@ -83,6 +104,7 @@ var catalog = []Role{
 		Version:           1,
 		UseCase:           "Scaffold a new backend service or add a new module to an existing one. Go/Node/Python stack-aware.",
 		DefaultTimeoutSec: 5400, // 90 min — large refactors / multi-file scaffolding
+		Category:          CategoryRole,
 	},
 }
 

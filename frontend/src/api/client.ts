@@ -322,23 +322,51 @@ export async function updateBacklogCandidate(id: string, data: UpdateBacklogCand
   });
 }
 
-// Phase 5 B3: apply takes an optional execution_mode. `manual` (default)
-// preserves Phase 4 behaviour; `role_dispatch` marks the created task's
-// source with the candidate's execution_role so Phase 6 auto-dispatch can
-// identify tasks it owns. Today `role_dispatch` does NOT actually dispatch.
+// Phase 5 B3 + Phase 6c PR-2: apply takes execution_mode and (for
+// role_dispatch) execution_role. `manual` (default) preserves Phase 4
+// behaviour. `role_dispatch` carries the operator-confirmed role
+// id in the payload — Phase 6c PR-2 closed the catch-22 where the
+// previous flow required `candidate.execution_role` to be pre-set
+// but had no UI to set it. The role MUST be in the catalog
+// (validated server-side; client-side typed via KnownRoleId).
 export type ApplyExecutionMode = 'manual' | 'role_dispatch';
 
 export async function applyBacklogCandidate(
   id: string,
-  options: { executionMode?: ApplyExecutionMode } = {},
+  options: {
+    executionMode?: ApplyExecutionMode;
+    executionRole?: string;
+  } = {},
 ) {
-  const body = options.executionMode
-    ? JSON.stringify({ execution_mode: options.executionMode })
-    : undefined;
+  let body: string | undefined;
+  if (options.executionMode || options.executionRole) {
+    const payload: Record<string, string> = {};
+    if (options.executionMode) payload.execution_mode = options.executionMode;
+    if (options.executionRole) payload.execution_role = options.executionRole;
+    body = JSON.stringify(payload);
+  }
   return request<ApplyBacklogCandidateResponse>(`/backlog-candidates/${encodeURIComponent(id)}/apply`, {
     method: 'POST',
     ...(body ? { body } : {}),
   });
+}
+
+// Phase 6c PR-2: GET /api/roles surfaces the role catalog so the
+// apply panel and CandidateRoleEditor can render typed dropdowns
+// with version, default-timeout estimate, and use_case tooltip.
+// Server filters category="role" — meta-roles (dispatcher) never
+// surface here.
+export interface RoleInfo {
+  id: string;
+  title: string;
+  version: number;
+  use_case: string;
+  default_timeout_sec: number;
+  category: 'role' | 'meta';
+}
+
+export async function listRoles() {
+  return request<RoleInfo[]>('/roles');
 }
 
 export async function listCandidatesByEvidenceDocument(projectId: string, documentId: string) {

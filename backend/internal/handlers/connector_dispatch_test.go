@@ -136,9 +136,16 @@ func (fx *dispatchFixture) seedConnectorForUser(t *testing.T, connectorID, userI
 // seedQueuedTask inserts a role_dispatch task in the queued state for the owner's project.
 func (fx *dispatchFixture) seedQueuedTask(t *testing.T, title, roleID string) string {
 	t.Helper()
+	return fx.seedQueuedTaskWithSource(t, title, "role_dispatch:"+roleID)
+}
+
+// seedQueuedTaskWithSource inserts a queued task with an arbitrary
+// source string. Used by tests that need to exercise malformed sources
+// (e.g. legacy "role_dispatch" with no colon suffix).
+func (fx *dispatchFixture) seedQueuedTaskWithSource(t *testing.T, title, source string) string {
+	t.Helper()
 	id := fmt.Sprintf("task-%d", time.Now().UnixNano())
 	now := time.Now().UTC()
-	source := "role_dispatch:" + roleID
 	mustExec(t, fx.db,
 		`INSERT INTO tasks (id, project_id, title, description, status, priority, assignee, source, dispatch_status, created_at, updated_at)
 		 VALUES ($1, $2, $3, 'desc', 'todo', 'medium', '', $4, $5, $6, $6)`,
@@ -323,6 +330,206 @@ func TestClaimNextTask_InvalidToken(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rec.Code)
 	}
+}
+
+// Phase 6c PR-2 T-6c-C1-S3: claim-next-task with a stale role
+// (source references a role no longer in the catalog) MUST transition
+// the task queued → failed and return task:null. The connector should
+// see this as "queue empty" and not be exposed to the stale task.
+func TestClaimNextTask_StaleRoleTransitionsToFailed(t *testing.T) {
+	fx := newDispatchFixture(t)
+	fx.seedConnectorForUser(t, "conn-stale", fx.ownerUserID, "tok-stale")
+	staleTaskID := fx.seedQueuedTask(t, "Stale role task", "no-longer-in-catalog")
+
+	rec := fx.doClaimTask("tok-stale")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var env struct {
+		Data handlers.ClaimNextTaskResponse `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Data.Task != nil {
+		t.Errorf("expected task=null (stale role drained), got task.ID=%s", env.Data.Task.ID)
+	}
+
+	// Verify the stale task was transitioned to failed with the right
+	// error_kind, and an actor_audit row was written.
+	task, err := fx.taskStore.GetByID(staleTaskID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if task.DispatchStatus != models.TaskDispatchStatusFailed {
+		t.Errorf("expected failed, got %s", task.DispatchStatus)
+	}
+	if task.ExecutionResult == nil {
+		t.Fatal("expected execution_result populated with role_not_found")
+	}
+	var er map[string]string
+	_ = json.Unmarshal(task.ExecutionResult, &er)
+	if er["error_kind"] != models.ErrorKindRoleNotFound {
+		t.Errorf("expected error_kind=role_not_found, got %s", er["error_kind"])
+	}
+
+	// Audit row should be present.
+	var auditCount int
+	if err := fx.db.QueryRow(
+		`SELECT COUNT(*) FROM actor_audit WHERE subject_kind = $1 AND subject_id = $2 AND field = $3 AND actor_kind = $4`,
+		"task", staleTaskID, "dispatch_status", "system",
+	).Scan(&auditCount); err != nil {
+		t.Fatalf("audit count: %v", err)
+	}
+	if auditCount != 1 {
+		t.Errorf("expected 1 audit row for stale-role transition, got %d", auditCount)
+	}
+}
+
+// Phase 6c PR-2 (Copilot review #4): a queued task whose source is
+// missing the role suffix entirely (legacy "role_dispatch" without a
+// colon, or "role_dispatch:" with empty payload) MUST transition to
+// failed with error_kind=role_dispatch_malformed — distinct from
+// role_not_found which means "well-formed id, absent from catalog".
+// Operators rely on the kind to decide whether to inspect the task
+// source field or the role catalog.
+func TestClaimNextTask_MalformedSourceTransitionsToFailed(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+	}{
+		{name: "no_colon", source: "role_dispatch"},
+		{name: "empty_suffix", source: "role_dispatch:"},
+		{name: "whitespace_suffix", source: "role_dispatch:   "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newDispatchFixture(t)
+			fx.seedConnectorForUser(t, "conn-mal-"+tc.name, fx.ownerUserID, "tok-mal-"+tc.name)
+			taskID := fx.seedQueuedTaskWithSource(t, "Malformed source", tc.source)
+
+			rec := fx.doClaimTask("tok-mal-" + tc.name)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+			var env struct {
+				Data handlers.ClaimNextTaskResponse `json:"data"`
+			}
+			_ = json.Unmarshal(rec.Body.Bytes(), &env)
+			if env.Data.Task != nil {
+				t.Errorf("expected task=null (malformed task drained), got task.ID=%s", env.Data.Task.ID)
+			}
+
+			task, err := fx.taskStore.GetByID(taskID)
+			if err != nil {
+				t.Fatalf("get task: %v", err)
+			}
+			if task.DispatchStatus != models.TaskDispatchStatusFailed {
+				t.Errorf("expected failed, got %s", task.DispatchStatus)
+			}
+			if task.ExecutionResult == nil {
+				t.Fatal("expected execution_result populated")
+			}
+			var er map[string]string
+			_ = json.Unmarshal(task.ExecutionResult, &er)
+			if er["error_kind"] != models.ErrorKindRoleDispatchMalformed {
+				t.Errorf("expected error_kind=role_dispatch_malformed, got %s", er["error_kind"])
+			}
+			if er["error_message"] == "" {
+				t.Error("expected non-empty error_message")
+			}
+			// Audit row should be present and record the malformed-source rationale.
+			var auditCount int
+			if err := fx.db.QueryRow(
+				`SELECT COUNT(*) FROM actor_audit
+				 WHERE subject_kind = $1 AND subject_id = $2 AND field = $3 AND actor_kind = $4`,
+				"task", taskID, "dispatch_status", "system",
+			).Scan(&auditCount); err != nil {
+				t.Fatalf("audit count: %v", err)
+			}
+			if auditCount != 1 {
+				t.Errorf("expected 1 audit row, got %d", auditCount)
+			}
+		})
+	}
+}
+
+// Phase 6c PR-2 T-6c-C1-S4: claim drains stale-role tasks and surfaces
+// the next valid task. Two tasks queued, the first has a stale role.
+func TestClaimNextTask_DrainsStaleRoleThenClaimsNext(t *testing.T) {
+	fx := newDispatchFixture(t)
+	fx.seedConnectorForUser(t, "conn-drain", fx.ownerUserID, "tok-drain")
+	staleTaskID := fx.seedQueuedTask(t, "Stale", "ghost-role")
+	// Pause to ensure the next task has a strictly later created_at so
+	// ORDER BY ASC picks the stale one first.
+	time.Sleep(10 * time.Millisecond)
+	validTaskID := fx.seedQueuedTask(t, "Valid", "backend-architect")
+
+	rec := fx.doClaimTask("tok-drain")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var env struct {
+		Data handlers.ClaimNextTaskResponse `json:"data"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &env)
+	if env.Data.Task == nil {
+		t.Fatal("expected to claim valid task after draining stale")
+	}
+	if env.Data.Task.ID != validTaskID {
+		t.Errorf("expected to claim %s, got %s", validTaskID, env.Data.Task.ID)
+	}
+	staleAfter, _ := fx.taskStore.GetByID(staleTaskID)
+	if staleAfter.DispatchStatus != models.TaskDispatchStatusFailed {
+		t.Errorf("stale task should be failed, got %s", staleAfter.DispatchStatus)
+	}
+}
+
+// Phase 6c PR-2 T-6c-C1-E1: GET /api/roles returns 6 roles, all
+// category=role. Meta-roles (none today; PR-3 adds dispatcher) are
+// excluded by the handler-side filter.
+func TestRolesEndpoint_ReturnsCatalog(t *testing.T) {
+	fx := newDispatchFixture(t)
+	srv := buildServerWithRolesHandler(fx)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/roles", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var env struct {
+		Data []handlers.RoleResponse `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Data) != 6 {
+		t.Errorf("expected 6 roles, got %d (catalog drift?)", len(env.Data))
+	}
+	for _, r := range env.Data {
+		if r.Category != "role" {
+			t.Errorf("role %s leaked category=%q (must be 'role')", r.ID, r.Category)
+		}
+		if r.DefaultTimeoutSec <= 0 {
+			t.Errorf("role %s has invalid DefaultTimeoutSec=%d", r.ID, r.DefaultTimeoutSec)
+		}
+	}
+}
+
+// buildServerWithRolesHandler wires a minimal router exposing only the
+// /api/roles endpoint (plus whatever the dispatch fixture already
+// added). Used to test the public roles endpoint without the full
+// server bootstrap.
+func buildServerWithRolesHandler(fx *dispatchFixture) http.Handler {
+	return router.New(router.Deps{
+		RolesHandler: handlers.NewRolesHandler(),
+		AuthMiddleware: func(next http.Handler) http.Handler {
+			return next
+		},
+		LocalModeMiddleware: middleware.InjectLocalAdmin,
+	})
 }
 
 // --- helpers ---

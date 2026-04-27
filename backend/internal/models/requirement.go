@@ -257,6 +257,15 @@ const (
 	// claim-next-task enforcement; the constant ships in PR-1 so the
 	// allowlist + remediation catalog is finalised in one place.
 	ErrorKindRoleNotFound        = "role_not_found"
+	// Phase 6c PR-2 (Copilot review #4): distinct kind for tasks whose
+	// source string does NOT carry a "<role>" suffix after
+	// "role_dispatch:". This is structurally different from
+	// role_not_found (which means the role id is well-formed but absent
+	// from the catalog) — typically a legacy task created before the
+	// suffix was required, or a programming error in a candidate
+	// applier. Operators see a clearer remediation that points at the
+	// source field rather than the role catalog.
+	ErrorKindRoleDispatchMalformed = "role_dispatch_malformed"
 )
 
 // AllowedErrorKinds is the server-side allowlist for error_kind values
@@ -274,8 +283,9 @@ var AllowedErrorKinds = map[string]bool{
 	ErrorKindAdapterProtocol:     true,
 	ErrorKindDispatchTimeout:     true,
 	ErrorKindOutputTooLarge:      true,
-	ErrorKindInvalidResultSchema: true,
-	ErrorKindRoleNotFound:        true,
+	ErrorKindInvalidResultSchema:   true,
+	ErrorKindRoleNotFound:          true,
+	ErrorKindRoleDispatchMalformed: true,
 }
 
 // ErrorKindRemediations is the static server-side catalog of human-readable
@@ -294,7 +304,8 @@ var ErrorKindRemediations = map[string]string{
 	ErrorKindDispatchTimeout:     "The role-dispatch CLI ran past its wall-clock budget and was killed. The role's typical budget is shown in the Apply panel; set ANPM_DISPATCH_TIMEOUT (seconds) to override globally for unusually long tasks, or 0 to disable.",
 	ErrorKindOutputTooLarge:      "The CLI produced more output than the dispatch boundary allows (default 5 MB). Re-run with a tighter task scope, or set ANPM_DISPATCH_OUTPUT_MAX (bytes) to raise the limit (0 disables).",
 	ErrorKindInvalidResultSchema: "The CLI returned output that does not match the role result schema (must include a `files` array). Check the role prompt and retry.",
-	ErrorKindRoleNotFound:        "The task references an execution role that is not in the current catalog. The role may have been renamed or removed; create a new candidate with a current role.",
+	ErrorKindRoleNotFound:          "The task references an execution role that is not in the current catalog. The role may have been renamed or removed; create a new candidate with a current role.",
+	ErrorKindRoleDispatchMalformed: "The task source is missing a role suffix (expected `role_dispatch:<role>`). This typically means the task was created before role suffixes were required; create a new candidate with a current role.",
 }
 
 // PlanningRunBindingSnapshot freezes the fields of an account_bindings row
@@ -400,11 +411,32 @@ type BacklogCandidate struct {
 	DuplicateTitles     []string               `json:"duplicate_titles"`
 	// ExecutionRole names the specialist that should execute this
 	// candidate if apply is dispatched via role_dispatch (Phase 5 B2).
-	// Nullable and unenforced by the DB today; catalog enforcement is a
-	// Phase 6 concern.
-	ExecutionRole *string   `json:"execution_role"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	// Phase 6c PR-2: catalog enforcement applies — non-empty values
+	// MUST be present in roles.IsKnown when written via PATCH or
+	// apply payload.
+	ExecutionRole *string `json:"execution_role"`
+	// ExecutionRoleAuthoring is the most recent actor_audit row for
+	// this candidate's `execution_role` field, populated server-side
+	// from audit.QueryLatest. Phase 6c PR-2 surfaces this so the
+	// frontend can show "set by ${actor.kind} at ${time}, ${rationale}"
+	// without a second round-trip. nil when no audit row exists yet
+	// (e.g. pre-Phase-6c rows where the role was set under the old
+	// no-audit contract — these display as "set manually" with no
+	// timestamp; backfill is intentionally not done).
+	ExecutionRoleAuthoring *ExecutionRoleAuthoring `json:"execution_role_authoring,omitempty"`
+	CreatedAt              time.Time               `json:"created_at"`
+	UpdatedAt              time.Time               `json:"updated_at"`
+}
+
+// ExecutionRoleAuthoring is the read-side projection of the latest
+// actor_audit row for a candidate's execution_role field.
+// Confidence is only populated when ActorKind == "router".
+type ExecutionRoleAuthoring struct {
+	ActorKind  string    `json:"actor_kind"`             // "user" | "api_key" | "router" | "system" | "connector"
+	ActorID    string    `json:"actor_id,omitempty"`     // user id, api-key id, etc
+	Rationale  string    `json:"rationale,omitempty"`
+	Confidence *float64  `json:"confidence,omitempty"`   // router-only
+	SetAt      time.Time `json:"set_at"`
 }
 
 type BacklogCandidateDraft struct {
@@ -470,6 +502,13 @@ type ApplyBacklogCandidateRequest struct {
 	// ExecutionMode selects how the applied task is marked.
 	// Empty or omitted = "manual" (back-compat).
 	ExecutionMode string `json:"execution_mode,omitempty"`
+	// ExecutionRole is the role id the operator confirmed at apply time.
+	// Required when ExecutionMode == "role_dispatch"; ignored for "manual".
+	// Phase 6c PR-2: this replaces the prior implicit read of
+	// candidate.execution_role at apply — the catch-22 ("no UI to set
+	// the candidate field, but apply gates on it") is closed by carrying
+	// the choice in the apply payload itself.
+	ExecutionRole string `json:"execution_role,omitempty"`
 }
 
 // CandidateEvidenceSummary is a lightweight view of a backlog candidate

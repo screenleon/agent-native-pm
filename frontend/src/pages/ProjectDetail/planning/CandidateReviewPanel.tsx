@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { BacklogCandidate, PlanningProviderOptions, PlanningRun } from '../../../types'
 import { formatDateTime, formatRelativeTime } from '../../../utils/formatters'
 import Jargon from '../../../components/Jargon'
+import { CandidateRoleEditor } from './CandidateRoleEditor'
 import {
   backlogCandidateStatusBadgeClass,
   backlogCandidateSuggestionLabel,
@@ -92,12 +93,41 @@ interface CandidateReviewPanelProps {
   onSkipCandidate: () => void
   onResetCandidateForm?: () => void
 
-  // Phase 5 B3: execution mode radio group. `manual` is the Phase 4
-  // behaviour; `role_dispatch` is a forward-looking marker. Both props
-  // are optional — callers that do not yet wire the radio get the
-  // pre-Phase-5 UI with no visible mode selector.
+  // Phase 5 B3 + Phase 6c PR-2: execution mode radio + role dropdown.
+  // `manual` is the Phase 4 behaviour; `role_dispatch` is now always
+  // selectable (catch-22 resolved). When mode === 'role_dispatch'
+  // the operator picks a role from `availableRoles`; the chosen value
+  // travels in the apply payload. All four props are optional —
+  // callers that do not wire them get the pre-Phase-5 UI with no
+  // visible mode selector.
   selectedExecutionMode?: 'manual' | 'role_dispatch'
   onSelectedExecutionModeChange?: (mode: 'manual' | 'role_dispatch') => void
+  chosenExecutionRole?: string
+  onChosenExecutionRoleChange?: (role: string) => void
+  // null = catalog still loading (suppresses stale-warning on mount);
+  // [] = catalog loaded but empty (server returned no roles, also
+  // safe — operators see no options). Critic round 1 finding #5.
+  availableRoles?: ReadonlyArray<{
+    id: string
+    title: string
+    version: number
+    use_case: string
+    default_timeout_sec: number
+    category: 'role' | 'meta'
+  }> | null
+  // Phase 6c PR-2 (Copilot review #3): when /api/roles fetch fails,
+  // availableRoles stays null (== loading sentinel) AND this string is
+  // populated. The panel renders the message in the dropdown / chip
+  // area so operators understand the catalog never loaded; otherwise
+  // an empty dropdown with no roles would silently look like "the
+  // server has no roles configured", which is a different failure.
+  availableRolesError?: string | null
+  // Phase 6c PR-2: optional callback to PATCH the candidate's
+  // execution_role outside the apply flow. When provided, the
+  // candidate row renders an inline CandidateRoleEditor (chip + edit
+  // popover) so operators can pre-tag candidates with a role before
+  // applying. When undefined, the chip is rendered read-only.
+  onUpdateCandidateExecutionRole?: (candidateId: string, roleId: string) => Promise<void>
 
   /**
    * Optional evidence-link callbacks. When provided, the matching
@@ -144,6 +174,11 @@ export function CandidateReviewPanel({
   onSkipCandidate,
   selectedExecutionMode,
   onSelectedExecutionModeChange,
+  chosenExecutionRole,
+  onChosenExecutionRoleChange,
+  availableRoles,
+  availableRolesError,
+  onUpdateCandidateExecutionRole,
   onViewDocumentById,
   onViewDriftSignal,
 }: CandidateReviewPanelProps) {
@@ -515,72 +550,140 @@ export function CandidateReviewPanel({
                   <span>Updated {formatDateTime(selectedCandidate.updated_at)}</span>
                   <span>Run {selectedRun.status}</span>
                   <span>{planningSelectionSourceLabel(selectedRun.selection_source)}</span>
-                  {selectedCandidate.execution_role && (
-                    <span
-                      title="Execution specialist earmarked for Phase 6 auto-dispatch"
-                      style={{
-                        background: 'var(--bg-hover, rgba(255, 255, 255, 0.05))',
-                        border: '1px solid var(--border)',
-                        borderRadius: '999px',
-                        padding: '0.1rem 0.5rem',
-                        fontSize: '0.78rem',
-                      }}
-                    >
-                      Role: {selectedCandidate.execution_role}
-                    </span>
+                  {/* Phase 6c PR-2: replace static chip with the
+                      CandidateRoleEditor component, which adds an
+                      inline edit popover so operators can pre-tag
+                      candidates with a role outside the apply flow. */}
+                  {onUpdateCandidateExecutionRole ? (
+                    <CandidateRoleEditor
+                      candidate={selectedCandidate}
+                      availableRoles={availableRoles ?? null}
+                      availableRolesError={availableRolesError ?? null}
+                      onUpdateRole={role => onUpdateCandidateExecutionRole(selectedCandidate.id, role)}
+                      disabled={selectedCandidateApplied || savingCandidate || applyingCandidate}
+                    />
+                  ) : (
+                    selectedCandidate.execution_role && (
+                      <span
+                        title="Execution specialist earmarked for Phase 6 auto-dispatch"
+                        style={{
+                          background: 'var(--bg-hover, rgba(255, 255, 255, 0.05))',
+                          border: '1px solid var(--border)',
+                          borderRadius: '999px',
+                          padding: '0.1rem 0.5rem',
+                          fontSize: '0.78rem',
+                        }}
+                      >
+                        Role: {selectedCandidate.execution_role}
+                      </span>
+                    )
                   )}
                 </div>
 
                 {onSelectedExecutionModeChange && (
-                  <div
-                    className="planning-execution-mode"
-                    role="radiogroup"
-                    aria-labelledby="execution-mode-label"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.75rem',
-                      marginTop: '0.5rem',
-                      fontSize: '0.88rem',
-                    }}
-                  >
-                    <span id="execution-mode-label" style={{ color: 'var(--text-muted)' }}>Execution:</span>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', cursor: 'pointer' }}>
-                      <input
-                        type="radio"
-                        name="execution-mode"
-                        checked={selectedExecutionMode !== 'role_dispatch'}
-                        onChange={() => onSelectedExecutionModeChange('manual')}
-                      />
-                      Manual
-                    </label>
-                    {(() => {
-                      const hasRole = !!(selectedCandidate?.execution_role && selectedCandidate.execution_role.trim() !== '')
-                      return (
-                        <label
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.3rem',
-                            cursor: hasRole ? 'pointer' : 'not-allowed',
-                            color: hasRole ? undefined : 'var(--text-muted)',
-                          }}
-                          title={hasRole
-                            ? `Auto-dispatch to role: ${selectedCandidate?.execution_role}`
-                            : 'Set execution_role on this candidate to enable auto-dispatch'}
+                  <div className="planning-execution-mode-block" style={{ marginTop: '0.5rem' }}>
+                    <div
+                      className="planning-execution-mode"
+                      role="radiogroup"
+                      aria-labelledby="execution-mode-label"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem',
+                        fontSize: '0.88rem',
+                      }}
+                    >
+                      <span id="execution-mode-label" style={{ color: 'var(--text-muted)' }}>Execution:</span>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', cursor: 'pointer' }}>
+                        <input
+                          type="radio"
+                          name="execution-mode"
+                          checked={selectedExecutionMode !== 'role_dispatch'}
+                          onChange={() => onSelectedExecutionModeChange('manual')}
+                        />
+                        Manual
+                      </label>
+                      <label
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.3rem',
+                          cursor: 'pointer',
+                        }}
+                        title="Auto-dispatch the role you choose below"
+                      >
+                        <input
+                          type="radio"
+                          name="execution-mode"
+                          checked={selectedExecutionMode === 'role_dispatch'}
+                          onChange={() => onSelectedExecutionModeChange('role_dispatch')}
+                        />
+                        <Jargon term="dispatch">Auto-dispatch</Jargon>
+                      </label>
+                    </div>
+
+                    {selectedExecutionMode === 'role_dispatch' && onChosenExecutionRoleChange && (
+                      <div className="planning-execution-role-row" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.4rem', fontSize: '0.88rem' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Role:</span>
+                        <select
+                          aria-label="Select execution role"
+                          value={chosenExecutionRole ?? ''}
+                          onChange={e => onChosenExecutionRoleChange(e.target.value)}
+                          style={{ minWidth: '20rem' }}
                         >
-                          <input
-                            type="radio"
-                            name="execution-mode"
-                            checked={selectedExecutionMode === 'role_dispatch'}
-                            onChange={() => onSelectedExecutionModeChange('role_dispatch')}
-                            disabled={!hasRole}
-                            aria-disabled={!hasRole}
-                          />
-                          <Jargon term="dispatch">Auto-dispatch</Jargon>
-                        </label>
-                      )
-                    })()}
+                          <option value="">— select role —</option>
+                          {(availableRoles ?? []).map(r => (
+                            <option key={r.id} value={r.id} title={r.use_case}>
+                              {r.title} (v{r.version}) — 預估 {Math.round(r.default_timeout_sec / 60)} min
+                            </option>
+                          ))}
+                          {availableRoles === null && !availableRolesError && (
+                            <option disabled>Loading roles…</option>
+                          )}
+                          {availableRoles === null && availableRolesError && (
+                            <option disabled>Failed to load roles</option>
+                          )}
+                        </select>
+                        {availableRolesError && (
+                          <div
+                            role="alert"
+                            style={{
+                              marginTop: '0.35rem',
+                              fontSize: '0.78rem',
+                              color: 'var(--danger, #ef4444)',
+                            }}
+                          >
+                            Failed to load roles: {availableRolesError}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {selectedExecutionMode === 'role_dispatch' &&
+                      selectedCandidate?.execution_role &&
+                      // Phase 6c PR-2 critic #5 / risk-reviewer L1: only
+                      // surface the stale-warning AFTER the catalog
+                      // fetch resolves. Treating `null` (still loading)
+                      // as "stale" produced a false positive flash on
+                      // every mount until /api/roles returned.
+                      availableRoles !== null &&
+                      availableRoles !== undefined &&
+                      !availableRoles.some(r => r.id === selectedCandidate.execution_role) && (
+                        <div
+                          role="status"
+                          aria-live="polite"
+                          style={{
+                            marginTop: '0.4rem',
+                            padding: '0.4rem 0.6rem',
+                            borderLeft: '3px solid var(--warning, #f59e0b)',
+                            background: 'var(--warning-bg, rgba(245, 158, 11, 0.08))',
+                            fontSize: '0.82rem',
+                            color: 'var(--text-muted)',
+                          }}
+                        >
+                          ⚠ Previously suggested role <code>{selectedCandidate.execution_role}</code> is no longer in the catalog. Pick a current role above.
+                        </div>
+                      )}
                   </div>
                 )}
 
@@ -607,7 +710,17 @@ export function CandidateReviewPanel({
                     type="button"
                     className="btn btn-primary"
                     onClick={onApplyCandidate}
-                    disabled={!canApplySelectedCandidate || applyingCandidate}
+                    disabled={
+                      !canApplySelectedCandidate ||
+                      applyingCandidate ||
+                      // Phase 6c PR-2: when mode=role_dispatch the
+                      // chosen role is required. Disabling Apply
+                      // surfaces the missing-role state without
+                      // bouncing the operator off a 400 from the
+                      // server.
+                      (selectedExecutionMode === 'role_dispatch' &&
+                        !(chosenExecutionRole && chosenExecutionRole.trim() !== ''))
+                    }
                   >
                     {applyingCandidate ? 'Applying…' : selectedCandidateApplied ? 'Applied ✓' : 'Apply'}
                   </button>

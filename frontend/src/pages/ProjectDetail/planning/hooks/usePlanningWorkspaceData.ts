@@ -23,8 +23,10 @@ import {
   applyBacklogCandidate,
   listLocalConnectors,
   listConnectorCliConfigs,
+  listRoles,
 } from '../../../../api/client'
-import type { CliConfig } from '../../../../api/client'
+import type { CliConfig, RoleInfo } from '../../../../api/client'
+import { isKnownRoleId } from '../../../../types/roles'
 import type { RequirementIntakeForm } from '../RequirementIntake'
 import type { CandidateReviewForm } from '../CandidateReviewPanel'
 
@@ -414,10 +416,19 @@ export function usePlanningWorkspaceData({
     if (!candidate) {
       setCandidateForm({ title: '', description: '', status: 'draft' })
       setCandidateFormSourceId(null)
+      // Phase 6c PR-2: clear chosen role when no candidate selected.
+      setChosenExecutionRole('')
       return
     }
     setCandidateForm({ title: candidate.title, description: candidate.description, status: candidate.status })
     setCandidateFormSourceId(candidate.id)
+    // Phase 6c PR-2: pre-fill the apply-time role from the candidate's
+    // current value if (and only if) it matches a known catalog id.
+    // Stale or unknown roles intentionally pre-fill empty so the
+    // operator must re-pick — the panel surfaces a stale-warning
+    // banner alongside the dropdown.
+    const candRole = candidate.execution_role ?? ''
+    setChosenExecutionRole(isKnownRoleId(candRole) ? candRole : '')
   }
 
   useEffect(() => {
@@ -701,11 +712,67 @@ export function usePlanningWorkspaceData({
     }
   }
 
-  // Phase 5 B3: the panel lets the operator pick Manual or Auto-dispatch
-  // for the upcoming Apply click. Today `role_dispatch` is a no-op on the
-  // UI side (Phase 6 will dispatch). We still thread the choice through
-  // so the backend records the task's `source` correctly for audit.
+  // Phase 6c PR-2: pre-tag a candidate with an execution_role outside
+  // the apply flow. Used by CandidateRoleEditor (inline popover on
+  // the candidate row). PATCH carries through the same store path
+  // the apply panel uses, so catalog enforcement + actor_audit row
+  // both fire — the actor here is the same authenticated session
+  // user (server-side handler reads UserFromContext).
+  async function handleUpdateCandidateExecutionRole(candidateId: string, role: string) {
+    const response = await updateBacklogCandidate(candidateId, {
+      execution_role: role,
+    })
+    setPlanningCandidates(prev => prev.map(c => c.id === response.data.id ? response.data : c))
+    if (selectedPlanningCandidateId === candidateId) {
+      syncCandidateForm(response.data)
+    }
+  }
+
+  // Phase 5 B3 + Phase 6c PR-2: the panel lets the operator pick
+  // Manual or Auto-dispatch (role_dispatch) for the upcoming Apply
+  // click. PR-2 closes the catch-22: role_dispatch is now always
+  // selectable, and the chosen role id is part of the apply payload
+  // (not pre-set on the candidate row). Default chosenRole is
+  // pre-filled from candidate.execution_role when that value is in
+  // the catalog; the panel re-syncs whenever the selected candidate
+  // changes (handled in CandidateReviewPanel).
   const [selectedExecutionMode, setSelectedExecutionMode] = useState<'manual' | 'role_dispatch'>('manual')
+  const [chosenExecutionRole, setChosenExecutionRole] = useState<string>('')
+
+  // Phase 6c PR-2: load /api/roles once on mount; the panel uses this
+  // to render the dropdown options. listRoles is cheap (catalog is
+  // server-side static data) and the response feeds the drift test
+  // catch in roles.test.ts.
+  //
+  // State machine (Copilot review #3 — keep failure distinguishable):
+  //
+  //   availableRoles  | availableRolesError | meaning
+  //   ----------------+---------------------+-----------------------------
+  //   null            | null                | fetch in flight
+  //   RoleInfo[]      | null                | fetch succeeded
+  //   null            | string              | fetch failed; show message
+  //
+  // Importantly, on failure availableRoles stays `null`, NOT `[]`. An
+  // empty array would (a) defeat the loading sentinel that suppresses
+  // the stale-role warning and (b) silently render an empty dropdown
+  // with no indication that the catalog never loaded. The panel reads
+  // both fields and renders an explicit error string in the dropdown +
+  // chip area when error is set.
+  const [availableRoles, setAvailableRoles] = useState<RoleInfo[] | null>(null)
+  const [availableRolesError, setAvailableRolesError] = useState<string | null>(null)
+  useEffect(() => {
+    listRoles()
+      .then(resp => {
+        setAvailableRoles(resp.data ?? [])
+        setAvailableRolesError(null)
+      })
+      .catch(err => {
+        setAvailableRoles(null)
+        setAvailableRolesError(
+          err instanceof Error ? err.message : 'Failed to load roles',
+        )
+      })
+  }, [])
 
   async function handleSkipCandidate() {
     if (!selectedPlanningCandidate || savingCandidate || applyingCandidate) return
@@ -756,6 +823,7 @@ export function usePlanningWorkspaceData({
 
       const response = await applyBacklogCandidate(selectedPlanningCandidate.id, {
         executionMode: selectedExecutionMode,
+        executionRole: selectedExecutionMode === 'role_dispatch' ? chosenExecutionRole : undefined,
       })
       setPlanningCandidates(prev => prev.map(c => c.id === response.data.candidate.id ? response.data.candidate : c))
       syncCandidateForm(response.data.candidate)
@@ -818,10 +886,17 @@ export function usePlanningWorkspaceData({
     onApplyCandidate: handleApplyPlanningCandidate,
     onSkipCandidate: handleSkipCandidate,
     onResetCandidateForm: resetCandidateForm,
-    // Phase 5 B3: apply execution mode + setter so the panel radio group
-    // can drive the Apply request body.
+    // Phase 5 B3 + Phase 6c PR-2: apply execution mode + setter, plus
+    // the chosen role id (for role_dispatch) and the available roles
+    // (for the dropdown). The panel uses these to render an inline
+    // role <select> that's required when mode === 'role_dispatch'.
     selectedExecutionMode,
     onSelectedExecutionModeChange: setSelectedExecutionMode,
+    chosenExecutionRole,
+    onChosenExecutionRoleChange: setChosenExecutionRole,
+    availableRoles,
+    availableRolesError,
+    onUpdateCandidateExecutionRole: handleUpdateCandidateExecutionRole,
     // provider options
     planningProviderOptions,
     planningProviderOptionsLoading,
