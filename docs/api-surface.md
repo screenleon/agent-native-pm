@@ -284,12 +284,14 @@ Behavior:
 | POST | `/api/requirements/:id/planning-runs` | Start a planning run for a requirement |
 | GET | `/api/requirements/:id/planning-runs` | List planning runs for a requirement |
 | GET | `/api/planning-runs/:id` | Get a planning run by ID |
+| GET | `/api/planning-runs/:id/context-snapshot` | Get the V2 context snapshot for a planning run (Phase 3B PR-2) |
 | GET | `/api/planning-runs/:id/backlog-candidates` | List persisted draft backlog candidates for a planning run |
 | PATCH | `/api/backlog-candidates/:id` | Review and update a persisted backlog candidate |
 | POST | `/api/backlog-candidates/:id/apply` | Apply one approved backlog candidate into the task workflow |
 
 Behavior:
 
+- `GET /api/planning-runs/:id/context-snapshot` (Phase 3B PR-2): returns `{ available, pack_id, planning_run_id, schema_version, sources_bytes, dropped_counts, open_task_count, document_count, drift_count, agent_run_count, has_sync_run, role, intent_mode, task_scale, source_of_truth }`. When no snapshot exists (run predates Phase 3B or is not a local_connector run), returns `{ available: false }` with HTTP 200. Nonexistent run returns 404. Query param `?raw=1` returns the raw `PlanningContextV2` JSON blob as `data`. Snapshots are saved fire-and-forget on `ClaimNextRun` after a successful `BuildContextV1` call.
 - `PATCH /api/backlog-candidates/:id` accepts `title`, `description`, `status`, and `execution_role`. **Phase 6c PR-2 enforcement**: `execution_role` non-empty values MUST match a role in `roles.IsKnown` (catalog enforcement); empty string clears the column (NULL in DB). Unknown role returns 400. Case-sensitive (e.g. `"ui-scaffolder"`, not `"UI-Scaffolder"`). Every change to `execution_role` writes a row to `actor_audit` in the same transaction; the actor is derived from the request (session user or API-key id).
 - Candidate responses include `execution_role` (nullable string) and **Phase 6c PR-2** `execution_role_authoring` (object or null) — `{ actor_kind: "user"|"api_key"|"router"|"system"|"connector", actor_id?, rationale?, confidence? (router-only), set_at }`. Pre-Phase-6c rows have no audit history and surface `null`.
 - `POST /api/backlog-candidates/:id/apply` accepts JSON body `{ "execution_mode": "manual" | "role_dispatch", "execution_role"?: string }`. Missing body resolves to `"manual"`. **Phase 6c PR-2 contract change**: `mode=role_dispatch` REQUIRES `execution_role` to be present and in the catalog — empty or unknown returns 400. The chosen role becomes the `task.source` suffix (`role_dispatch:<role>`), is persisted on the candidate row, and is audited. `mode=manual` ignores `execution_role`. The Phase 5 behaviour (silently producing a bare `"role_dispatch"` source from `candidate.execution_role`) is removed.
@@ -356,6 +358,10 @@ Source: `[agent:backend-architect]`
 | POST | `/api/connector/planning-runs/:id/result` | Return success or failure for one leased planning run |
 | POST | `/api/connector/claim-next-task` | (Phase 6b) Claim the next queued role-dispatch task for the connector owner |
 | POST | `/api/connector/tasks/:task_id/execution-result` | (Phase 6b) Submit execution result for a claimed task |
+| POST | `/api/connector/activity` | (Phase 6c PR-4) Report the connector's current execution phase; connector-token auth |
+| GET | `/api/me/local-connectors/:id/activity` | (Phase 6c PR-4) Poll the latest activity snapshot for a connector; user auth |
+| GET | `/api/me/local-connectors/:id/activity-stream` | (Phase 6c PR-4) SSE stream of connector activity updates; user auth |
+| GET | `/api/projects/:id/active-connectors` | (Phase 6c PR-4) List online connectors for the authenticated user with their current activity |
 
 Behavior:
 
@@ -374,6 +380,10 @@ Behavior:
 - Connector tokens are distinct from session tokens and API keys.
 - `POST /api/connector/claim-next-task` (Phase 6b) requires `X-Connector-Token`. Claims one task with `dispatch_status = 'queued'` whose project has the connector's owner as a `project_members` row. Returns `{ task, requirement }` where `task` is null when the queue is empty. Sets the task's `dispatch_status = 'running'` atomically.
 - `POST /api/connector/tasks/:task_id/execution-result` (Phase 6b) requires `X-Connector-Token`. Accepts `{ success, result?, error_message?, error_kind? }`. The task MUST already be in `dispatch_status = 'running'` (owned by the connector's user); otherwise 400. On success: `dispatch_status = 'completed'`, `execution_result` stored as JSON. On failure: `dispatch_status = 'failed'`. `error_kind` is validated against the same allowlist as planning runs (`session_expired`, `rate_limited`, `context_overflow`, `adapter_timeout`, `unknown`); values outside the list are normalised to `"unknown"`.
+- `POST /api/connector/activity` (Phase 6c PR-4) requires `X-Connector-Token`. Accepts a `ConnectorActivity` JSON body: `{ phase, subject_kind?, subject_id?, subject_title?, role_id?, step?, started_at, updated_at }`. Phase must be one of `idle | claiming_run | planning | claiming_task | dispatching | submitting`. Returns 202. Updates the in-memory activity hub and asynchronously persists to `local_connectors.current_activity_json`.
+- `GET /api/me/local-connectors/:id/activity` (Phase 6c PR-4) polling endpoint. Returns `{ activity: ConnectorActivity | null, online: bool, age_seconds: int }`. `online` is true when `last_seen_at` is within 90 seconds. Prefers in-memory hub state; falls back to `current_activity_json` in DB.
+- `GET /api/me/local-connectors/:id/activity-stream` (Phase 6c PR-4) SSE endpoint. Sends the current state immediately on connect then pushes updates when the hub broadcasts. Named event type is `activity`. Keepalive comment `:\n\n` every 30 seconds. Client disconnects are detected via `r.Context().Done()`. `X-Accel-Buffering: no` header is set.
+- `GET /api/projects/:id/active-connectors` (Phase 6c PR-4) returns `[{ connector_id, label, activity: ConnectorActivity | null, online: bool, age_seconds: int }]` for the authenticated user's non-revoked connectors that are either online or have a recorded activity snapshot.
 
 ### Planning Settings
 

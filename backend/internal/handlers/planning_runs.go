@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/screenleon/agent-native-pm/internal/connector"
 	"github.com/screenleon/agent-native-pm/internal/middleware"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/planning"
@@ -18,17 +20,26 @@ import (
 
 type plannerFactory func(userID string) planning.DraftPlanner
 
+// roleSuggesterFn is the function type for suggest-role calls.
+// Kept as a type alias so main.go can wire connector.SuggestRole directly
+// without the handler struct hard-coding the connector package at field level.
+type roleSuggesterFn func(ctx context.Context, taskTitle, taskDescription, requirement, projectContext string, cliSel *connector.AdapterCliSelection) connector.SuggestRoleResult
+
 type PlanningRunHandler struct {
-	store               *store.PlanningRunStore
-	candidateStore      *store.BacklogCandidateStore
-	projectStore        *store.ProjectStore
-	requirementStore    *store.RequirementStore
-	agentRunStore       *store.AgentRunStore
-	localConnectorStore *store.LocalConnectorStore
-	accountBindings     *store.AccountBindingStore
-	notifications       *store.NotificationStore
-	planner             planning.DraftPlanner
-	plannerFactory      plannerFactory
+	store                *store.PlanningRunStore
+	candidateStore       *store.BacklogCandidateStore
+	projectStore         *store.ProjectStore
+	requirementStore     *store.RequirementStore
+	agentRunStore        *store.AgentRunStore
+	localConnectorStore  *store.LocalConnectorStore
+	accountBindings      *store.AccountBindingStore
+	notifications        *store.NotificationStore
+	planner              planning.DraftPlanner
+	plannerFactory       plannerFactory
+	// Phase 3B PR-2: context snapshot retrieval. nil when not wired.
+	contextSnapshotStore ContextSnapshotGetter
+	// Phase 6c PR-3: suggest-role. nil when not wired (suggest endpoint returns 503).
+	roleSuggester roleSuggesterFn
 }
 
 func NewPlanningRunHandler(s *store.PlanningRunStore, cs *store.BacklogCandidateStore, ps *store.ProjectStore, rs *store.RequirementStore, ars *store.AgentRunStore, planner planning.DraftPlanner) *PlanningRunHandler {
@@ -70,6 +81,21 @@ func (h *PlanningRunHandler) WithAccountBindings(bindings *store.AccountBindingS
 // returned in the response envelope only.
 func (h *PlanningRunHandler) WithNotifications(notifications *store.NotificationStore) *PlanningRunHandler {
 	h.notifications = notifications
+	return h
+}
+
+// WithRoleSuggester wires the Phase 6c PR-3 role-suggestion function.
+// When nil (default), POST /backlog-candidates/:id/suggest-role returns 503.
+func (h *PlanningRunHandler) WithRoleSuggester(fn roleSuggesterFn) *PlanningRunHandler {
+	h.roleSuggester = fn
+	return h
+}
+
+// WithContextSnapshotStore wires the Phase 3B PR-2 context snapshot store.
+// When nil (default), GET /planning-runs/:id/context-snapshot returns
+// {available: false} for all runs.
+func (h *PlanningRunHandler) WithContextSnapshotStore(s ContextSnapshotGetter) *PlanningRunHandler {
+	h.contextSnapshotStore = s
 	return h
 }
 
@@ -717,6 +743,13 @@ func (h *PlanningRunHandler) UpdateBacklogCandidate(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// Phase 3B PR-3: validate feedback_kind at the handler boundary so
+	// the 400 fires before any store work is attempted.
+	if req.FeedbackKind != nil && !models.IsValidFeedbackKind(*req.FeedbackKind) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid feedback_kind: %q; allowed: %v", *req.FeedbackKind, models.AllFeedbackKinds))
+		return
+	}
+
 	// Phase 6c PR-2: PATCH is now audit-aware when execution_role is
 	// the field being changed. The actor is the authenticated caller
 	// — distinguish session-user vs api-key per critic round 1 #3 +
@@ -735,6 +768,10 @@ func (h *PlanningRunHandler) UpdateBacklogCandidate(w http.ResponseWriter, r *ht
 		case errors.Is(err, store.ErrBacklogCandidateBadStatus):
 			writeError(w, http.StatusBadRequest, "invalid backlog candidate status")
 		case errors.Is(err, store.ErrBacklogCandidateUnknownExecutionRole):
+			writeError(w, http.StatusBadRequest, err.Error())
+		// Phase 3B PR-3: feedback_kind validation error from store layer
+		// (belt-and-suspenders — handler already checks above).
+		case store.IsInvalidFeedbackKindError(err):
 			writeError(w, http.StatusBadRequest, err.Error())
 		default:
 			writeError(w, http.StatusInternalServerError, "failed to update backlog candidate")
@@ -977,4 +1014,71 @@ func (h *PlanningRunHandler) ApplyBacklogCandidate(w http.ResponseWriter, r *htt
 		status = http.StatusOK
 	}
 	writeSuccess(w, status, result, nil)
+}
+
+// SuggestRole implements POST /api/backlog-candidates/:id/suggest-role.
+//
+// Phase 6c PR-3 — suggest-only mode:
+//   - Runs the dispatcher meta-prompt against the candidate's title,
+//     description, and parent requirement.
+//   - Returns {role_id, confidence, reasoning, alternatives} WITHOUT
+//     persisting to actor_audit. The operator confirms by patching
+//     execution_role on the candidate or selecting at apply time.
+//   - Auto-apply (mode=role_dispatch_auto) is deferred to Phase 6d per
+//     DECISIONS.md "Phase 6c scope decision B2".
+func (h *PlanningRunHandler) SuggestRole(w http.ResponseWriter, r *http.Request) {
+	if h.roleSuggester == nil {
+		writeError(w, http.StatusServiceUnavailable, "role suggestion is not configured on this server")
+		return
+	}
+
+	id := chi.URLParam(r, "id")
+	candidate, err := h.candidateStore.GetByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to look up backlog candidate")
+		return
+	}
+	if candidate == nil {
+		writeError(w, http.StatusNotFound, "backlog candidate not found")
+		return
+	}
+	if !requestAllowsProject(r, candidate.ProjectID) {
+		writeError(w, http.StatusForbidden, "api key not allowed for this project")
+		return
+	}
+
+	// Fetch the parent requirement for additional context.
+	requirementCtx := ""
+	if candidate.RequirementID != "" {
+		req, reqErr := h.requirementStore.GetByID(candidate.RequirementID)
+		if reqErr != nil {
+			log.Printf("suggest-role: fetch requirement %s: %v", candidate.RequirementID, reqErr)
+		} else if req != nil {
+			parts := []string{"Title: " + req.Title}
+			if req.Summary != "" {
+				parts = append(parts, "Summary: "+req.Summary)
+			}
+			requirementCtx = strings.Join(parts, "\n")
+		}
+	}
+
+	// Fetch project name for minimal project context.
+	projectCtx := ""
+	if project, projErr := h.projectStore.GetByID(candidate.ProjectID); projErr == nil && project != nil {
+		projectCtx = "Project: " + project.Name
+		if project.Description != "" {
+			projectCtx += "\n" + project.Description
+		}
+	}
+
+	result := h.roleSuggester(r.Context(), candidate.Title, candidate.Description, requirementCtx, projectCtx, nil)
+
+	// On failure, return 422 with structured error detail so the frontend
+	// can render a user-actionable message rather than a generic toast.
+	if result.ErrorKind != "" {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("[%s] %s", result.ErrorKind, result.ErrorMessage))
+		return
+	}
+
+	writeSuccess(w, http.StatusOK, result, nil)
 }

@@ -14,9 +14,11 @@ type ProjectSummary struct {
 }
 
 type DashboardSummary struct {
-	ProjectID       string         `json:"project_id"`
-	Summary         ProjectSummary `json:"summary"`
-	LatestSyncRun   *SyncRun       `json:"latest_sync_run"`
-	OpenDriftCount  int            `json:"open_drift_count"`
-	RecentAgentRuns []AgentRun     `json:"recent_agent_runs"`
+	ProjectID                  string         `json:"project_id"`
+	Summary                    ProjectSummary `json:"summary"`
+	LatestSyncRun              *SyncRun       `json:"latest_sync_run"`
+	OpenDriftCount             int            `json:"open_drift_count"`
+	RecentAgentRuns            []AgentRun     `json:"recent_agent_runs"`
+	AvgPlanningAcceptanceRate  float64        `json:"avg_planning_acceptance_rate"`  // 0–1, over last 7 days
+	PlanningRunsReviewedCount  int            `json:"planning_runs_reviewed_count"` // runs with all candidates reviewed in last 7 days
 }

@@ -2,6 +2,44 @@ package models
 
 import "time"
 
+// ApprovedFeedbackKinds are valid feedback_kind values for approved candidates.
+var ApprovedFeedbackKinds = []string{"good_fit", "modified", "fallback"}
+
+// RejectedFeedbackKinds are valid feedback_kind values for rejected candidates.
+var RejectedFeedbackKinds = []string{"wrong_scope", "too_broad", "duplicate", "low_quality", "other"}
+
+// AllFeedbackKinds is the union of both sets. Defined with an explicit
+// capacity allocation so the underlying array is not shared with
+// ApprovedFeedbackKinds (package-level append would share if capacity
+// was sufficient, creating aliasing bugs on any future mutation).
+var AllFeedbackKinds = func() []string {
+	out := make([]string, 0, len(ApprovedFeedbackKinds)+len(RejectedFeedbackKinds))
+	out = append(out, ApprovedFeedbackKinds...)
+	out = append(out, RejectedFeedbackKinds...)
+	return out
+}()
+
+// IsValidFeedbackKind reports whether kind is a permitted feedback_kind value.
+// Empty string is allowed (feedback is optional).
+func IsValidFeedbackKind(kind string) bool {
+	for _, k := range AllFeedbackKinds {
+		if k == kind {
+			return true
+		}
+	}
+	return kind == "" // empty is allowed (feedback is optional)
+}
+
+// QualitySummary is a per-planning-run aggregate of candidate review outcomes.
+type QualitySummary struct {
+	Total           int            `json:"total"`
+	Approved        int            `json:"approved"`
+	Rejected        int            `json:"rejected"`
+	Pending         int            `json:"pending"`
+	AcceptanceRate  float64        `json:"acceptance_rate"` // approved/(approved+rejected), 0 if both 0
+	FeedbackDistrib map[string]int `json:"feedback_distribution"`
+}
+
 const (
 	RequirementStatusDraft    = "draft"
 	RequirementStatusPlanned  = "planned"
@@ -219,10 +257,18 @@ type PlanningRun struct {
 	// (S5a), and a dispatch_warning flag the dispatcher may set if a CLI-bound
 	// run was skipped due to a pre-Path-B connector (R3 mitigation, design §6.2).
 	ConnectorCliInfo *PlanningRunCliInfo `json:"connector_cli_info,omitempty"`
-	StartedAt        *time.Time          `json:"started_at"`
-	CompletedAt      *time.Time          `json:"completed_at"`
-	CreatedAt        time.Time           `json:"created_at"`
-	UpdatedAt        time.Time           `json:"updated_at"`
+	// ContextPackID is a UUID generated at run-creation time that correlates
+	// this run with its planning_context_snapshots row (Phase 3B PR-1).
+	// Empty string on runs created before migration 033.
+	ContextPackID string     `json:"context_pack_id,omitempty"`
+	StartedAt     *time.Time `json:"started_at"`
+	CompletedAt   *time.Time `json:"completed_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	// QualitySummary is computed on-read from backlog_candidates for this
+	// run. Only populated by PlanningRunStore.GetByID (single-run fetch).
+	// nil on list responses and runs with no candidates.
+	QualitySummary *QualitySummary `json:"quality_summary,omitempty"`
 }
 
 // PlanningRunCliInfo is the wider Path-B-aware envelope serialised into the
@@ -266,6 +312,12 @@ const (
 	// applier. Operators see a clearer remediation that points at the
 	// source field rather than the role catalog.
 	ErrorKindRoleDispatchMalformed = "role_dispatch_malformed"
+	// Phase 6c PR-3: the LLM router (dispatcher meta-prompt) returned an
+	// empty role_id or a role_id not in the catalog. Different from
+	// role_not_found (which fires at task-claim time for a stale stored
+	// role) — router_no_match fires during the suggest-role call itself,
+	// before any task is created or executed.
+	ErrorKindRouterNoMatch = "router_no_match"
 )
 
 // AllowedErrorKinds is the server-side allowlist for error_kind values
@@ -286,6 +338,7 @@ var AllowedErrorKinds = map[string]bool{
 	ErrorKindInvalidResultSchema:   true,
 	ErrorKindRoleNotFound:          true,
 	ErrorKindRoleDispatchMalformed: true,
+	ErrorKindRouterNoMatch:         true,
 }
 
 // ErrorKindRemediations is the static server-side catalog of human-readable
@@ -306,6 +359,7 @@ var ErrorKindRemediations = map[string]string{
 	ErrorKindInvalidResultSchema: "The CLI returned output that does not match the role result schema (must include a `files` array). Check the role prompt and retry.",
 	ErrorKindRoleNotFound:          "The task references an execution role that is not in the current catalog. The role may have been renamed or removed; create a new candidate with a current role.",
 	ErrorKindRoleDispatchMalformed: "The task source is missing a role suffix (expected `role_dispatch:<role>`). This typically means the task was created before role suffixes were required; create a new candidate with a current role.",
+	ErrorKindRouterNoMatch: "The role dispatcher could not match the task to a known execution role. Try selecting a role manually from the dropdown.",
 }
 
 // PlanningRunBindingSnapshot freezes the fields of an account_bindings row
@@ -424,8 +478,16 @@ type BacklogCandidate struct {
 	// no-audit contract — these display as "set manually" with no
 	// timestamp; backfill is intentionally not done).
 	ExecutionRoleAuthoring *ExecutionRoleAuthoring `json:"execution_role_authoring,omitempty"`
-	CreatedAt              time.Time               `json:"created_at"`
-	UpdatedAt              time.Time               `json:"updated_at"`
+	// FeedbackKind is optional operator feedback on the PO decision.
+	// Allowed values: ApprovedFeedbackKinds when status==approved,
+	// RejectedFeedbackKinds when status==rejected, or "" (no feedback).
+	// Phase 3B PR-3.
+	FeedbackKind string `json:"feedback_kind,omitempty"`
+	// FeedbackNote is a free-text annotation paired with FeedbackKind.
+	// Phase 3B PR-3.
+	FeedbackNote string `json:"feedback_note,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // ExecutionRoleAuthoring is the read-side projection of the latest
@@ -461,6 +523,9 @@ type UpdateBacklogCandidateRequest struct {
 	Description   *string `json:"description,omitempty"`
 	Status        *string `json:"status,omitempty"`
 	ExecutionRole *string `json:"execution_role,omitempty"` // Phase 5 B2; "" to clear
+	// Phase 3B PR-3: optional quality feedback.
+	FeedbackKind *string `json:"feedback_kind,omitempty"`
+	FeedbackNote *string `json:"feedback_note,omitempty"`
 }
 
 type TaskLineage struct {

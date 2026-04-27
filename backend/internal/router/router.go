@@ -22,6 +22,7 @@ type Deps struct {
 	PlanningSettingsHandler   *handlers.PlanningSettingsHandler
 	AccountBindingHandler     *handlers.AccountBindingHandler
 	LocalConnectorHandler     *handlers.LocalConnectorHandler
+	ConnectorActivityHandler  *handlers.ConnectorActivityHandler
 	TaskHandler               *handlers.TaskHandler
 	DocumentHandler           *handlers.DocumentHandler
 	SummaryHandler            *handlers.SummaryHandler
@@ -102,6 +103,11 @@ func New(deps Deps) http.Handler {
 			r.Post("/connector/claim-next-task", deps.LocalConnectorHandler.ClaimNextTask)
 			r.Post("/connector/tasks/{task_id}/execution-result", deps.LocalConnectorHandler.SubmitTaskResult)
 		}
+		// Phase 6c PR-4: connector activity reporting (connector-token auth,
+		// not user auth — connector pushes its current phase to the server).
+		if deps.ConnectorActivityHandler != nil {
+			r.Post("/connector/activity", deps.ConnectorActivityHandler.Report)
+		}
 
 		// ── Auth (public) ──────────────────────────────────────────────
 		if deps.UserHandler != nil {
@@ -141,9 +147,11 @@ func New(deps Deps) http.Handler {
 				r.Get("/requirements/{id}/planning-runs", deps.PlanningRunHandler.ListByRequirement)
 				r.Get("/planning-runs/{id}", deps.PlanningRunHandler.Get)
 				r.Post("/planning-runs/{id}/cancel", deps.PlanningRunHandler.Cancel)
+				r.Get("/planning-runs/{id}/context-snapshot", deps.PlanningRunHandler.GetContextSnapshot)
 				r.Get("/planning-runs/{id}/backlog-candidates", deps.PlanningRunHandler.ListBacklogCandidates)
 				r.Patch("/backlog-candidates/{id}", deps.PlanningRunHandler.UpdateBacklogCandidate)
 				r.Post("/backlog-candidates/{id}/apply", deps.PlanningRunHandler.ApplyBacklogCandidate)
+				r.Post("/backlog-candidates/{id}/suggest-role", deps.PlanningRunHandler.SuggestRole)
 			}
 
 			// Tasks
@@ -234,6 +242,12 @@ func New(deps Deps) http.Handler {
 				r.Patch("/me/local-connectors/{id}/cli-configs/{config_id}", deps.LocalConnectorHandler.UpdateCliConfig)
 				r.Delete("/me/local-connectors/{id}/cli-configs/{config_id}", deps.LocalConnectorHandler.DeleteCliConfig)
 				r.Post("/me/local-connectors/{id}/cli-configs/{config_id}/primary", deps.LocalConnectorHandler.SetPrimaryCliConfig)
+			}
+			// Phase 6c PR-4: connector activity visibility (user-authenticated).
+			if deps.ConnectorActivityHandler != nil {
+				r.Get("/me/local-connectors/{id}/activity", deps.ConnectorActivityHandler.Get)
+				r.Get("/me/local-connectors/{id}/activity-stream", deps.ConnectorActivityHandler.Stream)
+				r.Get("/projects/{id}/active-connectors", deps.ConnectorActivityHandler.ListActive)
 			}
 			if deps.RemoteModelsHandler != nil {
 				r.Post("/me/remote-models", deps.RemoteModelsHandler.Fetch)

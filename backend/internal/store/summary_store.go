@@ -111,6 +111,40 @@ func (s *SummaryStore) ComputeDashboardSummary(projectID string) (*models.Dashbo
 		dashboard.RecentAgentRuns = recentAgentRuns
 	}
 
+	// Phase 3B PR-4: avg acceptance rate over the past 7 days.
+	// Only counts planning_runs where every candidate has been reviewed
+	// (no pending candidates remain). Best-effort — failure leaves the field at 0.
+	cutoff := time.Now().UTC().AddDate(0, 0, -7)
+	rows, qErr := s.db.Query(`
+		SELECT
+			SUM(approved_count) AS total_approved,
+			SUM(reviewed_count) AS total_reviewed,
+			COUNT(*) AS run_count
+		FROM (
+			SELECT
+				pr.id,
+				SUM(CASE WHEN bc.status = 'approved' THEN 1 ELSE 0 END) AS approved_count,
+				SUM(CASE WHEN bc.status IN ('approved','rejected') THEN 1 ELSE 0 END) AS reviewed_count,
+				SUM(CASE WHEN bc.status = 'pending' THEN 1 ELSE 0 END) AS pending_count
+			FROM planning_runs pr
+			JOIN backlog_candidates bc ON bc.planning_run_id = pr.id
+			WHERE pr.project_id = $1
+			  AND pr.completed_at >= $2
+			GROUP BY pr.id
+			HAVING SUM(CASE WHEN bc.status = 'pending' THEN 1 ELSE 0 END) = 0
+		) AS reviewed_runs
+	`, projectID, cutoff)
+	if qErr == nil {
+		defer rows.Close()
+		if rows.Next() {
+			var totalApproved, totalReviewed, runCount sql.NullInt64
+			if scanErr := rows.Scan(&totalApproved, &totalReviewed, &runCount); scanErr == nil && totalReviewed.Valid && totalReviewed.Int64 > 0 {
+				dashboard.AvgPlanningAcceptanceRate = float64(totalApproved.Int64) / float64(totalReviewed.Int64)
+				dashboard.PlanningRunsReviewedCount = int(runCount.Int64)
+			}
+		}
+	}
+
 	return dashboard, nil
 }
 

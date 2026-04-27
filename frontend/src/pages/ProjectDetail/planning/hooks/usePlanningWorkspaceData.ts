@@ -8,6 +8,7 @@ import type {
   PlanningProviderOptions,
   PlanningExecutionMode,
   LocalConnector,
+  UpdateBacklogCandidatePayload,
 } from '../../../../types'
 import {
   createRequirement,
@@ -24,8 +25,9 @@ import {
   listLocalConnectors,
   listConnectorCliConfigs,
   listRoles,
+  suggestRoleForCandidate,
 } from '../../../../api/client'
-import type { CliConfig, RoleInfo } from '../../../../api/client'
+import type { CliConfig, RoleInfo, SuggestRoleResult } from '../../../../api/client'
 import { isKnownRoleId } from '../../../../types/roles'
 import type { RequirementIntakeForm } from '../RequirementIntake'
 import type { CandidateReviewForm } from '../CandidateReviewPanel'
@@ -249,6 +251,23 @@ export function usePlanningWorkspaceData({
     setSelectedPlanningRunId(null)
     loadPlanningRuns(selectedRequirementId)
   }, [loadPlanningRuns, selectedRequirementId])
+
+  // Phase 6c PR-4: auto-refresh runs when an SSE planning-run-changed event
+  // arrives for this project. Only triggers a reload when the changed run
+  // belongs to the currently-selected requirement (avoids unnecessary fetches).
+  useEffect(() => {
+    function handlePlanningRunChanged(e: Event) {
+      const detail = (e as CustomEvent<{
+        run_id: string; status: string; project_id: string; requirement_id: string
+      }>).detail
+      if (detail.project_id !== projectId) return
+      if (selectedRequirementId && detail.requirement_id === selectedRequirementId) {
+        loadPlanningRuns(selectedRequirementId)
+      }
+    }
+    window.addEventListener('anpm:planning-run-changed', handlePlanningRunChanged)
+    return () => window.removeEventListener('anpm:planning-run-changed', handlePlanningRunChanged)
+  }, [projectId, selectedRequirementId, loadPlanningRuns])
 
   useEffect(() => {
     if (planningRuns.length === 0) {
@@ -728,6 +747,11 @@ export function usePlanningWorkspaceData({
     }
   }
 
+  async function handleSuggestRoleForCandidate(candidateId: string): Promise<SuggestRoleResult> {
+    const response = await suggestRoleForCandidate(candidateId)
+    return response.data
+  }
+
   // Phase 5 B3 + Phase 6c PR-2: the panel lets the operator pick
   // Manual or Auto-dispatch (role_dispatch) for the upcoming Apply
   // click. PR-2 closes the catch-22: role_dispatch is now always
@@ -845,6 +869,11 @@ export function usePlanningWorkspaceData({
     }
   }
 
+  async function handleSubmitCandidateFeedback(candidateId: string, payload: UpdateBacklogCandidatePayload) {
+    const response = await updateBacklogCandidate(candidateId, payload)
+    setPlanningCandidates(prev => prev.map(c => c.id === response.data.id ? response.data : c))
+  }
+
   return {
     // selections
     selectedRequirement,
@@ -897,6 +926,8 @@ export function usePlanningWorkspaceData({
     availableRoles,
     availableRolesError,
     onUpdateCandidateExecutionRole: handleUpdateCandidateExecutionRole,
+    onSuggestRoleForCandidate: handleSuggestRoleForCandidate,
+    onSubmitCandidateFeedback: handleSubmitCandidateFeedback,
     // provider options
     planningProviderOptions,
     planningProviderOptionsLoading,
