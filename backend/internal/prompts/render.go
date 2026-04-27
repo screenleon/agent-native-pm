@@ -34,7 +34,7 @@ import (
 	"strings"
 )
 
-//go:embed *.md roles/*.md
+//go:embed *.md roles/*.md meta/*.md
 var fsys embed.FS
 
 // templateVar matches our single template syntax: {{VAR_NAME}} where

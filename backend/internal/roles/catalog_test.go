@@ -65,8 +65,16 @@ func TestCatalogMatchesPromptDir(t *testing.T) {
 		}
 	}
 
+	// Phase 6c PR-3: meta-roles (Category=CategoryMeta) live under
+	// prompts/meta/, not prompts/roles/. Exclude them from this comparison
+	// so that adding a meta-role to the catalog does not falsely flag a
+	// "catalog has roles without a prompt file" error here.
+	// TestMetaRolesHavePromptFiles (below) validates the meta/ side.
 	catalogRoles := map[string]fmRole{}
 	for _, r := range catalog {
+		if r.Category != CategoryRole {
+			continue
+		}
 		catalogRoles[r.ID] = fmRole{title: r.Title, version: r.Version, useCase: r.UseCase, category: r.Category}
 	}
 
@@ -270,6 +278,52 @@ func keys[V any](m map[string]V) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// TestMetaRolesHavePromptFiles validates that every catalog entry with
+// Category=CategoryMeta has a corresponding markdown file under
+// backend/internal/prompts/meta/ and that the frontmatter fields
+// (title, version, use_case, category, role_id) agree with the catalog.
+func TestMetaRolesHavePromptFiles(t *testing.T) {
+	metaDir := promptsMetaDir(t)
+	for _, r := range catalog {
+		if r.Category != CategoryMeta {
+			continue
+		}
+		path := filepath.Join(metaDir, r.ID+".md")
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("meta-role %q: expected prompt file at %s, got error: %v", r.ID, path, err)
+			continue
+		}
+		fm := parseFrontmatter(t, string(body), path)
+		if fm["role_id"] != r.ID {
+			t.Errorf("%s: frontmatter role_id %q != catalog ID %q", r.ID, fm["role_id"], r.ID)
+		}
+		if fm["title"] != r.Title {
+			t.Errorf("%s: title mismatch — prompt %q vs catalog %q", r.ID, fm["title"], r.Title)
+		}
+		ver, _ := strconv.Atoi(fm["version"])
+		if ver != r.Version {
+			t.Errorf("%s: version mismatch — prompt %d vs catalog %d", r.ID, ver, r.Version)
+		}
+		if fm["use_case"] != r.UseCase {
+			t.Errorf("%s: use_case mismatch\nprompt:  %q\ncatalog: %q", r.ID, fm["use_case"], r.UseCase)
+		}
+		if fm["category"] != CategoryMeta {
+			t.Errorf("%s: prompts/meta/ entries must have category=%q, got %q", r.ID, CategoryMeta, fm["category"])
+		}
+	}
+}
+
+// promptsMetaDir locates the prompts/meta directory relative to this test file.
+func promptsMetaDir(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	return filepath.Join(filepath.Dir(thisFile), "..", "prompts", "meta")
 }
 
 func setDiff(a, b []string) []string {

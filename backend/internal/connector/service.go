@@ -48,6 +48,10 @@ type Service struct {
 	CliHealthDisabled bool
 	Stdout            io.Writer
 	Stderr            io.Writer
+	// ActivityReporter is optional. When set, the service reports its current
+	// execution phase to the server via POST /api/connector/activity.
+	// Phase 6c PR-4.
+	ActivityReporter *ActivityReporter
 
 	mu               sync.Mutex
 	knownCliBindings map[string]knownCliBinding
@@ -169,11 +173,29 @@ func (s *Service) Run(ctx context.Context) error {
 // success/failure of the task itself), (false, nil) when the queue is empty,
 // and (false, err) on infrastructure errors.
 func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
+	if s.ActivityReporter != nil {
+		s.ActivityReporter.Report(models.ConnectorActivity{
+			Phase:     models.ConnectorPhaseClaimingTask,
+			StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		})
+	}
 	resp, err := s.Client.ClaimNextTask(ctx)
 	if err != nil {
+		if s.ActivityReporter != nil {
+			s.ActivityReporter.Report(models.ConnectorActivity{
+				Phase:     models.ConnectorPhaseIdle,
+				StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+			})
+		}
 		return false, err
 	}
 	if resp == nil || resp.Task == nil {
+		if s.ActivityReporter != nil {
+			s.ActivityReporter.Report(models.ConnectorActivity{
+				Phase:     models.ConnectorPhaseIdle,
+				StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+			})
+		}
 		return false, nil
 	}
 	task := resp.Task
@@ -222,6 +244,18 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 
 	fmt.Fprintf(s.Stdout, "claimed task %s (role=%s title=%q)\n", task.ID, roleID, task.Title)
 
+	if s.ActivityReporter != nil {
+		s.ActivityReporter.Report(models.ConnectorActivity{
+			Phase:        models.ConnectorPhaseDispatching,
+			SubjectKind:  "task",
+			SubjectID:    task.ID,
+			SubjectTitle: task.Title,
+			RoleID:       roleID,
+			Step:         "rendering prompt",
+			StartedAt:    time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		})
+	}
+
 	// Resolve CLI. Use the connector's primary CLI config if available (the
 	// connector state does not carry a binding for task dispatch, so we
 	// construct a nil selection and let resolveBuiltinCLI fall back to env /
@@ -237,6 +271,12 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 			ErrorKind:    "adapter_timeout",
 		}); err != nil {
 			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
+		}
+		if s.ActivityReporter != nil {
+			s.ActivityReporter.Report(models.ConnectorActivity{
+				Phase:     models.ConnectorPhaseIdle,
+				StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+			})
 		}
 		return true, nil
 	}
@@ -345,11 +385,34 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 	// Re-marshal the full parsed map as the result payload.
 	resultBytes, _ := json.Marshal(parsed)
 
+	if s.ActivityReporter != nil {
+		s.ActivityReporter.Report(models.ConnectorActivity{
+			Phase:        models.ConnectorPhaseSubmitting,
+			SubjectKind:  "task",
+			SubjectID:    task.ID,
+			SubjectTitle: task.Title,
+			RoleID:       roleID,
+			StartedAt:    time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		})
+	}
+
 	if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
 		Success: true,
 		Result:  json.RawMessage(resultBytes),
 	}); err != nil {
+		if s.ActivityReporter != nil {
+			s.ActivityReporter.Report(models.ConnectorActivity{
+				Phase:     models.ConnectorPhaseIdle,
+				StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+			})
+		}
 		return true, fmt.Errorf("submit task result for %s: %w", task.ID, err)
+	}
+	if s.ActivityReporter != nil {
+		s.ActivityReporter.Report(models.ConnectorActivity{
+			Phase:     models.ConnectorPhaseIdle,
+			StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		})
 	}
 	fmt.Fprintf(s.Stdout, "completed task %s (role=%s)\n", task.ID, roleID)
 	return true, nil
@@ -421,12 +484,39 @@ func classifyRunError(msg string) string {
 }
 
 func (s *Service) RunOnce(ctx context.Context) (bool, error) {
+	if s.ActivityReporter != nil {
+		s.ActivityReporter.Report(models.ConnectorActivity{
+			Phase:     models.ConnectorPhaseClaimingRun,
+			StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		})
+	}
 	claim, err := s.Client.ClaimNextRun(ctx)
 	if err != nil {
+		if s.ActivityReporter != nil {
+			s.ActivityReporter.Report(models.ConnectorActivity{
+				Phase:     models.ConnectorPhaseIdle,
+				StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+			})
+		}
 		return false, err
 	}
 	if claim == nil || claim.Run == nil || claim.Requirement == nil {
+		if s.ActivityReporter != nil {
+			s.ActivityReporter.Report(models.ConnectorActivity{
+				Phase:     models.ConnectorPhaseIdle,
+				StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+			})
+		}
 		return false, nil
+	}
+	if s.ActivityReporter != nil {
+		s.ActivityReporter.Report(models.ConnectorActivity{
+			Phase:        models.ConnectorPhasePlanning,
+			SubjectKind:  "planning_run",
+			SubjectID:    claim.Run.ID,
+			SubjectTitle: claim.Requirement.Title,
+			StartedAt:    time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		})
 	}
 	projectLabel := claim.Run.ProjectID
 	if claim.Project != nil && strings.TrimSpace(claim.Project.Name) != "" {
@@ -459,7 +549,19 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 		result = ExecuteExecJSON(ctx, s.State.Adapter, execInput)
 	}
 	if _, err := s.Client.SubmitRunResult(ctx, claim.Run.ID, result); err != nil {
+		if s.ActivityReporter != nil {
+			s.ActivityReporter.Report(models.ConnectorActivity{
+				Phase:     models.ConnectorPhaseIdle,
+				StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+			})
+		}
 		return true, fmt.Errorf("submit run result for %s: %w", claim.Run.ID, err)
+	}
+	if s.ActivityReporter != nil {
+		s.ActivityReporter.Report(models.ConnectorActivity{
+			Phase:     models.ConnectorPhaseIdle,
+			StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		})
 	}
 	if result.Success {
 		fmt.Fprintf(s.Stdout, "completed planning run %s (project %q) with %d candidates\n", claim.Run.ID, projectLabel, len(result.Candidates))
