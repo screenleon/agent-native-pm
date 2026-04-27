@@ -29,15 +29,17 @@ function DispatchStatusBadge({ task, onRequeue }: DispatchStatusBadgeProps) {
   const color = colorMap[ds] ?? 'var(--text-muted)'
 
   if (ds === 'completed' && task.execution_result) {
+    const raw = task.execution_result as Record<string, unknown>
     const files: string[] = []
     try {
-      const raw = task.execution_result as Record<string, unknown>
       if (Array.isArray(raw['files'])) {
         for (const f of raw['files'] as unknown[]) {
-          if (typeof f === 'string') files.push(f)
+          if (typeof f === 'object' && f !== null && 'path' in f) files.push((f as Record<string,unknown>)['path'] as string)
+          else if (typeof f === 'string') files.push(f)
         }
       }
     } catch { /* ignore */ }
+    const filesApplied = typeof raw['files_applied'] === 'number' ? raw['files_applied'] as number : null
     return (
       <span style={{ marginLeft: '0.5rem', verticalAlign: 'middle' }}>
         <button
@@ -54,7 +56,7 @@ function DispatchStatusBadge({ task, onRequeue }: DispatchStatusBadgeProps) {
           aria-expanded={expanded}
           data-testid="dispatch-badge-completed"
         >
-          {label} {expanded ? '▲' : '▼'}
+          {label}{filesApplied !== null ? ` (${filesApplied} file${filesApplied !== 1 ? 's' : ''} applied)` : ''} {expanded ? '▲' : '▼'}
         </button>
         {expanded && (
           <span
