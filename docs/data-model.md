@@ -7,7 +7,7 @@ This file is the canonical schema reference for the current backend database.
 - Runtime database: PostgreSQL
 - SQL semantics: PostgreSQL placeholders, `TIMESTAMPTZ`, `BOOLEAN`, `JSONB`, partial indexes, and GIN full-text indexes
 - Migrations: forward-only numbered SQL files in `backend/db/migrations/`
-- Migration set currently applied through `028_requirement_audience_success.sql`
+- Migration set currently applied through `034_candidate_feedback.sql`
 - Minimum SQLite version: **3.35** (March 2021). Required by migration 026's `.down.sql` which uses `ALTER TABLE ... DROP COLUMN`. Older SQLite versions apply the forward migration fine but rollback fails with `near "DROP": syntax error`.
 
 ## Current Entity Relationships
@@ -34,6 +34,7 @@ requirements 1---* backlog_candidates
 requirements 1---* task_lineage
 planning_runs 1---* backlog_candidates
 planning_runs 1---* task_lineage
+planning_runs 1---* planning_context_snapshots
 backlog_candidates 1---* task_lineage
 tasks 1---* task_lineage
 
@@ -166,6 +167,8 @@ Notes:
 | `metadata` | JSONB | NOT NULL DEFAULT '{}' | Operational signals: CLI health + Phase 4 probe pipeline (see keys below) |
 | `last_seen_at` | TIMESTAMPTZ | | Latest successful heartbeat |
 | `last_error` | TEXT | NOT NULL DEFAULT '' | Last connector-reported error |
+| `current_activity_json` | TEXT | NOT NULL DEFAULT '' | Latest `ConnectorActivity` snapshot as JSON; empty = no activity recorded (Phase 6c PR-4, migration 031) |
+| `current_activity_at` | TIMESTAMPTZ | | Server timestamp of the last activity update; NULL until the connector first reports (Phase 6c PR-4, migration 031) |
 | `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 
@@ -239,10 +242,36 @@ Notes:
 | `lease_expires_at` | TIMESTAMPTZ | | Lease expiry for local connector execution |
 | `dispatch_error` | TEXT | NOT NULL DEFAULT '' | Dispatch-layer error from lease expiry or connector callback |
 | `error_message` | TEXT | NOT NULL DEFAULT '' | Failure detail when planning fails |
+| `adapter_type` | TEXT | | Adapter type recorded at run create (e.g. `cli:claude`) |
+| `model_override` | TEXT | | Per-run model override recorded at create |
+| `account_binding_id` | TEXT | FK -> account_bindings.id | Optional personal binding chosen at run-create (Path B S2) |
+| `connector_cli_info` | TEXT (JSON) | | Binding snapshot + CLI invocation info + error kind (Path B envelope) |
+| `target_connector_id` | TEXT | FK -> local_connectors.id | Non-NULL pins the run to one connector (Phase 6a cli_config path) |
+| `context_pack_id` | TEXT | NOT NULL DEFAULT '' | UUID generated at run-creation time; correlates this run with its `planning_context_snapshots` row (Phase 3B PR-1) |
 | `started_at` | TIMESTAMPTZ | | Planning start time |
 | `completed_at` | TIMESTAMPTZ | | Planning completion time |
 | `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
+
+### Table: `planning_context_snapshots`
+
+(Migration 032 — Phase 3B PR-1)
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | TEXT | PRIMARY KEY | UUID v4 |
+| `pack_id` | TEXT | NOT NULL | UUID matching `planning_runs.context_pack_id` |
+| `planning_run_id` | TEXT | NOT NULL, FK -> planning_runs.id ON DELETE CASCADE | Parent planning run |
+| `schema_version` | TEXT | NOT NULL DEFAULT 'context.v2' | Wire schema version (`context.v2`) |
+| `snapshot` | TEXT | NOT NULL DEFAULT '' | JSON blob of `PlanningContextV2` |
+| `sources_bytes` | INTEGER | NOT NULL DEFAULT 0 | Byte count of sources after reduction |
+| `dropped_counts` | TEXT | NOT NULL DEFAULT '{}' | JSON map of source names → dropped item counts |
+| `created_at` | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+Notes:
+- `snapshot` and `dropped_counts` are stored as `TEXT NOT NULL DEFAULT ''` (SQLite-compatible; equivalent to JSONB in Postgres deployments via the existing dialect pattern).
+- `idx_ctx_snapshots_run` indexes `planning_run_id` for efficient run-scoped lookups.
+- Cascade delete: when a `planning_run` row is deleted, its snapshot rows are deleted automatically.
 
 ### Table: `backlog_candidates`
 

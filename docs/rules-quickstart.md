@@ -64,6 +64,9 @@ Use this lightweight checklist before coding:
 - Never do destructive actions without approval.
 - Do not silently ignore errors or remove failing tests.
 - Do not implement first and backfill requirements afterward.
+- **If a requirement is ambiguous or has two reasonable interpretations, present both and ask before coding. State what would break if an assumption is wrong.** (→ GLOBAL-001)
+- **Touch only what the task requires. Do not clean up pre-existing dead code, style issues, or unbroken logic unless that is the explicit task goal.** (→ GLOBAL-010)
+- **For bug fixes, write a failing reproduction test first; fix only after confirming the test captures the issue.** (→ GLOBAL-011)
 - Follow existing repository patterns unless user explicitly asks for refactor.
 - PostgreSQL is the active runtime data store. Do not introduce SQLite-only assumptions or regress the schema/docs back to legacy Phase 1 constraints.
 - All API responses must use the JSON envelope: `{ data, error, meta }`.

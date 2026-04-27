@@ -73,3 +73,27 @@
 - Verification: Project document list provides an in-app view action and renders content or a clear error state.
 - Supersedes: N/A
 - Superseded by: N/A
+
+### Rule: UI-007
+- Owner layer: Domain
+- Domain: frontend-components
+- Stability: behavior
+- Status: active
+- Scope: SSE / real-time state updates
+- Statement: SSE event routing must use `window.dispatchEvent(new CustomEvent('anpm:*', { detail }))` as the fan-out bus. Components listen via `window.addEventListener`; the single `EventSource` lives only in `App.tsx`. Never pass an `EventSource` instance through component props or context.
+- Rationale: Centralises connection lifecycle; components can subscribe/unsubscribe independently without re-creating the connection. Mirrors the existing `anpm:refresh-notifications` pattern.
+- Verification: Grep for `EventSource` outside `App.tsx` — should be zero; `useEffect` listeners use the `anpm:` prefix.
+- Supersedes: N/A
+- Superseded by: N/A
+
+### Rule: UI-008
+- Owner layer: Domain
+- Domain: frontend-components
+- Stability: behavior
+- Status: active
+- Scope: advisory/suggest UI (e.g. role suggestion)
+- Statement: Advisory LLM results must be displayed as pre-filled suggestions that require explicit operator confirmation. The UI must visually distinguish "suggested but not yet saved" from "saved". Never auto-apply an LLM suggestion without a user action.
+- Rationale: The operator bears responsibility for role assignment; silently applying a suggestion would bypass the intended human-in-the-loop checkpoint.
+- Verification: `CandidateRoleEditor` shows suggestion in dropdown only after "💡 Suggest" click; Save button still required to persist.
+- Supersedes: N/A
+- Superseded by: N/A

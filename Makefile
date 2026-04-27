@@ -1,6 +1,6 @@
 # Agent Native PM — Makefile
 
-.PHONY: all build build-backend build-anpm build-connector test test-local lint dev serve clean release docker-build docker-up docker-down lint-governance lint-rules lint-docs budget-report validate-prompt-budget decisions-conflict-check test-frontend pre-pr pre-pr-fast
+.PHONY: all build build-backend build-anpm build-connector test test-local test-affected test-affected-backend test-affected-frontend lint dev serve clean release docker-build docker-up docker-down lint-governance lint-rules lint-docs budget-report validate-prompt-budget decisions-conflict-check test-frontend pre-pr pre-pr-fast
 
 # Default
 all: build
@@ -22,6 +22,16 @@ test:
 
 test-local:
 	cd backend && go test ./... -v -count=1
+
+# Run only tests for packages affected by current git changes.
+# Uses SQLite by default; pass TEST_DATABASE_URL=postgres://... to override.
+test-affected-backend:
+	bash scripts/test-affected.sh
+
+test-affected-frontend:
+	cd frontend && npm run test:affected
+
+test-affected: test-affected-backend test-affected-frontend
 
 test-integration:
 	cd backend && go test ./... -v -tags=integration -count=1

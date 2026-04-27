@@ -14,7 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	activitypkg "github.com/screenleon/agent-native-pm/internal/activity"
 	"github.com/screenleon/agent-native-pm/internal/config"
+	"github.com/screenleon/agent-native-pm/internal/connector"
 	"github.com/screenleon/agent-native-pm/internal/database"
 	"github.com/screenleon/agent-native-pm/internal/events"
 	"github.com/screenleon/agent-native-pm/internal/git"
@@ -105,6 +107,9 @@ func main() {
 	accountBindingStore := store.NewAccountBindingStore(db, settingsBox)
 	localConnectorStore := store.NewLocalConnectorStore(db, dialect)
 
+	// Phase 3B stores
+	contextSnapshotStore := store.NewContextSnapshotStore(db)
+
 	// Phase 4 stores
 	userStore := store.NewUserStore(db)
 	sessionStore := store.NewSessionStore(db, userStore)
@@ -127,7 +132,9 @@ func main() {
 		return planning.NewSettingsBackedPlannerWithBindings(taskStore, documentStore, driftSignalStore, syncRunStore, agentRunStore, planningSettingsStore, accountBindingStore, userID, cfg.PlanningMaxResponseBytes)
 	}).WithLocalConnectorStore(localConnectorStore).
 		WithAccountBindings(accountBindingStore).
-		WithNotifications(notificationStore)
+		WithNotifications(notificationStore).
+		WithRoleSuggester(connector.SuggestRole).
+		WithContextSnapshotStore(contextSnapshotStore)
 	planningSettingsHandler := handlers.NewPlanningSettingsHandler(planningSettingsStore)
 	syncHandler := handlers.NewSyncHandler(syncRunStore, syncService, projectStore)
 	agentRunHandler := handlers.NewAgentRunHandler(agentRunStore, projectStore)
@@ -141,16 +148,32 @@ func main() {
 	accountBindingHandler := handlers.NewAccountBindingHandler(accountBindingStore).
 		WithLocalMode(cfg.LocalMode).
 		WithLocalConnectorStore(localConnectorStore)
+	// Phase 6c PR-4: broker is created here (before localConnectorHandler) so
+	// planning-run-changed SSE events can be wired without a forward reference.
+	notificationBroker := events.NewBroker()
+	notificationStore.SetBroker(notificationBroker)
+
+	// Phase 6c PR-4: activity hub for connector execution-phase visibility.
+	activityHub := activitypkg.NewHub(localConnectorStore)
+	// Restore persisted activity snapshots so the hub has initial state after
+	// a server restart (best-effort: log and continue on error).
+	if activities, restoreErr := localConnectorStore.ListActivities(); restoreErr == nil {
+		activityHub.RestoreFromDB(activities)
+	} else {
+		slog.Warn("connector activity restore failed", "err", restoreErr)
+	}
+	connectorActivityHandler := handlers.NewConnectorActivityHandler(activityHub, localConnectorStore, projectStore)
+
 	localConnectorHandler := handlers.NewLocalConnectorHandler(localConnectorStore, planningRunStore, requirementStore, backlogCandidateStore, agentRunStore).
 		WithProjectStore(projectStore).
 		WithNotificationStore(notificationStore).
 		WithContextBuilder(planning.NewProjectContextBuilder(taskStore, documentStore, driftSignalStore, syncRunStore, agentRunStore)).
 		WithAccountBindingStore(accountBindingStore).
-		WithTaskStore(taskStore)
+		WithTaskStore(taskStore).
+		WithBroker(notificationBroker).
+		WithSnapshotSaver(contextSnapshotStore)
 
-	// Phase 4 handlers
-	notificationBroker := events.NewBroker()
-	notificationStore.SetBroker(notificationBroker)
+	// Phase 4 handlers (notificationBroker moved above with localConnectorHandler)
 	userHandler := handlers.NewUserHandler(userStore, sessionStore)
 	notificationHandler := handlers.NewNotificationHandler(notificationStore).
 		WithBroker(notificationBroker, sessionStore)
@@ -204,6 +227,7 @@ func main() {
 		PlanningSettingsHandler:   planningSettingsHandler,
 		AccountBindingHandler:     accountBindingHandler,
 		LocalConnectorHandler:     localConnectorHandler,
+		ConnectorActivityHandler:  connectorActivityHandler,
 		ProjectRepoMappingHandler: repoMappingHandler,
 		UserHandler:               userHandler,
 		NotificationHandler:       notificationHandler,
@@ -237,6 +261,9 @@ func main() {
 	// Graceful shutdown on SIGINT / SIGTERM.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Purge idle connector activity entries older than 5 min (DECISIONS 2026-04-25 §(g)).
+	activityHub.StartPurge(ctx)
 
 	// Start listener first so we catch port-in-use errors before the goroutine.
 	ln, err := net.Listen("tcp", bindAddr)

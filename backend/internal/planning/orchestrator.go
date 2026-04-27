@@ -10,6 +10,13 @@ import (
 	"github.com/screenleon/agent-native-pm/internal/store"
 )
 
+// SnapshotSaver persists a context snapshot after a planning context is built.
+// Implementations must be safe to call concurrently. Save is fire-and-forget
+// from the orchestrator's perspective: a failure must not abort the run.
+type SnapshotSaver interface {
+	Save(snap store.ContextSnapshot) error
+}
+
 const (
 	PlannerAgentName = "agent:planning-orchestrator"
 	plannerAction    = "review"
@@ -49,10 +56,11 @@ type agentRunStore interface {
 }
 
 type Orchestrator struct {
-	planningRuns planningRunStore
-	agentRuns    agentRunStore
-	candidates   backlogCandidateStore
-	generator    candidateGenerator
+	planningRuns    planningRunStore
+	agentRuns       agentRunStore
+	candidates      backlogCandidateStore
+	generator       candidateGenerator
+	snapshotSaver   SnapshotSaver
 }
 
 func NewOrchestrator(planningRuns planningRunStore, agentRuns agentRunStore, candidates backlogCandidateStore, generator candidateGenerator) *Orchestrator {
@@ -62,6 +70,14 @@ func NewOrchestrator(planningRuns planningRunStore, agentRuns agentRunStore, can
 		candidates:   candidates,
 		generator:    generator,
 	}
+}
+
+// WithSnapshotSaver attaches a SnapshotSaver so the orchestrator can persist
+// a PlanningContextV2 snapshot after context is built. When nil (default)
+// snapshot saving is silently skipped.
+func (o *Orchestrator) WithSnapshotSaver(s SnapshotSaver) *Orchestrator {
+	o.snapshotSaver = s
+	return o
 }
 
 func (o *Orchestrator) Run(ctx context.Context, requirement *models.Requirement, request models.CreatePlanningRunRequest, requestedByUserID string) (*models.PlanningRun, error) {

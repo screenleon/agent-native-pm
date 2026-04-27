@@ -164,6 +164,8 @@ export function PlanningTab({
                 availableRoles={ws.availableRoles}
                 availableRolesError={ws.availableRolesError}
                 onUpdateCandidateExecutionRole={ws.onUpdateCandidateExecutionRole}
+                onSuggestRoleForCandidate={ws.onSuggestRoleForCandidate}
+                onSubmitFeedback={ws.onSubmitCandidateFeedback}
                 onViewDocumentById={onViewDocumentById}
                 onViewDriftSignal={onViewDriftSignal}
               />
@@ -301,6 +303,8 @@ export function PlanningTab({
                   availableRoles={ws.availableRoles}
                   availableRolesError={ws.availableRolesError}
                   onUpdateCandidateExecutionRole={ws.onUpdateCandidateExecutionRole}
+                  onSuggestRoleForCandidate={ws.onSuggestRoleForCandidate}
+                  onSubmitFeedback={ws.onSubmitCandidateFeedback}
                   onViewDocumentById={onViewDocumentById}
                   onViewDriftSignal={onViewDriftSignal}
                 />

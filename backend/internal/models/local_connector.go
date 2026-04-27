@@ -18,6 +18,46 @@ const (
 	ConnectorPairingStatusCancelled = "cancelled"
 )
 
+// Phase constants for ConnectorActivity — reported by the connector to
+// indicate its current execution phase. The server echoes these in the
+// activity response and SSE stream.
+const (
+	ConnectorPhaseIdle         = "idle"
+	ConnectorPhaseClaimingRun  = "claiming_run"
+	ConnectorPhasePlanning     = "planning"
+	ConnectorPhaseClaimingTask = "claiming_task"
+	ConnectorPhaseDispatching  = "dispatching"
+	ConnectorPhaseSubmitting   = "submitting"
+)
+
+// ConnectorActivity represents the current execution phase of a connector.
+type ConnectorActivity struct {
+	Phase        string    `json:"phase"`
+	SubjectKind  string    `json:"subject_kind,omitempty"`
+	SubjectID    string    `json:"subject_id,omitempty"`
+	SubjectTitle string    `json:"subject_title,omitempty"`
+	RoleID       string    `json:"role_id,omitempty"`
+	Step         string    `json:"step,omitempty"`
+	StartedAt    time.Time `json:"started_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// ConnectorActivityResponse is the HTTP response for GET /activity.
+type ConnectorActivityResponse struct {
+	Activity   *ConnectorActivity `json:"activity"`
+	Online     bool               `json:"online"`
+	AgeSeconds int                `json:"age_seconds"`
+}
+
+// ActiveConnectorEntry is one entry in the GET /projects/:id/active-connectors response.
+type ActiveConnectorEntry struct {
+	ConnectorID string             `json:"connector_id"`
+	Label       string             `json:"label"`
+	Activity    *ConnectorActivity `json:"activity"`
+	Online      bool               `json:"online"`
+	AgeSeconds  int                `json:"age_seconds"`
+}
+
 
 type LocalConnector struct {
 	ID            string                 `json:"id"`
@@ -204,6 +244,14 @@ type LocalConnectorClaimNextRunResponse struct {
 	Requirement     *Requirement            `json:"requirement"`
 	Project         *Project                `json:"project,omitempty"`
 	PlanningContext *wire.PlanningContextV1 `json:"planning_context,omitempty"`
+	// PlanningContextV2 is the richer v2 envelope (Phase 3B). The field is
+	// populated server-side but NO connector adapter currently reads it —
+	// adapters still receive the V1 context via stdin (Phase 3A spike Gap 2).
+	// TODO(phase3b-gap2): switch connectors to read this field instead of
+	// stdin once the adapter protocol versioning is in place. Until then
+	// older connectors reading only PlanningContext are unaffected.
+	// Absent when the run predates migration 032 (context_pack_id == "").
+	PlanningContextV2 *wire.PlanningContextV2 `json:"planning_context_v2,omitempty"`
 	// CliBinding is populated when the run was created with an explicit
 	// account_binding_id (or auto-resolved to the user's primary CLI
 	// binding). Sourced from the run's ConnectorCliInfo.BindingSnapshot

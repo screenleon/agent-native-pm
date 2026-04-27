@@ -73,3 +73,27 @@
 - Verification: `go vet`; import graph analysis.
 - Supersedes: N/A
 - Superseded by: N/A
+
+### Rule: API-007
+- Owner layer: Domain
+- Domain: backend-api
+- Stability: behavior
+- Status: active
+- Scope: SSE event payloads (`/api/notifications/stream`)
+- Statement: SSE events that describe a resource state change must include `{type, run_id|resource_id, status, project_id, requirement_id}` so clients can route updates without a follow-up fetch.
+- Rationale: Clients must be able to filter events by project/requirement without fetching the full resource; missing routing fields force unnecessary API round-trips.
+- Verification: Event payload verified in handler tests; frontend effect ignores events where `project_id` doesn't match.
+- Supersedes: N/A
+- Superseded by: N/A
+
+### Rule: API-008
+- Owner layer: Domain
+- Domain: backend-api
+- Stability: behavior
+- Status: active
+- Scope: advisory LLM endpoints (e.g. `POST /backlog-candidates/{id}/suggest-role`)
+- Statement: Advisory-only LLM endpoints must return HTTP 200 with a typed JSON payload; the caller confirms before any state change is applied. Error conditions from the LLM (no match, low confidence) must be expressed in the response body, not as 4xx/5xx, so the UI can render them gracefully.
+- Rationale: Separates "server processed the request" from "LLM produced a confident result"; prevents UI error-state flicker for expected LLM uncertainty.
+- Verification: `suggest-role` handler returns 200 even when `error_kind=router_no_match`; frontend shows advisory UI, not error toast.
+- Supersedes: N/A
+- Superseded by: N/A

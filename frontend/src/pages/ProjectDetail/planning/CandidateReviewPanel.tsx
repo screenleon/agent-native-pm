@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import type { BacklogCandidate, PlanningProviderOptions, PlanningRun } from '../../../types'
+import type { BacklogCandidate, PlanningProviderOptions, PlanningRun, UpdateBacklogCandidatePayload } from '../../../types'
+import type { SuggestRoleResult } from '../../../api/client'
 import { formatDateTime, formatRelativeTime } from '../../../utils/formatters'
 import Jargon from '../../../components/Jargon'
 import { CandidateRoleEditor } from './CandidateRoleEditor'
@@ -128,6 +129,10 @@ interface CandidateReviewPanelProps {
   // popover) so operators can pre-tag candidates with a role before
   // applying. When undefined, the chip is rendered read-only.
   onUpdateCandidateExecutionRole?: (candidateId: string, roleId: string) => Promise<void>
+  // Phase 6c PR-3: optional suggest-role callback. When provided, the
+  // candidate row and apply panel show a "💡 Suggest" button that calls
+  // the LLM router and pre-fills the role dropdown (advisory only).
+  onSuggestRoleForCandidate?: (candidateId: string) => Promise<SuggestRoleResult>
 
   /**
    * Optional evidence-link callbacks. When provided, the matching
@@ -141,6 +146,11 @@ interface CandidateReviewPanelProps {
    */
   onViewDocumentById?: (documentId: string) => void
   onViewDriftSignal?: (driftSignalId: string) => void
+  // Phase 3B PR-3: optional callback to submit feedback after a
+  // decision. When provided, after approve/reject completes a small
+  // inline feedback row appears. The row is skippable — feedback is
+  // never required and never blocks the approve/reject flow.
+  onSubmitFeedback?: (candidateId: string, payload: UpdateBacklogCandidatePayload) => Promise<void>
 }
 
 /**
@@ -179,12 +189,62 @@ export function CandidateReviewPanel({
   availableRoles,
   availableRolesError,
   onUpdateCandidateExecutionRole,
+  onSuggestRoleForCandidate,
   onViewDocumentById,
   onViewDriftSignal,
+  onSubmitFeedback,
 }: CandidateReviewPanelProps) {
   const [showSkipped, setShowSkipped] = useState(false)
   const providerLabel = makeProviderLabeler(providerOptions)
   const modelLabel = makeModelLabeler(providerOptions)
+  // Phase 6c PR-3: apply-panel suggest state (separate from CandidateRoleEditor's)
+  const [applyPanelSuggesting, setApplyPanelSuggesting] = useState(false)
+  const [applyPanelSuggestion, setApplyPanelSuggestion] = useState<SuggestRoleResult | null>(null)
+  const [applyPanelSuggestError, setApplyPanelSuggestError] = useState<string | null>(null)
+  // Phase 3B PR-3: feedback state. showFeedback flips true after a
+  // successful approve/reject so the operator can optionally annotate
+  // the decision. The row auto-hides on submit or skip.
+  const [showFeedback, setShowFeedback] = useState(false)
+  const [lastDecision, setLastDecision] = useState<'approved' | 'rejected' | null>(null)
+  const [feedbackKind, setFeedbackKind] = useState('')
+  const [feedbackNote, setFeedbackNote] = useState('')
+  const [submittingFeedback, setSubmittingFeedback] = useState(false)
+
+  // Wrap the upstream persist/skip callbacks to show feedback row after
+  // an approve or reject decision when the feedback callback is wired.
+  function handlePersistReview(nextStatus?: 'draft' | 'approved' | 'rejected') {
+    onPersistReview(nextStatus)
+    if (onSubmitFeedback && (nextStatus === 'approved' || nextStatus === 'rejected')) {
+      setLastDecision(nextStatus)
+      setFeedbackKind('')
+      setFeedbackNote('')
+      setShowFeedback(true)
+    }
+  }
+
+  function handleSkipCandidate() {
+    onSkipCandidate()
+    if (onSubmitFeedback) {
+      setLastDecision('rejected')
+      setFeedbackKind('')
+      setFeedbackNote('')
+      setShowFeedback(true)
+    }
+  }
+
+  async function submitFeedback() {
+    if (!onSubmitFeedback || !selectedCandidate || !feedbackKind) return
+    setSubmittingFeedback(true)
+    try {
+      await onSubmitFeedback(selectedCandidate.id, {
+        feedback_kind: feedbackKind,
+        feedback_note: feedbackNote,
+      })
+    } finally {
+      setSubmittingFeedback(false)
+      setShowFeedback(false)
+    }
+  }
 
   const isWhatsnextRun = selectedRun?.adapter_type === 'whatsnext'
 
@@ -560,6 +620,9 @@ export function CandidateReviewPanel({
                       availableRoles={availableRoles ?? null}
                       availableRolesError={availableRolesError ?? null}
                       onUpdateRole={role => onUpdateCandidateExecutionRole(selectedCandidate.id, role)}
+                      onSuggestRole={onSuggestRoleForCandidate
+                        ? () => onSuggestRoleForCandidate(selectedCandidate.id)
+                        : undefined}
                       disabled={selectedCandidateApplied || savingCandidate || applyingCandidate}
                     />
                   ) : (
@@ -623,27 +686,96 @@ export function CandidateReviewPanel({
                     </div>
 
                     {selectedExecutionMode === 'role_dispatch' && onChosenExecutionRoleChange && (
-                      <div className="planning-execution-role-row" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.4rem', fontSize: '0.88rem' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>Role:</span>
-                        <select
-                          aria-label="Select execution role"
-                          value={chosenExecutionRole ?? ''}
-                          onChange={e => onChosenExecutionRoleChange(e.target.value)}
-                          style={{ minWidth: '20rem' }}
-                        >
-                          <option value="">— select role —</option>
-                          {(availableRoles ?? []).map(r => (
-                            <option key={r.id} value={r.id} title={r.use_case}>
-                              {r.title} (v{r.version}) — 預估 {Math.round(r.default_timeout_sec / 60)} min
-                            </option>
-                          ))}
-                          {availableRoles === null && !availableRolesError && (
-                            <option disabled>Loading roles…</option>
+                      <div className="planning-execution-role-row" style={{ marginTop: '0.4rem', fontSize: '0.88rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <span style={{ color: 'var(--text-muted)' }}>Role:</span>
+                          <select
+                            aria-label="Select execution role"
+                            value={chosenExecutionRole ?? ''}
+                            onChange={e => {
+                              onChosenExecutionRoleChange(e.target.value)
+                              // Clear suggestion note when operator manually overrides.
+                              if (applyPanelSuggestion && e.target.value !== applyPanelSuggestion.role_id) {
+                                setApplyPanelSuggestion(null)
+                              }
+                            }}
+                            style={{ minWidth: '20rem' }}
+                          >
+                            <option value="">— select role —</option>
+                            {(availableRoles ?? []).map(r => (
+                              <option key={r.id} value={r.id} title={r.use_case}>
+                                {r.title} (v{r.version}) — 預估 {Math.round(r.default_timeout_sec / 60)} min
+                              </option>
+                            ))}
+                            {availableRoles === null && !availableRolesError && (
+                              <option disabled>Loading roles…</option>
+                            )}
+                            {availableRoles === null && availableRolesError && (
+                              <option disabled>Failed to load roles</option>
+                            )}
+                          </select>
+                          {/* Phase 6c PR-3: Suggest button in the apply panel */}
+                          {onSuggestRoleForCandidate && selectedCandidate && !selectedCandidateApplied && (
+                            <button
+                              type="button"
+                              className="btn-link"
+                              disabled={applyPanelSuggesting}
+                              onClick={async () => {
+                                setApplyPanelSuggesting(true)
+                                setApplyPanelSuggestError(null)
+                                setApplyPanelSuggestion(null)
+                                try {
+                                  const result = await onSuggestRoleForCandidate(selectedCandidate.id)
+                                  setApplyPanelSuggestion(result)
+                                  if (result.role_id) {
+                                    onChosenExecutionRoleChange(result.role_id)
+                                  }
+                                } catch (e) {
+                                  setApplyPanelSuggestError(e instanceof Error ? e.message : 'Suggestion failed')
+                                } finally {
+                                  setApplyPanelSuggesting(false)
+                                }
+                              }}
+                              title="Ask the LLM router to suggest a role (advisory — you confirm)"
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--link, #60a5fa)',
+                                cursor: applyPanelSuggesting ? 'default' : 'pointer',
+                                fontSize: '0.82rem',
+                                padding: 0,
+                                opacity: applyPanelSuggesting ? 0.6 : 1,
+                              }}
+                            >
+                              {applyPanelSuggesting ? '…' : '💡 Suggest'}
+                            </button>
                           )}
-                          {availableRoles === null && availableRolesError && (
-                            <option disabled>Failed to load roles</option>
+                          {applyPanelSuggestError && (
+                            <span style={{ color: 'var(--danger, #ef4444)', fontSize: '0.78rem' }}>
+                              {applyPanelSuggestError}
+                            </span>
                           )}
-                        </select>
+                        </div>
+                        {/* Suggestion reasoning note below the dropdown */}
+                        {applyPanelSuggestion && applyPanelSuggestion.role_id === chosenExecutionRole && (
+                          <div
+                            style={{
+                              marginTop: '0.35rem',
+                              fontSize: '0.76rem',
+                              color: 'var(--text-muted)',
+                              background: 'var(--bg-hover, rgba(255,255,255,0.03))',
+                              border: '1px solid var(--border)',
+                              borderRadius: '0.4rem',
+                              padding: '0.3rem 0.5rem',
+                              maxWidth: '400px',
+                            }}
+                          >
+                            <strong>💡 {Math.round(applyPanelSuggestion.confidence * 100)}% confidence</strong>
+                            {applyPanelSuggestion.reasoning && (
+                              <span style={{ marginLeft: '0.4rem' }}>{applyPanelSuggestion.reasoning}</span>
+                            )}
+                          </div>
+                        )}
                         {availableRolesError && (
                           <div
                             role="alert"
@@ -692,7 +824,7 @@ export function CandidateReviewPanel({
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
-                      onClick={() => onPersistReview()}
+                      onClick={() => handlePersistReview()}
                       disabled={savingCandidate || applyingCandidate}
                     >
                       {savingCandidate ? 'Saving…' : 'Save edits'}
@@ -701,10 +833,18 @@ export function CandidateReviewPanel({
                   <button
                     type="button"
                     className="btn btn-ghost"
-                    onClick={onSkipCandidate}
+                    onClick={handleSkipCandidate}
                     disabled={savingCandidate || applyingCandidate || selectedCandidateApplied || selectedCandidate.status === 'rejected'}
                   >
                     {selectedCandidate.status === 'rejected' ? 'Skipped' : 'Skip'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => handlePersistReview('approved')}
+                    disabled={savingCandidate || applyingCandidate || selectedCandidateApplied || selectedCandidate.status === 'approved'}
+                  >
+                    {selectedCandidate.status === 'approved' ? 'Approved ✓' : 'Approve'}
                   </button>
                   <button
                     type="button"
@@ -725,6 +865,49 @@ export function CandidateReviewPanel({
                     {applyingCandidate ? 'Applying…' : selectedCandidateApplied ? 'Applied ✓' : 'Apply'}
                   </button>
                 </div>
+
+                {/* Phase 3B PR-3: optional feedback row shown after approve/reject */}
+                {showFeedback && onSubmitFeedback && selectedCandidate && (
+                  <div className="feedback-row" style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem', fontSize: '0.88rem', padding: '0.5rem 0.75rem', border: '1px solid var(--border)', borderRadius: '0.4rem', background: 'var(--bg-hover, rgba(255,255,255,0.03))' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Optional feedback:</span>
+                    <select
+                      aria-label="Feedback kind"
+                      value={feedbackKind}
+                      onChange={e => setFeedbackKind(e.target.value)}
+                      style={{ minWidth: '10rem' }}
+                    >
+                      <option value="">— skip —</option>
+                      {lastDecision === 'approved'
+                        ? ['good_fit', 'modified', 'fallback'].map(k => <option key={k} value={k}>{k}</option>)
+                        : ['wrong_scope', 'too_broad', 'duplicate', 'low_quality', 'other'].map(k => <option key={k} value={k}>{k}</option>)
+                      }
+                    </select>
+                    <input
+                      type="text"
+                      aria-label="Feedback note"
+                      placeholder="Note (optional)"
+                      value={feedbackNote}
+                      onChange={e => setFeedbackNote(e.target.value)}
+                      maxLength={200}
+                      style={{ minWidth: '12rem', flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={submitFeedback}
+                      disabled={!feedbackKind || submittingFeedback}
+                    >
+                      {submittingFeedback ? 'Saving…' : 'Save feedback'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setShowFeedback(false)}
+                    >
+                      Skip
+                    </button>
+                  </div>
+                )}
               </>
             ) : (
               <div className="empty-state" style={{ padding: '1.5rem 0.5rem 0.5rem' }}>

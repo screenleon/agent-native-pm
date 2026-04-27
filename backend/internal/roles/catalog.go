@@ -106,6 +106,16 @@ var catalog = []Role{
 		DefaultTimeoutSec: 5400, // 90 min — large refactors / multi-file scaffolding
 		Category:          CategoryRole,
 	},
+	// Phase 6c PR-3: meta-role — classification only, never executes a task.
+	// Filtered out of /api/roles and the apply-panel dropdown (Category=meta).
+	{
+		ID:                "dispatcher",
+		Title:             "Role Dispatcher",
+		Version:           1,
+		UseCase:           "Classify a task and suggest the best execution role from the catalog. Advisory only — the operator confirms before any role is applied.",
+		DefaultTimeoutSec: 60, // 1 min — classification prompt, not code execution
+		Category:          CategoryMeta,
+	},
 }
 
 // fallbackTimeoutSec is used when a role lookup misses the catalog.

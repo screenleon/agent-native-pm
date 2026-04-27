@@ -84,6 +84,12 @@ func (c *Client) SubmitTaskResult(ctx context.Context, taskID string, req Submit
 	return c.doJSON(ctx, http.MethodPost, path, c.ConnectorToken, req, nil)
 }
 
+// ReportActivity calls POST /api/connector/activity with the current activity
+// snapshot. Phase 6c PR-4.
+func (c *Client) ReportActivity(ctx context.Context, a models.ConnectorActivity) error {
+	return c.doJSON(ctx, http.MethodPost, "/api/connector/activity", c.ConnectorToken, a, nil)
+}
+
 func (c *Client) doJSON(ctx context.Context, method, path, connectorToken string, requestBody any, responseBody any) error {
 	if c == nil {
 		return fmt.Errorf("connector client is required")

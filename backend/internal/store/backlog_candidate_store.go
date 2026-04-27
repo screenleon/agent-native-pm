@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -29,6 +30,19 @@ var (
 	ErrBacklogCandidateMissingExecutionRole = errors.New("execution_role required when execution_mode='role_dispatch'")
 	ErrBacklogCandidateUnknownExecutionRole = errors.New("execution_role is not in the role catalog")
 )
+
+// invalidFeedbackKindError wraps a fmt.Errorf message so the handler can
+// distinguish it from other store errors using IsInvalidFeedbackKindError.
+type invalidFeedbackKindError struct{ msg string }
+
+func (e *invalidFeedbackKindError) Error() string { return e.msg }
+
+// IsInvalidFeedbackKindError reports whether err came from feedback_kind
+// validation in the store layer.
+func IsInvalidFeedbackKindError(err error) bool {
+	var target *invalidFeedbackKindError
+	return errors.As(err, &target)
+}
 
 const appliedCandidateTaskSource = "agent:planning-orchestrator"
 
@@ -141,7 +155,7 @@ func (s *BacklogCandidateStore) CreateDraftsForPlanningRun(requirement *models.R
 func (s *BacklogCandidateStore) GetByID(id string) (*models.BacklogCandidate, error) {
 	return scanBacklogCandidate(
 		s.db.QueryRow(`
-			SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, execution_role, created_at, updated_at
+			SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, execution_role, feedback_kind, feedback_note, created_at, updated_at
 			FROM backlog_candidates
 			WHERE id = $1
 		`, id),
@@ -156,7 +170,7 @@ func (s *BacklogCandidateStore) ListByPlanningRun(planningRunID string, page, pe
 
 	offset := (page - 1) * perPage
 	rows, err := s.db.Query(`
-		SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, execution_role, created_at, updated_at
+		SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, execution_role, feedback_kind, feedback_note, created_at, updated_at
 		FROM backlog_candidates
 		WHERE planning_run_id = $1
 		ORDER BY rank ASC, priority_score DESC, created_at ASC, id ASC
@@ -195,6 +209,8 @@ func (s *BacklogCandidateStore) ListByPlanningRun(planningRunID string, page, pe
 			&evidenceDetailJSON,
 			&duplicateJSON,
 			&executionRole,
+			&candidate.FeedbackKind,
+			&candidate.FeedbackNote,
 			&candidate.CreatedAt,
 			&candidate.UpdatedAt,
 		); err != nil {
@@ -274,6 +290,8 @@ func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandid
 	title := candidate.Title
 	description := candidate.Description
 	status := candidate.Status
+	feedbackKind := candidate.FeedbackKind
+	feedbackNote := candidate.FeedbackNote
 	// Carry the current value (or "") so a partial patch leaves it alone.
 	var executionRoleValue any
 	if candidate.ExecutionRole != nil {
@@ -345,6 +363,23 @@ func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandid
 		}
 	}
 
+	// Phase 3B PR-3: feedback fields. Validated but never required.
+	if req.FeedbackKind != nil {
+		if !models.IsValidFeedbackKind(*req.FeedbackKind) {
+			return nil, &invalidFeedbackKindError{msg: fmt.Sprintf("invalid feedback_kind: %q", *req.FeedbackKind)}
+		}
+		if *req.FeedbackKind != feedbackKind {
+			feedbackKind = *req.FeedbackKind
+			changed = true
+		}
+	}
+	if req.FeedbackNote != nil {
+		if *req.FeedbackNote != feedbackNote {
+			feedbackNote = *req.FeedbackNote
+			changed = true
+		}
+	}
+
 	if !changed {
 		return nil, ErrBacklogCandidateNoChanges
 	}
@@ -368,9 +403,11 @@ func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandid
 			    description = $2,
 			    status = $3,
 			    execution_role = $4,
-			    updated_at = $5
-			WHERE id = $6
-		`, title, description, status, executionRoleValue, now, id); err != nil {
+			    feedback_kind = $5,
+			    feedback_note = $6,
+			    updated_at = $7
+			WHERE id = $8
+		`, title, description, status, executionRoleValue, feedbackKind, feedbackNote, now, id); err != nil {
 			return nil, err
 		}
 		if err := audit.Record(tx, audit.SubjectBacklogCandidate, id, "execution_role", oldExecutionRole, newExecutionRole, actor); err != nil {
@@ -386,9 +423,11 @@ func (s *BacklogCandidateStore) Update(id string, req models.UpdateBacklogCandid
 			    description = $2,
 			    status = $3,
 			    execution_role = $4,
-			    updated_at = $5
-			WHERE id = $6
-		`, title, description, status, executionRoleValue, now, id); err != nil {
+			    feedback_kind = $5,
+			    feedback_note = $6,
+			    updated_at = $7
+			WHERE id = $8
+		`, title, description, status, executionRoleValue, feedbackKind, feedbackNote, now, id); err != nil {
 			return nil, err
 		}
 	}
@@ -577,7 +616,7 @@ func (s *BacklogCandidateStore) getByIDForUpdate(tx *sql.Tx, id string) (*models
 	// FOR UPDATE is Postgres row-level locking; SQLite's single-writer model
 	// already serialises writes so the clause must be omitted.
 	query := `
-		SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, execution_role, created_at, updated_at
+		SELECT id, project_id, requirement_id, planning_run_id, parent_candidate_id, suggestion_type, title, description, status, rationale, validation_criteria, po_decision, priority_score, confidence, rank, evidence, evidence_detail, duplicate_titles, execution_role, feedback_kind, feedback_note, created_at, updated_at
 		FROM backlog_candidates
 		WHERE id = $1 ` + s.dialect.ForUpdate()
 	return scanBacklogCandidate(tx.QueryRow(query, id))
@@ -614,6 +653,8 @@ func scanBacklogCandidate(row rowScanner) (*models.BacklogCandidate, error) {
 		&evidenceDetailJSON,
 		&duplicateJSON,
 		&executionRole,
+		&candidate.FeedbackKind,
+		&candidate.FeedbackNote,
 		&candidate.CreatedAt,
 		&candidate.UpdatedAt,
 	)

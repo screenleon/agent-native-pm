@@ -9,7 +9,7 @@
 # Usage:
 #   bash scripts/pre-pr-check.sh
 #   bash scripts/pre-pr-check.sh --skip-postgres   # skip the slow PG path
-#   bash scripts/pre-pr-check.sh --fast            # skip PG + skip npm build
+#   bash scripts/pre-pr-check.sh --fast            # skip PG + npm build; use affected tests only
 #
 # Exit status:
 #   0  every stage passed — safe to open a PR
@@ -61,13 +61,23 @@ step "go build ./..."
 step "frontend typecheck (tsc --noEmit)"
 ( cd frontend && npx tsc --noEmit )
 
-# 5. Frontend unit tests — vitest.
-step "frontend tests (npm test -- --run)"
-( cd frontend && npm test -- --run )
+# 5. Frontend unit tests — affected-only in fast mode, full suite otherwise.
+if [ "$FAST" = "true" ]; then
+  step "frontend tests (affected only — vitest --changed)"
+  ( cd frontend && npm run test:affected )
+else
+  step "frontend tests (npm test -- --run)"
+  ( cd frontend && npm test -- --run )
+fi
 
-# 6. Backend tests against SQLite (the local-mode driver).
-step "backend tests (SQLite driver)"
-bash scripts/test-with-sqlite.sh
+# 6. Backend tests — affected-only in fast mode, full SQLite suite otherwise.
+if [ "$FAST" = "true" ]; then
+  step "backend tests (affected packages, SQLite driver)"
+  bash scripts/test-affected.sh
+else
+  step "backend tests (SQLite driver)"
+  bash scripts/test-with-sqlite.sh
+fi
 
 # 7. Backend tests against PostgreSQL (the server-mode driver). Skipped
 #    when --skip-postgres / --fast is passed or when DOCKER is unavailable.

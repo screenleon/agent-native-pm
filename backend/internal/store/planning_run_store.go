@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -51,6 +52,7 @@ func (s *PlanningRunStore) Create(projectID, requirementID, requestedByUserID st
 // this row before it exists).
 func (s *PlanningRunStore) CreateWithBinding(projectID, requirementID, requestedByUserID string, request models.CreatePlanningRunRequest, selection models.PlanningProviderSelection, bindingSnapshot *models.PlanningRunBindingSnapshot) (*models.PlanningRun, error) {
 	id := uuid.New().String()
+	packID := uuid.New().String()
 	now := time.Now().UTC()
 	triggerSource := strings.TrimSpace(request.TriggerSource)
 	if triggerSource == "" {
@@ -108,10 +110,11 @@ func (s *PlanningRunStore) CreateWithBinding(projectID, requirementID, requested
 			provider_id, model_id, selection_source, binding_source, binding_label,
 			requested_by_user_id, execution_mode, dispatch_status, connector_label,
 			dispatch_error, error_message, started_at, completed_at, created_at, updated_at,
-			adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id
+			adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id,
+			context_pack_id
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, '', '', '', NULL, NULL, $14, $14, $15, $16, $17, $18, $19)
-	`, id, projectID, requirementID, models.PlanningRunStatusQueued, triggerSource, selection.ProviderID, selection.ModelID, selection.SelectionSource, selection.BindingSource, selection.BindingLabel, requestedByUser, executionMode, dispatchStatus, now, strings.TrimSpace(request.AdapterType), strings.TrimSpace(request.ModelOverride), accountBindingArg, connectorCliInfoArg, targetConnectorArg)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, '', '', '', NULL, NULL, $14, $14, $15, $16, $17, $18, $19, $20)
+	`, id, projectID, requirementID, models.PlanningRunStatusQueued, triggerSource, selection.ProviderID, selection.ModelID, selection.SelectionSource, selection.BindingSource, selection.BindingLabel, requestedByUser, executionMode, dispatchStatus, now, strings.TrimSpace(request.AdapterType), strings.TrimSpace(request.ModelOverride), accountBindingArg, connectorCliInfoArg, targetConnectorArg, packID)
 	if err != nil {
 		if isActivePlanningRunConstraintError(err) {
 			return nil, ErrActivePlanningRunExists
@@ -354,7 +357,7 @@ func (s *PlanningRunStore) LeaseNextLocalConnectorRunForProtocol(userID, connect
 		          selection_source, binding_source, binding_label, requested_by_user_id,
 		          execution_mode, dispatch_status, connector_id, connector_label,
 		          lease_expires_at, dispatch_error, error_message, started_at, completed_at,
-		          created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id
+		          created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id, context_pack_id
 	`, strings.TrimSpace(userID), models.PlanningExecutionModeLocalConnector, models.PlanningDispatchStatusQueued, models.PlanningDispatchStatusExpired, models.PlanningRunStatusQueued, models.PlanningRunStatusRunning, models.PlanningDispatchStatusLeased, strings.TrimSpace(connectorID), strings.TrimSpace(connectorLabel), now, leaseExpiresAt, strings.TrimSpace(connectorID))
 	run, err := scanOnePlanningRun(row)
 	if err != nil {
@@ -369,7 +372,7 @@ func (s *PlanningRunStore) GetLeasedLocalConnectorRun(id, connectorID string) (*
 		       selection_source, binding_source, binding_label, requested_by_user_id,
 		       execution_mode, dispatch_status, connector_id, connector_label,
 		       lease_expires_at, dispatch_error, error_message, started_at, completed_at,
-		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id
+		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id, context_pack_id
 		FROM planning_runs
 		WHERE id = $1
 		  AND connector_id = $2
@@ -588,11 +591,84 @@ func (s *PlanningRunStore) GetByID(id string) (*models.PlanningRun, error) {
 		       selection_source, binding_source, binding_label, requested_by_user_id,
 		       execution_mode, dispatch_status, connector_id, connector_label,
 		       lease_expires_at, dispatch_error, error_message, started_at, completed_at,
-		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id
+		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id, context_pack_id
 		FROM planning_runs
 		WHERE id = $1
 	`, id)
-	return scanOnePlanningRun(row)
+	run, err := scanOnePlanningRun(row)
+	if err != nil || run == nil {
+		return run, err
+	}
+	// Phase 3B PR-3: attach quality summary from backlog_candidates.
+	qs, err := s.computeQualitySummary(run.ID)
+	if err != nil {
+		// Non-fatal: return the run without the summary rather than failing
+		// the whole request.
+		log.Printf("planning_run_store GetByID: compute quality summary for run %s: %v", run.ID, err)
+		return run, nil
+	}
+	run.QualitySummary = qs
+	return run, nil
+}
+
+// computeQualitySummary aggregates candidate review outcomes for a run.
+// Returns a zero-value summary (not nil) when no candidates exist so the
+// caller can always dereference the pointer safely.
+func (s *PlanningRunStore) computeQualitySummary(planningRunID string) (*models.QualitySummary, error) {
+	// Totals query.
+	var total, approved, rejected, pending int
+	err := s.db.QueryRow(`
+		SELECT
+			COUNT(*) AS total,
+			SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved,
+			SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected,
+			SUM(CASE WHEN status NOT IN ('approved', 'rejected') THEN 1 ELSE 0 END) AS pending
+		FROM backlog_candidates
+		WHERE planning_run_id = $1
+	`, planningRunID).Scan(&total, &approved, &rejected, &pending)
+	if err != nil {
+		return nil, err
+	}
+
+	// Acceptance rate: approved / (approved + rejected). 0 when both are 0.
+	var acceptanceRate float64
+	if decided := approved + rejected; decided > 0 {
+		acceptanceRate = float64(approved) / float64(decided)
+	}
+
+	// Feedback distribution by kind (exclude empty kind).
+	distrib := make(map[string]int)
+	rows, err := s.db.Query(`
+		SELECT feedback_kind, COUNT(*) AS cnt
+		FROM backlog_candidates
+		WHERE planning_run_id = $1
+		  AND feedback_kind != ''
+		GROUP BY feedback_kind
+	`, planningRunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var kind string
+		var cnt int
+		if err := rows.Scan(&kind, &cnt); err != nil {
+			return nil, err
+		}
+		distrib[kind] = cnt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return &models.QualitySummary{
+		Total:           total,
+		Approved:        approved,
+		Rejected:        rejected,
+		Pending:         pending,
+		AcceptanceRate:  acceptanceRate,
+		FeedbackDistrib: distrib,
+	}, nil
 }
 
 func (s *PlanningRunStore) ListByRequirement(requirementID string, page, perPage int) ([]models.PlanningRun, int, error) {
@@ -607,7 +683,7 @@ func (s *PlanningRunStore) ListByRequirement(requirementID string, page, perPage
 		       selection_source, binding_source, binding_label, requested_by_user_id,
 		       execution_mode, dispatch_status, connector_id, connector_label,
 		       lease_expires_at, dispatch_error, error_message, started_at, completed_at,
-		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id
+		       created_at, updated_at, adapter_type, model_override, account_binding_id, connector_cli_info, target_connector_id, context_pack_id
 		FROM planning_runs
 		WHERE requirement_id = $1
 		ORDER BY created_at DESC, id DESC
@@ -675,6 +751,7 @@ func scanPlanningRun(scanner planningRunScanner) (*models.PlanningRun, error) {
 	var accountBindingID sql.NullString
 	var connectorCliInfo sql.NullString
 	var targetConnectorID sql.NullString
+	var contextPackID sql.NullString
 	err := scanner.Scan(
 		&run.ID,
 		&run.ProjectID,
@@ -703,6 +780,7 @@ func scanPlanningRun(scanner planningRunScanner) (*models.PlanningRun, error) {
 		&accountBindingID,
 		&connectorCliInfo,
 		&targetConnectorID,
+		&contextPackID,
 	)
 	if err != nil {
 		return nil, err
@@ -735,6 +813,9 @@ func scanPlanningRun(scanner planningRunScanner) (*models.PlanningRun, error) {
 	if targetConnectorID.Valid && targetConnectorID.String != "" {
 		tid := targetConnectorID.String
 		run.TargetConnectorID = &tid
+	}
+	if contextPackID.Valid && contextPackID.String != "" {
+		run.ContextPackID = contextPackID.String
 	}
 	if connectorCliInfo.Valid && connectorCliInfo.String != "" {
 		// Path B S2: connector_cli_info now holds a richer envelope

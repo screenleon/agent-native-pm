@@ -642,6 +642,8 @@ function ProjectDetail() {
               agentRuns={agentRuns}
               summary={summary}
               onSetTab={setTab}
+              avgPlanningAcceptanceRate={dashboardSummary?.avg_planning_acceptance_rate}
+              planningRunsReviewedCount={dashboardSummary?.planning_runs_reviewed_count}
             />
           )}
 

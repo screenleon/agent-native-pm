@@ -12,21 +12,32 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/screenleon/agent-native-pm/internal/events"
 	"github.com/screenleon/agent-native-pm/internal/middleware"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/planning"
+	"github.com/screenleon/agent-native-pm/internal/planning/scale"
+	"github.com/screenleon/agent-native-pm/internal/planning/wire"
 	"github.com/screenleon/agent-native-pm/internal/store"
 )
 
+// contextSnapshotSaver is the minimal interface the LocalConnectorHandler
+// needs to persist a context snapshot. Matches store.ContextSnapshotStore.
+type contextSnapshotSaver interface {
+	Save(snap store.ContextSnapshot) error
+}
+
 type LocalConnectorHandler struct {
-	store          *store.LocalConnectorStore
-	planningRuns   *store.PlanningRunStore
-	requirements   *store.RequirementStore
-	candidates     *store.BacklogCandidateStore
-	agentRuns      *store.AgentRunStore
-	projects       *store.ProjectStore
-	notifications  *store.NotificationStore
-	contextBuilder *planning.ProjectContextBuilder
+	store           *store.LocalConnectorStore
+	planningRuns    *store.PlanningRunStore
+	requirements    *store.RequirementStore
+	candidates      *store.BacklogCandidateStore
+	agentRuns       *store.AgentRunStore
+	projects        *store.ProjectStore
+	notifications   *store.NotificationStore
+	contextBuilder  *planning.ProjectContextBuilder
+	snapshotSaver   contextSnapshotSaver
 	// bindings is optional; when set the probe-binding handler can resolve a
 	// CLI binding row so the connector receives cli_command + model_id. Wired
 	// in main.go via WithAccountBindingStore.
@@ -34,6 +45,41 @@ type LocalConnectorHandler struct {
 	// taskStore is optional; when set the Phase 6b dispatch endpoints are
 	// functional. Wired in main.go via WithTaskStore.
 	taskStore *store.TaskStore
+	// broker is optional; when set planning-run-changed SSE events are pushed
+	// to the owning user so the UI can auto-refresh without polling.
+	broker *events.Broker
+}
+
+// Phase 6c PR-4: payload for planning-run-changed SSE event.
+type planningRunChangedPayload struct {
+	RunID         string `json:"run_id"`
+	Status        string `json:"status"`
+	ProjectID     string `json:"project_id"`
+	RequirementID string `json:"requirement_id"`
+}
+
+// WithBroker wires the event broker so that planning-run-changed SSE events
+// are pushed to the owning user when a run changes status.
+func (h *LocalConnectorHandler) WithBroker(b *events.Broker) *LocalConnectorHandler {
+	h.broker = b
+	return h
+}
+
+// publishPlanningRunChanged is a best-effort SSE push. Failures are silently
+// dropped — the notification/DB state is the load-bearing surface.
+func (h *LocalConnectorHandler) publishPlanningRunChanged(userID, runID, projectID, requirementID, status string) {
+	if h.broker == nil || strings.TrimSpace(userID) == "" {
+		return
+	}
+	h.broker.Publish(userID, events.Event{
+		Type: "planning-run-changed",
+		Data: planningRunChangedPayload{
+			RunID:         runID,
+			Status:        status,
+			ProjectID:     projectID,
+			RequirementID: requirementID,
+		},
+	})
 }
 
 // WithAccountBindingStore allows the probe-binding handler to look up the
@@ -79,6 +125,15 @@ func (h *LocalConnectorHandler) WithNotificationStore(notifications *store.Notif
 // claim still succeeds.
 func (h *LocalConnectorHandler) WithContextBuilder(builder *planning.ProjectContextBuilder) *LocalConnectorHandler {
 	h.contextBuilder = builder
+	return h
+}
+
+// WithSnapshotSaver attaches a context snapshot store so that a
+// PlanningContextV2 snapshot is persisted each time ClaimNextRun successfully
+// builds a V1 context. Fire-and-forget: failures are logged but do not abort
+// the claim. When nil (default) snapshot saving is silently skipped.
+func (h *LocalConnectorHandler) WithSnapshotSaver(s contextSnapshotSaver) *LocalConnectorHandler {
+	h.snapshotSaver = s
 	return h
 }
 
@@ -216,6 +271,14 @@ func (h *LocalConnectorHandler) ClaimNextRun(w http.ResponseWriter, r *http.Requ
 			log.Printf("planning context build failed for requirement %s: %v", requirement.ID, buildErr)
 		} else {
 			response.PlanningContext = ctx
+			// Phase 3B PR-2: persist a V2 context snapshot for the run and
+			// also surface the V2 envelope in the claim response so connectors
+			// can read role / intent_mode / task_scale without a second fetch.
+			if h.snapshotSaver != nil && run != nil {
+				if v2ctx := h.saveContextSnapshot(run, requirement, ctx); v2ctx != nil {
+					response.PlanningContextV2 = v2ctx
+				}
+			}
 		}
 	}
 	// Path B S2: populate cli_binding from the snapshot stored on the run.
@@ -232,6 +295,12 @@ func (h *LocalConnectorHandler) ClaimNextRun(w http.ResponseWriter, r *http.Requ
 			Label:      snap.Label,
 		}
 	}
+	// Phase 6c PR-4: push planning-run-changed so the UI refreshes immediately.
+	userID := run.RequestedByUserID
+	if strings.TrimSpace(userID) == "" {
+		userID = connector.UserID
+	}
+	h.publishPlanningRunChanged(userID, run.ID, run.ProjectID, run.RequirementID, models.PlanningRunStatusRunning)
 	writeSuccess(w, http.StatusOK, response, nil)
 }
 
@@ -469,6 +538,12 @@ func (h *LocalConnectorHandler) notifyPlanningRunTerminal(connector *models.Loca
 	if _, err := h.notifications.Create(req); err != nil {
 		log.Printf("notifyPlanningRunTerminal: failed to insert notification for run %s: %v", run.ID, err)
 	}
+	// Phase 6c PR-4: push SSE event so the planning workspace auto-refreshes.
+	status := models.PlanningRunStatusCompleted
+	if !success {
+		status = models.PlanningRunStatusFailed
+	}
+	h.publishPlanningRunChanged(req.UserID, run.ID, projectID, run.RequirementID, status)
 }
 
 func plural(n int) string {
@@ -745,4 +820,51 @@ func (h *LocalConnectorHandler) RunStats(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeSuccess(w, http.StatusOK, stats, nil)
+}
+
+// saveContextSnapshot builds a PlanningContextV2 from the V1 context,
+// persists it, and returns the v2 struct so the caller can include it in the
+// claim response. Returns nil on any error (errors are only logged).
+func (h *LocalConnectorHandler) saveContextSnapshot(run *models.PlanningRun, requirement *models.Requirement, v1ctx *wire.PlanningContextV1) *wire.PlanningContextV2 {
+	if h.snapshotSaver == nil || run == nil || v1ctx == nil {
+		return nil
+	}
+
+	title := ""
+	description := ""
+	if requirement != nil {
+		title = requirement.Title
+		description = requirement.Description
+	}
+
+	taskScale := scale.EstimateTaskScale(title, description)
+	v2ctx := wire.UpgradeV1ToV2(*v1ctx, run.ContextPackID, "", wire.IntentModeImplement, taskScale, nil)
+
+	snapshotJSON, err := json.Marshal(v2ctx)
+	if err != nil {
+		log.Printf("context snapshot: marshal V2 failed for run %s: %v", run.ID, err)
+		return nil
+	}
+
+	droppedJSON, err := json.Marshal(v1ctx.Meta.DroppedCounts)
+	if err != nil {
+		log.Printf("context snapshot: marshal dropped_counts failed for run %s: %v", run.ID, err)
+		droppedJSON = []byte("{}")
+	}
+
+	snap := store.ContextSnapshot{
+		ID:            uuid.New().String(),
+		PackID:        run.ContextPackID,
+		PlanningRunID: run.ID,
+		SchemaVersion: wire.ContextSchemaV2,
+		Snapshot:      string(snapshotJSON),
+		SourcesBytes:  v1ctx.Meta.SourcesBytes,
+		DroppedCounts: string(droppedJSON),
+	}
+
+	if saveErr := h.snapshotSaver.Save(snap); saveErr != nil {
+		log.Printf("context snapshot: save failed for run %s: %v", run.ID, saveErr)
+		return nil
+	}
+	return &v2ctx
 }

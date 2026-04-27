@@ -1,5 +1,8 @@
+import { useState } from 'react'
 import type { PlanningProviderOptions, PlanningRun } from '../../../types'
 import { formatDateTime, formatRelativeTime } from '../../../utils/formatters'
+import { ConnectorActivityBadge } from '../../../components/ConnectorActivityBadge'
+import { PlanningRunContextDrawer } from './PlanningRunContextDrawer'
 import {
   makeModelLabeler,
   makeProviderLabeler,
@@ -38,6 +41,7 @@ export function PlanningRunList({
 }: PlanningRunListProps) {
   const providerLabel = makeProviderLabeler(providerOptions)
   const modelLabel = makeModelLabeler(providerOptions)
+  const [openContextRunId, setOpenContextRunId] = useState<string | null>(null)
 
   if (errorMessage) {
     return <div className="error-banner" style={{ marginTop: '1rem' }}>{errorMessage}</div>
@@ -97,7 +101,34 @@ export function PlanningRunList({
               </div>
               {run.dispatch_error && <div className="error-banner" style={{ marginTop: '0.75rem', marginBottom: 0 }}>{run.dispatch_error}</div>}
               {run.error_message && <div className="error-banner" style={{ marginTop: '0.75rem', marginBottom: 0 }}>{run.error_message}</div>}
+              {isActiveRun && run.connector_id && (
+                <div style={{ marginTop: '0.5rem' }}>
+                  <ConnectorActivityBadge
+                    connectorId={run.connector_id}
+                    label={run.connector_label ?? run.connector_id}
+                    variant="standard"
+                  />
+                </div>
+              )}
+              {/* Phase 3B PR-3: quality summary — shown only when all
+                  candidates have been reviewed (pending===0) and the
+                  run has at least one candidate. */}
+              {run.quality_summary && run.quality_summary.total > 0 && run.quality_summary.pending === 0 && (
+                <div className="quality-summary-row" style={{ marginTop: '0.5rem', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                  Acceptance: {Math.round(run.quality_summary.acceptance_rate * 100)}%
+                  ({run.quality_summary.approved}/{run.quality_summary.total})
+                </div>
+              )}
             </button>
+            {/* Phase 3B PR-2: context snapshot drawer — available on all
+                completed/failed runs; lazy-loads on first toggle. */}
+            {(run.status === 'completed' || run.status === 'failed') && (
+              <PlanningRunContextDrawer
+                runId={run.id}
+                open={openContextRunId === run.id}
+                onToggle={() => setOpenContextRunId(prev => prev === run.id ? null : run.id)}
+              />
+            )}
             {isActiveRun && (
               <div className="planning-run-actions-row">
                 {isLocalConnectorWaiting && (

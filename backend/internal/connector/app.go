@@ -216,6 +216,13 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	client := NewClient(state.ServerURL, state.ConnectorToken)
 	client.HTTPClient = &http.Client{Timeout: 20 * time.Second}
 	cliHealthInterval := time.Duration(*cliHealthIntervalSec) * time.Second
+
+	// Phase 6c PR-4: start the activity reporter so the server receives
+	// execution-phase updates in real time. Best-effort: a failed POST is
+	// logged and dropped so the main service loop is never blocked.
+	reporter := NewActivityReporter(client)
+	reporter.Start(ctx)
+
 	service := &Service{
 		Client:            client,
 		State:             state,
@@ -225,6 +232,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		CliHealthDisabled: *cliHealthDisabled,
 		Stdout:            stdout,
 		Stderr:            stderr,
+		ActivityReporter:  reporter,
 	}
 	fmt.Fprintf(stdout, "serving connector %s against %s\n", state.ConnectorLabel, state.ServerURL)
 	emitAdapterDiagnostics(stdout, stderr, state.Adapter)
