@@ -1,7 +1,6 @@
 package activity_test
 
 import (
-	"context"
 	"sync"
 	"testing"
 	"time"
@@ -261,14 +260,13 @@ func TestSubscribeWithCap_EnforcesLimit(t *testing.T) {
 	defer unsubOther()
 }
 
-// TestStartPurge_EvictsIdleEntries verifies that StartPurge removes idle
-// activity entries older than the TTL and leaves non-idle or recent entries.
-func TestStartPurge_EvictsIdleEntries(t *testing.T) {
+// TestPurgeIdle_EvictsOldIdleOnly verifies that PurgeIdle removes idle entries
+// older than the TTL and leaves non-idle or recently-updated idle entries alone.
+// Uses PurgeIdle directly (no timer) so the test is deterministic.
+func TestPurgeIdle_EvictsOldIdleOnly(t *testing.T) {
 	p := &mockPersister{}
 	hub := activity.NewHub(p)
 
-	// Seed: one old idle entry (should be evicted), one recent idle entry
-	// (should stay), one old non-idle entry (should stay).
 	old := time.Now().UTC().Add(-10 * time.Minute)
 	hub.RestoreFromDB(map[string]models.ConnectorActivity{
 		"old-idle":    {Phase: models.ConnectorPhaseIdle, UpdatedAt: old},
@@ -276,24 +274,19 @@ func TestStartPurge_EvictsIdleEntries(t *testing.T) {
 		"old-active":  {Phase: models.ConnectorPhasePlanning, UpdatedAt: old},
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	hub.StartPurge(ctx)
-	// Give the first tick one minute — instead use exported Purge via a very
-	// short ticker by stopping context immediately after the first purge cycle.
-	// Since we can't control the ticker, exercise the purge path directly via
-	// the exported helper (not available) — instead cancel after a moment and
-	// verify the internal state via Get.
-	cancel() // stop the goroutine immediately; purge runs on tick, not on start
+	hub.PurgeIdle()
 
-	// Direct approach: call Update with an idle phase for old-idle so it gets
-	// a new UpdatedAt, then verify hub correctly tracks state.
-	// The real purge test is best done via integration; here we verify Get
-	// returns the expected entries before any purge runs.
 	_, okOld := hub.Get("old-idle")
 	_, okRecent := hub.Get("recent-idle")
 	_, okActive := hub.Get("old-active")
-	if !okOld || !okRecent || !okActive {
-		t.Errorf("all entries should exist before purge: old=%v recent=%v active=%v", okOld, okRecent, okActive)
+	if okOld {
+		t.Error("old-idle should have been evicted by PurgeIdle")
+	}
+	if !okRecent {
+		t.Error("recent-idle should NOT have been evicted (not old enough)")
+	}
+	if !okActive {
+		t.Error("old-active should NOT have been evicted (not idle phase)")
 	}
 }
 

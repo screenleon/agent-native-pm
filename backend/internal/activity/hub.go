@@ -69,15 +69,16 @@ func (h *Hub) StartPurge(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				h.purgeIdle()
+				h.PurgeIdle()
 			}
 		}
 	}()
 }
 
-// purgeIdle evicts states entries where Phase == idle and UpdatedAt is older
-// than idlePurgeTTL.
-func (h *Hub) purgeIdle() {
+// PurgeIdle evicts state entries where Phase == idle and UpdatedAt is older
+// than idlePurgeTTL. Exported so tests can invoke it directly without waiting
+// for the background ticker.
+func (h *Hub) PurgeIdle() {
 	cutoff := time.Now().UTC().Add(-idlePurgeTTL)
 	h.mu.Lock()
 	defer h.mu.Unlock()

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/prompts"
@@ -62,7 +63,12 @@ func sanitizeReasoning(s string) string {
 	}
 	out := b.String()
 	if len(out) > maxReasoningLen {
+		// Truncate at a valid UTF-8 rune boundary to avoid splitting a multi-byte
+		// character, which would produce invalid JSON when marshalled.
 		out = out[:maxReasoningLen]
+		for !utf8.ValidString(out) {
+			out = out[:len(out)-1]
+		}
 	}
 	return out
 }

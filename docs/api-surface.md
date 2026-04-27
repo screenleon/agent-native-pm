@@ -697,6 +697,7 @@ Source: `[agent:backend-architect]`
 | GET | `/api/tasks/:id` | Get a task by ID |
 | PATCH | `/api/tasks/:id` | Update a task |
 | DELETE | `/api/tasks/:id` | Delete a task |
+| POST | `/api/tasks/:id/requeue-dispatch` | (Phase 7) Reset a failed `role_dispatch` task back to `queued` for re-attempt. Requires session auth. Returns 404 if task not found, 409 if not in `failed` state / not `role_dispatch` type / not owned by requesting user. |
 
 #### List tasks query parameters
 

@@ -320,6 +320,7 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 	// goroutine exits as soon as invokeBuiltinCLI returns.
 	startedAt := time.Now()
 	done := make(chan struct{})
+	defer close(done) // closed on all paths, including panic, so the ticker goroutine always exits
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -346,7 +347,6 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 		}
 	}()
 	output, truncated, runErrMsg := invokeBuiltinCLI(ctx, agent, cliPath, cliModel, rendered, timeoutSec)
-	close(done)
 	// Precedence: when the CLI both timed out / errored AND tripped
 	// the output cap, the runErrMsg is more informative (the user
 	// needs to know it timed out, not just that the cap fired). The
@@ -508,7 +508,13 @@ func buildConnectorRequirementContext(req *ConnectorRequirementSummary) string {
 // Safety: any path that is absolute or that resolves to a location outside the
 // repo root (starts with "..") is rejected.
 func applyExecutionResultFiles(repoPath string, payload map[string]json.RawMessage, stderr io.Writer) (applied int) {
-	if strings.TrimSpace(repoPath) == "" {
+	repoPath = strings.TrimSpace(repoPath)
+	// Require an absolute path to prevent writes to unintended locations if a
+	// relative path was stored in project.repo_path (e.g. on misconfiguration).
+	if repoPath == "" || !filepath.IsAbs(repoPath) {
+		if repoPath != "" {
+			fmt.Fprintf(stderr, "apply files: rejected non-absolute repo_path %q\n", repoPath)
+		}
 		return 0
 	}
 	rawFiles, ok := payload["files"]
@@ -637,6 +643,7 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 	// Progress ticker for planning runs — same 30-second cadence as task dispatch.
 	runStartedAt := time.Now()
 	runDone := make(chan struct{})
+	defer close(runDone) // closed on all paths, including panic, so the ticker goroutine always exits
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -667,7 +674,6 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 	} else {
 		result = ExecuteExecJSON(ctx, s.State.Adapter, execInput)
 	}
-	close(runDone)
 	if _, err := s.Client.SubmitRunResult(ctx, claim.Run.ID, result); err != nil {
 		if s.ActivityReporter != nil {
 			s.ActivityReporter.Report(models.ConnectorActivity{

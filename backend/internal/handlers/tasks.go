@@ -221,10 +221,12 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *TaskHandler) RequeueDispatch(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	userID := ""
-	if user := middleware.UserFromContext(r.Context()); user != nil {
-		userID = user.ID
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
 	}
+	userID := user.ID
 
 	task, err := h.store.RequeueDispatchTask(id, userID)
 	if err != nil {
