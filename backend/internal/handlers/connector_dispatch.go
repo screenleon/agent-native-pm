@@ -25,6 +25,10 @@ type ClaimNextTaskResponse struct {
 	Task           *models.Task        `json:"task"`
 	Requirement    *RequirementSummary `json:"requirement,omitempty"`
 	ProjectContext string              `json:"project_context,omitempty"`
+	// RepoPath is the absolute local path to the project's repository. When
+	// non-empty, the connector writes the files[] from the execution result to
+	// this directory. Omitted when the project has no repo_path configured.
+	RepoPath string `json:"repo_path,omitempty"`
 }
 
 // RequirementSummary is a slim view of the requirement sent alongside the task.
@@ -74,6 +78,15 @@ func (h *LocalConnectorHandler) ClaimNextTask(w http.ResponseWriter, r *http.Req
 			Summary: req.Summary,
 		}
 		resp.ProjectContext = buildDispatchProjectContext(req)
+	}
+
+	// Populate repo_path from the project so the connector can apply files.
+	if h.projects != nil && strings.TrimSpace(task.ProjectID) != "" {
+		if project, projErr := h.projects.GetByID(task.ProjectID); projErr != nil {
+			log.Printf("claim-next-task: failed to load project %s: %v", task.ProjectID, projErr)
+		} else if project != nil && strings.TrimSpace(project.RepoPath) != "" {
+			resp.RepoPath = strings.TrimSpace(project.RepoPath)
+		}
 	}
 
 	writeSuccess(w, http.StatusOK, resp, nil)

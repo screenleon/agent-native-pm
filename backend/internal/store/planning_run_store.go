@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -602,8 +603,8 @@ func (s *PlanningRunStore) GetByID(id string) (*models.PlanningRun, error) {
 	qs, err := s.computeQualitySummary(run.ID)
 	if err != nil {
 		// Non-fatal: return the run without the summary rather than failing
-		// the whole request. Log so it is observable.
-		_ = err
+		// the whole request.
+		log.Printf("planning_run_store GetByID: compute quality summary for run %s: %v", run.ID, err)
 		return run, nil
 	}
 	run.QualitySummary = qs

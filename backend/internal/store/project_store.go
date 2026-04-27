@@ -55,11 +55,24 @@ func (s *ProjectStore) GetByID(id string) (*models.Project, error) {
 }
 
 func (s *ProjectStore) Create(req models.CreateProjectRequest) (*models.Project, error) {
+	return s.CreateWithOwner(req, "")
+}
+
+// CreateWithOwner creates the project and, when ownerUserID is non-empty,
+// inserts the creator as an 'owner' member in the same transaction so
+// ClaimNextDispatchTask can find tasks belonging to the project.
+func (s *ProjectStore) CreateWithOwner(req models.CreateProjectRequest, ownerUserID string) (*models.Project, error) {
 	id := uuid.New().String()
 	now := time.Now().UTC()
 	branch := strings.TrimSpace(req.DefaultBranch)
 
-	_, err := s.db.Exec(`
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	_, err = tx.Exec(`
 		INSERT INTO projects (id, name, description, repo_url, repo_path, default_branch, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, id, req.Name, req.Description, req.RepoURL, req.RepoPath, branch, now, now)
@@ -67,6 +80,21 @@ func (s *ProjectStore) Create(req models.CreateProjectRequest) (*models.Project,
 		return nil, err
 	}
 
+	if ownerUserID != "" {
+		memberID := uuid.New().String()
+		_, err = tx.Exec(`
+			INSERT INTO project_members (id, project_id, user_id, role, created_at)
+			VALUES ($1, $2, $3, 'owner', $4)
+			ON CONFLICT (project_id, user_id) DO NOTHING
+		`, memberID, id, ownerUserID, now)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	return s.GetByID(id)
 }
 

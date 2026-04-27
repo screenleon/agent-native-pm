@@ -46,6 +46,27 @@ type rawDispatcherResult struct {
 	Alternatives []SuggestRoleAlternative `json:"alternatives"`
 }
 
+// maxReasoningLen is the maximum byte length for reasoning and alternative
+// reason strings returned to callers. Enforces DECISIONS.md 2026-04-25 §(f):
+// "reasoning ≤ 1024 chars with control-char sanitization".
+const maxReasoningLen = 1024
+
+// sanitizeReasoning removes ASCII control characters (except tab, newline, and
+// carriage return) from s and truncates to maxReasoningLen bytes.
+func sanitizeReasoning(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == '\t' || r == '\n' || r == '\r' || (r >= 0x20 && r != 0x7f) {
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if len(out) > maxReasoningLen {
+		out = out[:maxReasoningLen]
+	}
+	return out
+}
+
 // SuggestRole runs the dispatcher meta-prompt against the given task information
 // and returns a role suggestion. It does NOT persist the result — the operator
 // must confirm before actor_audit is written (Phase 6c PR-3 suggest-only
@@ -130,12 +151,14 @@ func SuggestRole(ctx context.Context, taskTitle, taskDescription, requirement, p
 		}
 	}
 
+	reasoning := sanitizeReasoning(raw.Reasoning)
+
 	// Empty role_id = dispatcher could not classify.
 	if raw.RoleID == "" {
 		return SuggestRoleResult{
 			ErrorKind:    models.ErrorKindRouterNoMatch,
 			ErrorMessage: "dispatcher could not match task to any known role",
-			Reasoning:    raw.Reasoning,
+			Reasoning:    reasoning,
 		}
 	}
 
@@ -144,7 +167,7 @@ func SuggestRole(ctx context.Context, taskTitle, taskDescription, requirement, p
 		return SuggestRoleResult{
 			ErrorKind:    models.ErrorKindRouterNoMatch,
 			ErrorMessage: fmt.Sprintf("dispatcher returned unknown role_id %q", raw.RoleID),
-			Reasoning:    raw.Reasoning,
+			Reasoning:    reasoning,
 		}
 	}
 
@@ -157,7 +180,7 @@ func SuggestRole(ctx context.Context, taskTitle, taskDescription, requirement, p
 		}
 		alts = append(alts, SuggestRoleAlternative{
 			RoleID: a.RoleID,
-			Reason: a.Reason,
+			Reason: sanitizeReasoning(a.Reason),
 			Score:  clampFloat(a.Score, 0, 1),
 		})
 	}
@@ -165,7 +188,7 @@ func SuggestRole(ctx context.Context, taskTitle, taskDescription, requirement, p
 	return SuggestRoleResult{
 		RoleID:       raw.RoleID,
 		Confidence:   confidence,
-		Reasoning:    raw.Reasoning,
+		Reasoning:    reasoning,
 		Alternatives: alts,
 	}
 }

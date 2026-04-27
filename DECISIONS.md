@@ -4,6 +4,12 @@ Active architectural and behavioral decisions for Agent Native PM.
 
 When this file exceeds 50 entries or 30 KB, archive older entries to `DECISIONS_ARCHIVE.md`. The most recent archival pass was on 2026-04-27.
 
+## 2026-04-27: Phase 3B PR-3 — candidate feedback fields + quality summary [agent:backend-architect]
+
+- **Context**: Phase 3B PR-3 adds optional operator feedback on evaluated backlog candidates (`feedback_kind`, `feedback_note`) and a derived `QualitySummary` on planning runs so the UI can show acceptance-rate and pending-review counts.
+- **Decision**: (1) Migration 034 adds `feedback_kind TEXT NOT NULL DEFAULT ''` and `feedback_note TEXT NOT NULL DEFAULT ''` to `backlog_candidates`. Existing rows get empty string — callers treat empty as "no feedback recorded". (2) Valid feedback kinds are an enumerated set in the store layer (`good_fit`, `poor_fit`, `needs_clarification`, `duplicate`); the store rejects unknown kinds with a typed error rather than silently storing garbage. (3) `QualitySummary` is computed on-the-fly in `PlanningRunStore.GetByID` via `computeQualitySummary`; it is NOT stored — re-computed on every fetch. Errors are non-fatal and logged. (4) `BacklogCandidateStore.Update` now accepts `FeedbackKind *string` and `FeedbackNote *string` nil-pointer semantics — nil means "leave unchanged", pointer to empty string means "clear". (5) Frontend `CandidateReviewPanel` adds an optional post-decision feedback row; acceptance-rate summary propagates to `ProjectOverviewTab`.
+- **Constraints introduced**: (a) `feedback_kind` must be one of the enumerated values or empty string; the store validates before writing. (b) `QualitySummary` is not persisted — removing candidates or re-running planning will change counts. (c) `Update` on an already-applied candidate is still rejected (pre-existing constraint). (d) Migration 034 `.down.sql` drops the two columns via standard `ALTER TABLE DROP COLUMN` (SQLite pre-3.35 note: down migrations are hand-invoked only — not auto-applied by the runner). Tests: `TestCandidateFeedback_*` in `backlog_candidate_feedback_test.go` pass.
+
 ## 2026-04-27: Phase 3B PR-1 — Context Pack v2 wire contract + planning_context_snapshots + pack_id on planning_runs [agent:backend-architect]
 
 - **Context**: Phase 3B PR-1 adds the v2 planning wire contract, a context snapshot store, and correlates every new planning run to a pack UUID.

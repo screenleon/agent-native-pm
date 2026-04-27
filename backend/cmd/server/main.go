@@ -262,6 +262,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Purge idle connector activity entries older than 5 min (DECISIONS 2026-04-25 §(g)).
+	activityHub.StartPurge(ctx)
+
 	// Start listener first so we catch port-in-use errors before the goroutine.
 	ln, err := net.Listen("tcp", bindAddr)
 	if err != nil {
@@ -323,11 +326,11 @@ func ensureLocalProject(ps *store.ProjectStore, name, repoRoot string) (string, 
 	if len(projects) > 0 {
 		return projects[0].ID, nil
 	}
-	p, err := ps.Create(models.CreateProjectRequest{
+	p, err := ps.CreateWithOwner(models.CreateProjectRequest{
 		Name:          name,
 		RepoPath:      repoRoot,
 		DefaultBranch: "main",
-	})
+	}, "local-admin")
 	if err != nil {
 		return "", err
 	}

@@ -172,6 +172,12 @@ export async function deleteTask(id: string) {
   });
 }
 
+export async function requeueDispatchTask(id: string) {
+  return request<import('../types').Task>(`/tasks/${encodeURIComponent(id)}/requeue-dispatch`, {
+    method: 'POST',
+  });
+}
+
 // Documents
 export async function listDocuments(projectId: string, page = 1, perPage = 20) {
   return request<Document[]>(`/projects/${encodeURIComponent(projectId)}/documents?page=${page}&per_page=${perPage}`);

@@ -173,8 +173,13 @@ func (h *ConnectorActivityHandler) Stream(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	// Subscribe and get initial state atomically.
-	initial, ch, unsub := h.hub.Subscribe(connectorID)
+	// Subscribe with per-user cap. Returns 503 if the user already has
+	// maxSSEPerUser concurrent SSE connections (DECISIONS 2026-04-25 §(g)).
+	initial, ch, unsub, capErr := h.hub.SubscribeWithCap(connectorID, user.ID)
+	if capErr != nil {
+		writeError(w, http.StatusServiceUnavailable, "too many concurrent activity streams; close other tabs or wait")
+		return
+	}
 	defer unsub()
 
 	// Re-read the connector for online status.
@@ -217,17 +222,29 @@ func (h *ConnectorActivityHandler) Stream(w http.ResponseWriter, r *http.Request
 }
 
 // ListActive handles GET /api/projects/:id/active-connectors — user-authenticated.
-// Returns all connectors belonging to the authenticated user that are
-// associated with the project and have activity or are online.
+// Returns all connectors belonging to the authenticated user. Connectors are
+// not yet project-scoped (Phase 6c); the project ID is validated for existence
+// and access but does not filter the connector list.
+// TODO(phase7): filter by connectors assigned to the project once connector-
+// project assignments are modelled.
 func (h *ConnectorActivityHandler) ListActive(w http.ResponseWriter, r *http.Request) {
 	user := middleware.UserFromContext(r.Context())
 	if user == nil {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	// For now, return all of the user's connectors with their activity state.
-	// The project-scoping is a future enhancement (connectors are not yet
-	// project-scoped in Phase 6c).
+
+	projectID := chi.URLParam(r, "id")
+	if projectID != "" && h.projects != nil {
+		if proj, err := h.projects.GetByID(projectID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to verify project")
+			return
+		} else if proj == nil {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+	}
+
 	connectors, err := h.connectors.ListByUser(user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list connectors")

@@ -193,6 +193,13 @@ func (h *PlanningRunHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Transition draft → planned so the "awaiting planning" sidebar badge
+	// drops as soon as the run is queued, not only after a candidate is
+	// applied. No-op if the requirement is already planned/archived.
+	if promoteErr := h.requirementStore.PromoteToPlannedIfDraft(requirementID); promoteErr != nil {
+		log.Printf("create-planning-run: promote requirement %s: %v", requirementID, promoteErr)
+	}
+
 	writeSuccessWithWarnings(w, http.StatusCreated, run, nil, warnings)
 }
 
@@ -1073,12 +1080,10 @@ func (h *PlanningRunHandler) SuggestRole(w http.ResponseWriter, r *http.Request)
 
 	result := h.roleSuggester(r.Context(), candidate.Title, candidate.Description, requirementCtx, projectCtx, nil)
 
-	// On failure, return 422 with structured error detail so the frontend
-	// can render a user-actionable message rather than a generic toast.
-	if result.ErrorKind != "" {
-		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("[%s] %s", result.ErrorKind, result.ErrorMessage))
-		return
-	}
-
+	// Always return 200. Advisory LLM endpoints express failure in the
+	// response body (error_kind + error_message) rather than via HTTP status
+	// codes, so the frontend can render a user-actionable message and the
+	// call is never treated as a network error by the fetch layer.
+	// Per API-008 (rules/domain/backend-api.md).
 	writeSuccess(w, http.StatusOK, result, nil)
 }

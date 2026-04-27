@@ -161,6 +161,7 @@ func New(deps Deps) http.Handler {
 			r.Get("/tasks/{id}", deps.TaskHandler.Get)
 			r.Patch("/tasks/{id}", deps.TaskHandler.Update)
 			r.Delete("/tasks/{id}", deps.TaskHandler.Delete)
+			r.Post("/tasks/{id}/requeue-dispatch", deps.TaskHandler.RequeueDispatch)
 
 			// Documents
 			r.Get("/projects/{id}/documents", deps.DocumentHandler.ListByProject)

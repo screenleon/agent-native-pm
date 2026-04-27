@@ -13,6 +13,10 @@ export interface ConnectorActivityState {
   source: ActivitySource;
 }
 
+// useConnectorActivity subscribes to connector activity via SSE and degrades
+// to polling only when SSE fails. Both transports run simultaneously only for
+// the initial fetch; after that, polling is suppressed while SSE is healthy.
+// DECISIONS.md 2026-04-25 §(g): "auto-degrades SSE → polling → stale".
 export function useConnectorActivity(connectorId: string | null): ConnectorActivityState {
   const [state, setState] = useState<ConnectorActivityState>({
     activity: null,
@@ -42,13 +46,18 @@ export function useConnectorActivity(connectorId: string | null): ConnectorActiv
     }
   }, [connectorId, applyResponse]);
 
+  const startPolling = useCallback(() => {
+    if (pollTimerRef.current) return; // already running
+    pollTimerRef.current = setInterval(poll, POLL_INTERVAL_MS);
+  }, [poll]);
+
   useEffect(() => {
     if (!connectorId) return;
 
-    // Initial fetch
+    // Initial fetch so the UI is not blank while SSE connects.
     poll();
 
-    // Try SSE
+    // Try SSE first. Only fall back to interval polling if it errors.
     let cancelled = false;
     const url = connectorActivityStreamURL(connectorId);
     const es = new EventSource(url, { withCredentials: true });
@@ -66,12 +75,12 @@ export function useConnectorActivity(connectorId: string | null): ConnectorActiv
     es.onerror = () => {
       sseActiveRef.current = false;
       es.close();
+      // SSE failed — start polling as fallback.
+      if (!cancelled) startPolling();
     };
 
-    // Polling fallback (runs always; when SSE works it just confirms state)
-    pollTimerRef.current = setInterval(poll, POLL_INTERVAL_MS);
-
-    // Stale detection
+    // Stale detection: if neither SSE nor polling have delivered an update
+    // recently, mark the source as stale.
     const staleTimer = setInterval(() => {
       if (Date.now() - lastUpdateRef.current > STALE_MS) {
         setState(prev => ({ ...prev, source: 'stale' }));
@@ -83,10 +92,13 @@ export function useConnectorActivity(connectorId: string | null): ConnectorActiv
       sseActiveRef.current = false;
       es.close();
       esRef.current = null;
-      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
       clearInterval(staleTimer);
     };
-  }, [connectorId, poll, applyResponse]);
+  }, [connectorId, poll, applyResponse, startPolling]);
 
   return state;
 }
