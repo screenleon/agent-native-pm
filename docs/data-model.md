@@ -7,7 +7,7 @@ This file is the canonical schema reference for the current backend database.
 - Runtime database: PostgreSQL
 - SQL semantics: PostgreSQL placeholders, `TIMESTAMPTZ`, `BOOLEAN`, `JSONB`, partial indexes, and GIN full-text indexes
 - Migrations: forward-only numbered SQL files in `backend/db/migrations/`
-- Migration set currently applied through `034_candidate_feedback.sql`
+- Migration set currently applied through `035_backfill_project_members.sql`
 - Minimum SQLite version: **3.35** (March 2021). Required by migration 026's `.down.sql` which uses `ALTER TABLE ... DROP COLUMN`. Older SQLite versions apply the forward migration fine but rollback fails with `near "DROP": syntax error`.
 
 ## Current Entity Relationships

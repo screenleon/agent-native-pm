@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react'
 import type { Task, ProjectSummary } from '../../types'
-import { createTask, updateTask, deleteTask, batchUpdateTasks, listProjectTaskLineage, type AppliedLineageEntry } from '../../api/client'
+import { createTask, updateTask, deleteTask, batchUpdateTasks, listProjectTaskLineage, requeueDispatchTask, type AppliedLineageEntry } from '../../api/client'
 
 // ---------------------------------------------------------------------------
 // DispatchStatusBadge — inline indicator for role_dispatch execution lifecycle
 // ---------------------------------------------------------------------------
-interface DispatchStatusBadgeProps { task: Task }
+interface DispatchStatusBadgeProps { task: Task; onRequeue?: () => void }
 
-function DispatchStatusBadge({ task }: DispatchStatusBadgeProps) {
+function DispatchStatusBadge({ task, onRequeue }: DispatchStatusBadgeProps) {
   const [expanded, setExpanded] = useState(false)
   const ds = task.dispatch_status
 
@@ -29,15 +29,17 @@ function DispatchStatusBadge({ task }: DispatchStatusBadgeProps) {
   const color = colorMap[ds] ?? 'var(--text-muted)'
 
   if (ds === 'completed' && task.execution_result) {
+    const raw = task.execution_result as Record<string, unknown>
     const files: string[] = []
     try {
-      const raw = task.execution_result as Record<string, unknown>
       if (Array.isArray(raw['files'])) {
         for (const f of raw['files'] as unknown[]) {
-          if (typeof f === 'string') files.push(f)
+          if (typeof f === 'object' && f !== null && 'path' in f) files.push((f as Record<string,unknown>)['path'] as string)
+          else if (typeof f === 'string') files.push(f)
         }
       }
     } catch { /* ignore */ }
+    const filesApplied = typeof raw['files_applied'] === 'number' ? raw['files_applied'] as number : null
     return (
       <span style={{ marginLeft: '0.5rem', verticalAlign: 'middle' }}>
         <button
@@ -54,7 +56,7 @@ function DispatchStatusBadge({ task }: DispatchStatusBadgeProps) {
           aria-expanded={expanded}
           data-testid="dispatch-badge-completed"
         >
-          {label} {expanded ? '▲' : '▼'}
+          {label}{filesApplied !== null ? ` (${filesApplied} file${filesApplied !== 1 ? 's' : ''} applied)` : ''} {expanded ? '▲' : '▼'}
         </button>
         {expanded && (
           <span
@@ -87,6 +89,7 @@ function DispatchStatusBadge({ task }: DispatchStatusBadgeProps) {
       } catch { /* ignore */ }
       return ''
     })()
+    const isRoleDispatch = task.source?.startsWith('role_dispatch')
     return (
       <span style={{ marginLeft: '0.5rem', verticalAlign: 'middle' }}>
         <span
@@ -102,6 +105,24 @@ function DispatchStatusBadge({ task }: DispatchStatusBadgeProps) {
           >
             {errMsg}
           </span>
+        )}
+        {isRoleDispatch && onRequeue && (
+          <button
+            onClick={e => { e.stopPropagation(); onRequeue() }}
+            style={{
+              marginLeft: '6px',
+              fontSize: '0.7rem',
+              padding: '1px 6px',
+              borderRadius: '4px',
+              border: '1px solid var(--text-muted)',
+              background: 'transparent',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+            }}
+            data-testid="dispatch-retry-btn"
+          >
+            Retry
+          </button>
         )}
       </span>
     )
@@ -474,7 +495,17 @@ export function TasksTab({
                       </span>
                     )}
                     {task.dispatch_status && task.dispatch_status !== 'none' && (
-                      <DispatchStatusBadge task={task} />
+                      <DispatchStatusBadge
+                        task={task}
+                        onRequeue={task.dispatch_status === 'failed' ? async () => {
+                          try {
+                            await requeueDispatchTask(task.id)
+                            onReload()
+                          } catch (e) {
+                            onError(e instanceof Error ? e.message : 'Failed to requeue task')
+                          }
+                        } : undefined}
+                      />
                     )}
                   </td>
                   <td><span className={`badge badge-${task.status === 'done' ? 'fresh' : task.status === 'in_progress' ? 'low' : task.status === 'cancelled' ? 'stale' : 'todo'}`}>{task.status.replace('_', ' ')}</span></td>

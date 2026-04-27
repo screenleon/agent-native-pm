@@ -651,6 +651,34 @@ func (s *TaskStore) updateDispatchStatus(taskID, connectorUserID, status, _ stri
 // GetTaskForConnector returns a task only if it is owned by the connector's
 // user (via project_members membership). Used by the execution-result handler
 // to verify the connector has rights before accepting a result.
+// RequeueDispatchTask resets a failed role_dispatch task back to queued so
+// the connector can re-attempt it. Only tasks with dispatch_status=failed
+// whose source begins with "role_dispatch" and that belong to a project
+// the requesting user is a member of can be requeued.
+func (s *TaskStore) RequeueDispatchTask(taskID, userID string) (*models.Task, error) {
+	now := time.Now().UTC()
+	res, err := s.db.Exec(`
+		UPDATE tasks
+		SET dispatch_status = $1,
+		    execution_result = NULL,
+		    updated_at = $2
+		WHERE id = $3
+		  AND dispatch_status = $4
+		  AND source LIKE $5
+		  AND project_id IN (
+		      SELECT project_id FROM project_members WHERE user_id = $6
+		  )
+	`, models.TaskDispatchStatusQueued, now, taskID, models.TaskDispatchStatusFailed, "role_dispatch%", userID)
+	if err != nil {
+		return nil, fmt.Errorf("requeue dispatch task: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, ErrDispatchOwnership
+	}
+	return s.GetByID(taskID)
+}
+
 func (s *TaskStore) GetTaskForConnector(taskID, connectorUserID string) (*models.Task, error) {
 	return scanTaskFull(s.db.QueryRow(`
 		SELECT t.id, t.project_id, t.title, t.description, t.status, t.priority,

@@ -193,6 +193,13 @@ func (h *PlanningRunHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Transition draft → planned so the "awaiting planning" sidebar badge
+	// drops as soon as the run is queued, not only after a candidate is
+	// applied. No-op if the requirement is already planned/archived.
+	if promoteErr := h.requirementStore.PromoteToPlannedIfDraft(requirementID); promoteErr != nil {
+		log.Printf("create-planning-run: promote requirement %s: %v", requirementID, promoteErr)
+	}
+
 	writeSuccessWithWarnings(w, http.StatusCreated, run, nil, warnings)
 }
 

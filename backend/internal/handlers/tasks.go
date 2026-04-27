@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/screenleon/agent-native-pm/internal/middleware"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/store"
 )
@@ -211,6 +212,46 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeSuccess(w, http.StatusOK, nil, nil)
+}
+
+// RequeueDispatch implements POST /api/tasks/:id/requeue-dispatch.
+// Resets a failed role_dispatch task back to queued so the connector
+// can re-attempt it. Returns 404 when the task is not found, 409 when
+// the task is not in a failed state or belongs to another user's project.
+func (h *TaskHandler) RequeueDispatch(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	userID := user.ID
+
+	// Check existence first so we can return 404 for unknown IDs rather than
+	// the ownership-conflict 409 that RequeueDispatchTask returns for any
+	// zero-row update (not-found, wrong state, wrong user are indistinguishable
+	// at the SQL level).
+	existing, err := h.store.GetByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to look up task")
+		return
+	}
+	if existing == nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	task, err := h.store.RequeueDispatchTask(id, userID)
+	if err != nil {
+		if errors.Is(err, store.ErrDispatchOwnership) {
+			writeError(w, http.StatusConflict, "task cannot be requeued: not failed, not a role_dispatch task, or not owned by this user")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to requeue task")
+		return
+	}
+	writeSuccess(w, http.StatusOK, task, nil)
 }
 
 func normalizeTaskIDs(taskIDs []string) []string {

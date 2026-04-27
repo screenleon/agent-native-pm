@@ -270,6 +270,9 @@ func rewriteForSQLite(sql string) string {
 	sql = pgCastRe.ReplaceAllString(sql, "")
 	// SQLite ALTER TABLE ADD COLUMN does not support IF NOT EXISTS.
 	sql = strings.ReplaceAll(sql, "ADD COLUMN IF NOT EXISTS", "ADD COLUMN")
+	// gen_random_uuid() is PostgreSQL-only. SQLite equivalent: a hex-encoded
+	// 16-byte random blob, which is unique enough for TEXT primary keys.
+	sql = strings.ReplaceAll(sql, "gen_random_uuid()", "lower(hex(randomblob(16)))")
 	return sql
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -313,6 +314,38 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 	// (SIGTERM → 5s → SIGKILL) and the bounded-writer output cap.
 	// Reuse the agent inferred by resolveBuiltinCLI rather than
 	// re-deriving from the binary path.
+	//
+	// Progress ticker: prints a heartbeat line every 30 s so the operator
+	// can see the connector is still working and hasn't stalled. The ticker
+	// goroutine exits as soon as invokeBuiltinCLI returns.
+	startedAt := time.Now()
+	done := make(chan struct{})
+	defer close(done) // closed on all paths, including panic, so the ticker goroutine always exits
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case t := <-ticker.C:
+				elapsed := t.Sub(startedAt).Truncate(time.Second)
+				fmt.Fprintf(s.Stdout, "task %s: still running (role=%s, elapsed=%s)\n", task.ID, roleID, elapsed)
+				if s.ActivityReporter != nil {
+					s.ActivityReporter.Report(models.ConnectorActivity{
+						Phase:        models.ConnectorPhaseDispatching,
+						SubjectKind:  "task",
+						SubjectID:    task.ID,
+						SubjectTitle: task.Title,
+						RoleID:       roleID,
+						Step:         fmt.Sprintf("running (%s)", elapsed),
+						StartedAt:    startedAt.UTC(),
+						UpdatedAt:    time.Now().UTC(),
+					})
+				}
+			}
+		}
+	}()
 	output, truncated, runErrMsg := invokeBuiltinCLI(ctx, agent, cliPath, cliModel, rendered, timeoutSec)
 	// Precedence: when the CLI both timed out / errored AND tripped
 	// the output cap, the runErrMsg is more informative (the user
@@ -380,6 +413,19 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
 		}
 		return true, nil
+	}
+
+	// Apply files to local repo if repo_path was provided in the claim response.
+	filesApplied := 0
+	if resp.RepoPath != "" {
+		filesApplied = applyExecutionResultFiles(resp.RepoPath, parsed, s.Stderr)
+		if filesApplied > 0 {
+			fmt.Fprintf(s.Stdout, "task %s: applied %d file(s) to %s\n", task.ID, filesApplied, resp.RepoPath)
+		}
+	}
+	// Annotate the result with how many files were applied so the UI can show it.
+	if filesApplied > 0 {
+		parsed["files_applied"] = json.RawMessage(fmt.Sprintf("%d", filesApplied))
 	}
 
 	// Re-marshal the full parsed map as the result payload.
@@ -451,6 +497,58 @@ func buildConnectorRequirementContext(req *ConnectorRequirementSummary) string {
 		parts = append(parts, "Summary: "+s)
 	}
 	return strings.Join(parts, "\n")
+}
+
+// applyExecutionResultFiles writes the files[] array from a validated
+// execution result to disk under repoPath. Errors are logged to stderr but do
+// NOT fail the task — the JSON result is still submitted. This matches the
+// "best-effort apply" principle: the server gets the result regardless, and
+// the UI shows whether files were applied via the files_applied count field.
+//
+// Safety: any path that is absolute or that resolves to a location outside the
+// repo root (starts with "..") is rejected.
+func applyExecutionResultFiles(repoPath string, payload map[string]json.RawMessage, stderr io.Writer) (applied int) {
+	repoPath = strings.TrimSpace(repoPath)
+	// Require an absolute path to prevent writes to unintended locations if a
+	// relative path was stored in project.repo_path (e.g. on misconfiguration).
+	if repoPath == "" || !filepath.IsAbs(repoPath) {
+		if repoPath != "" {
+			fmt.Fprintf(stderr, "apply files: rejected non-absolute repo_path %q\n", repoPath)
+		}
+		return 0
+	}
+	rawFiles, ok := payload["files"]
+	if !ok {
+		return 0
+	}
+	var files []struct {
+		Path     string `json:"path"`
+		Contents string `json:"contents"`
+		Mode     string `json:"mode"`
+	}
+	if err := json.Unmarshal(rawFiles, &files); err != nil {
+		fmt.Fprintf(stderr, "apply files: unmarshal error: %v\n", err)
+		return 0
+	}
+	for _, f := range files {
+		relPath := filepath.Clean(f.Path)
+		// Safety: reject paths that escape the repo root or are absolute.
+		if filepath.IsAbs(relPath) || strings.HasPrefix(relPath, "..") {
+			fmt.Fprintf(stderr, "apply files: rejected unsafe path %q\n", f.Path)
+			continue
+		}
+		dest := filepath.Join(repoPath, relPath)
+		if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+			fmt.Fprintf(stderr, "apply files: mkdir %q: %v\n", filepath.Dir(dest), err)
+			continue
+		}
+		if err := os.WriteFile(dest, []byte(f.Contents), 0644); err != nil {
+			fmt.Fprintf(stderr, "apply files: write %q: %v\n", dest, err)
+			continue
+		}
+		applied++
+	}
+	return applied
 }
 
 // resolveAgentFromBinary infers the agent name from the binary path.
@@ -542,6 +640,34 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 		PlanningContext:        claim.PlanningContext,
 		CliSelection:           cliSelection,
 	}
+	// Progress ticker for planning runs — same 30-second cadence as task dispatch.
+	runStartedAt := time.Now()
+	runDone := make(chan struct{})
+	defer close(runDone) // closed on all paths, including panic, so the ticker goroutine always exits
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-runDone:
+				return
+			case t := <-ticker.C:
+				elapsed := t.Sub(runStartedAt).Truncate(time.Second)
+				fmt.Fprintf(s.Stdout, "planning run %s: still running (elapsed=%s)\n", claim.Run.ID, elapsed)
+				if s.ActivityReporter != nil {
+					s.ActivityReporter.Report(models.ConnectorActivity{
+						Phase:        models.ConnectorPhasePlanning,
+						SubjectKind:  "planning_run",
+						SubjectID:    claim.Run.ID,
+						SubjectTitle: claim.Requirement.Title,
+						Step:         fmt.Sprintf("running (%s)", elapsed),
+						StartedAt:    runStartedAt.UTC(),
+						UpdatedAt:    time.Now().UTC(),
+					})
+				}
+			}
+		}
+	}()
 	var result models.LocalConnectorSubmitRunResultRequest
 	if strings.TrimSpace(s.State.Adapter.Command) == "" {
 		result = ExecuteBuiltin(ctx, execInput)

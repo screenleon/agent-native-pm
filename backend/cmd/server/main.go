@@ -326,11 +326,11 @@ func ensureLocalProject(ps *store.ProjectStore, name, repoRoot string) (string, 
 	if len(projects) > 0 {
 		return projects[0].ID, nil
 	}
-	p, err := ps.Create(models.CreateProjectRequest{
+	p, err := ps.CreateWithOwner(models.CreateProjectRequest{
 		Name:          name,
 		RepoPath:      repoRoot,
 		DefaultBranch: "main",
-	})
+	}, "local-admin")
 	if err != nil {
 		return "", err
 	}

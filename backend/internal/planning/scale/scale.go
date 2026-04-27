@@ -24,16 +24,6 @@ var largeKeywords = []string{
 	"architecture",
 }
 
-// smallKeywords lower the scale to "small" when matched AND word count is
-// below the medium threshold. They indicate focused, well-scoped tasks.
-var smallKeywords = []string{
-	"add",
-	"fix",
-	"update",
-	"rename",
-	"tweak",
-}
-
 // Word count thresholds. These are applied to the combined title + description
 // word count after splitting on whitespace.
 const (
@@ -47,10 +37,8 @@ const (
 // Classification rules (evaluated in order):
 //  1. If any largeKeyword appears in the lowercased combined text → large.
 //  2. Word count ≥ mediumThreshold → large.
-//  3. Word count < smallThreshold AND any smallKeyword appears → small.
-//  4. Word count < smallThreshold AND no smallKeyword → small (short text with
-//     no complexity signals is still small).
-//  5. Otherwise (smallThreshold ≤ count < mediumThreshold) → medium.
+//  3. Word count < smallThreshold → small.
+//  4. Otherwise (smallThreshold ≤ count < mediumThreshold) → medium.
 func EstimateTaskScale(title, description string) wire.TaskScale {
 	combined := strings.ToLower(title + " " + description)
 

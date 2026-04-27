@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/screenleon/agent-native-pm/internal/middleware"
 	"github.com/screenleon/agent-native-pm/internal/models"
 	"github.com/screenleon/agent-native-pm/internal/store"
 )
@@ -55,7 +56,11 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	project, err := h.store.Create(req)
+	ownerUserID := ""
+	if user := middleware.UserFromContext(r.Context()); user != nil {
+		ownerUserID = user.ID
+	}
+	project, err := h.store.CreateWithOwner(req, ownerUserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create project")
 		return

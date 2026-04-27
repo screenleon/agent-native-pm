@@ -21,7 +21,14 @@ Read `docs/mvp-scope.md` when evaluating whether a feature belongs in the curren
 2. **Skills** — executed natively by agent tool capabilities (this project does not use a separate `skills/` directory)
 3. **Loop** — `Discover → Triage → Plan → Critique → Approve → Implement → Test → Fix → Pre-PR Pipeline → Critic → Risk/Security → Record → Summarize`
 
-   **Pre-PR Pipeline** (`make pre-pr`) is mandatory before `gh pr create` — it runs governance lint, go vet, eslint, build, tsc, vitest, SQLite + Postgres test suites, and the npm production build in one shot. See `docs/operating-rules.md` § "Pre-PR verification" for the full three-phase gate (pipeline → critic subagent → risk/security review). Opening a PR on a red `make pre-pr` is a workflow violation.
+   **Pre-PR Pipeline** (`make pre-pr`) is mandatory before `gh pr create` — it runs governance lint, go vet, eslint, build, tsc, vitest, SQLite + Postgres test suites, and the npm production build in one shot. See `docs/operating-rules.md` § "Pre-PR verification" for the full review gate:
+   1. `make pre-pr` (pipeline)
+   2. `critic` subagent — adversarial design review
+   3. `risk-reviewer` — bugs, regressions, security, permissions
+   4. `testing-reviewer` — coverage gaps, missing edge-case tests
+   5. `architecture-reviewer` — contract shape, module boundaries, DECISIONS.md alignment
+
+   Steps 4 and 5 are lightweight and targeted; run them on any PR that touches handler/store interfaces, schema migrations, or new API endpoints. Opening a PR on a red `make pre-pr` is a workflow violation.
 
 Roles in this repository are conceptual ownership boundaries. They are implemented through `.claude/agents/*.md`, repo docs, and tool-specific instruction surfaces such as `.github/copilot-instructions.md`.
 

@@ -15,9 +15,13 @@ import (
 // ClaimNextTaskResponse is the payload returned by POST /api/connector/claim-next-task.
 // Task is nil when the queue is empty.
 type ClaimNextTaskResponse struct {
-	Task           *models.Task             `json:"task"`
+	Task           *models.Task                 `json:"task"`
 	Requirement    *ConnectorRequirementSummary `json:"requirement,omitempty"`
-	ProjectContext string                   `json:"project_context,omitempty"`
+	ProjectContext string                       `json:"project_context,omitempty"`
+	// RepoPath is the absolute local path to the project's repository, if the
+	// project has one configured. When non-empty, the connector writes the
+	// files[] from the execution result to this directory.
+	RepoPath string `json:"repo_path,omitempty"`
 }
 
 // ConnectorRequirementSummary is the slim requirement view included in the
