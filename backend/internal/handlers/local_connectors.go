@@ -271,10 +271,13 @@ func (h *LocalConnectorHandler) ClaimNextRun(w http.ResponseWriter, r *http.Requ
 			log.Printf("planning context build failed for requirement %s: %v", requirement.ID, buildErr)
 		} else {
 			response.PlanningContext = ctx
-			// Phase 3B PR-2: persist a V2 context snapshot for the run.
-			// Fire-and-forget: snapshot failures must not abort the claim.
+			// Phase 3B PR-2: persist a V2 context snapshot for the run and
+			// also surface the V2 envelope in the claim response so connectors
+			// can read role / intent_mode / task_scale without a second fetch.
 			if h.snapshotSaver != nil && run != nil {
-				h.saveContextSnapshot(run, requirement, ctx)
+				if v2ctx := h.saveContextSnapshot(run, requirement, ctx); v2ctx != nil {
+					response.PlanningContextV2 = v2ctx
+				}
 			}
 		}
 	}
@@ -819,11 +822,12 @@ func (h *LocalConnectorHandler) RunStats(w http.ResponseWriter, r *http.Request)
 	writeSuccess(w, http.StatusOK, stats, nil)
 }
 
-// saveContextSnapshot builds a PlanningContextV2 from the V1 context and
-// persists it. Always fire-and-forget: errors are logged, never propagated.
-func (h *LocalConnectorHandler) saveContextSnapshot(run *models.PlanningRun, requirement *models.Requirement, v1ctx *wire.PlanningContextV1) {
+// saveContextSnapshot builds a PlanningContextV2 from the V1 context,
+// persists it, and returns the v2 struct so the caller can include it in the
+// claim response. Returns nil on any error (errors are only logged).
+func (h *LocalConnectorHandler) saveContextSnapshot(run *models.PlanningRun, requirement *models.Requirement, v1ctx *wire.PlanningContextV1) *wire.PlanningContextV2 {
 	if h.snapshotSaver == nil || run == nil || v1ctx == nil {
-		return
+		return nil
 	}
 
 	title := ""
@@ -839,7 +843,7 @@ func (h *LocalConnectorHandler) saveContextSnapshot(run *models.PlanningRun, req
 	snapshotJSON, err := json.Marshal(v2ctx)
 	if err != nil {
 		log.Printf("context snapshot: marshal V2 failed for run %s: %v", run.ID, err)
-		return
+		return nil
 	}
 
 	droppedJSON, err := json.Marshal(v1ctx.Meta.DroppedCounts)
@@ -860,5 +864,7 @@ func (h *LocalConnectorHandler) saveContextSnapshot(run *models.PlanningRun, req
 
 	if saveErr := h.snapshotSaver.Save(snap); saveErr != nil {
 		log.Printf("context snapshot: save failed for run %s: %v", run.ID, saveErr)
+		return nil
 	}
+	return &v2ctx
 }

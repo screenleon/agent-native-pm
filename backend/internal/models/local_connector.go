@@ -244,6 +244,11 @@ type LocalConnectorClaimNextRunResponse struct {
 	Requirement     *Requirement            `json:"requirement"`
 	Project         *Project                `json:"project,omitempty"`
 	PlanningContext *wire.PlanningContextV1 `json:"planning_context,omitempty"`
+	// PlanningContextV2 is the richer v2 envelope (Phase 3B). When present
+	// connectors should prefer it over PlanningContext; both carry the same
+	// V1 sources sub-tree so older connectors that only read PlanningContext
+	// are unaffected. Absent when the run predates migration 032.
+	PlanningContextV2 *wire.PlanningContextV2 `json:"planning_context_v2,omitempty"`
 	// CliBinding is populated when the run was created with an explicit
 	// account_binding_id (or auto-resolved to the user's primary CLI
 	// binding). Sourced from the run's ConnectorCliInfo.BindingSnapshot

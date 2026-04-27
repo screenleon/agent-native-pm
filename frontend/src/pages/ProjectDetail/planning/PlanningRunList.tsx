@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import type { PlanningProviderOptions, PlanningRun } from '../../../types'
 import { formatDateTime, formatRelativeTime } from '../../../utils/formatters'
 import { ConnectorActivityBadge } from '../../../components/ConnectorActivityBadge'
+import { PlanningRunContextDrawer } from './PlanningRunContextDrawer'
 import {
   makeModelLabeler,
   makeProviderLabeler,
@@ -39,6 +41,7 @@ export function PlanningRunList({
 }: PlanningRunListProps) {
   const providerLabel = makeProviderLabeler(providerOptions)
   const modelLabel = makeModelLabeler(providerOptions)
+  const [openContextRunId, setOpenContextRunId] = useState<string | null>(null)
 
   if (errorMessage) {
     return <div className="error-banner" style={{ marginTop: '1rem' }}>{errorMessage}</div>
@@ -117,6 +120,15 @@ export function PlanningRunList({
                 </div>
               )}
             </button>
+            {/* Phase 3B PR-2: context snapshot drawer — available on all
+                completed/failed runs; lazy-loads on first toggle. */}
+            {(run.status === 'completed' || run.status === 'failed') && (
+              <PlanningRunContextDrawer
+                runId={run.id}
+                open={openContextRunId === run.id}
+                onToggle={() => setOpenContextRunId(prev => prev === run.id ? null : run.id)}
+              />
+            )}
             {isActiveRun && (
               <div className="planning-run-actions-row">
                 {isLocalConnectorWaiting && (

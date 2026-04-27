@@ -667,3 +667,32 @@ export interface PaginationMeta {
     tasks: Task[];
     documents: Document[];
   }
+
+// Phase 3B: Context Pack v2 snapshot types
+
+export interface ContextSnapshotSourceRef {
+  name: string;
+  path: string;
+  role: string;
+}
+
+/** Structured response from GET /api/planning-runs/:id/context-snapshot */
+export interface ContextSnapshot {
+  pack_id: string;
+  planning_run_id: string;
+  schema_version: string;
+  sources_bytes: number;
+  dropped_counts: Record<string, number>;
+  open_task_count: number;
+  document_count: number;
+  drift_count: number;
+  agent_run_count: number;
+  has_sync_run: boolean;
+  // V2 envelope fields (populated when schema_version === 'context.v2')
+  role?: string;
+  intent_mode?: string;
+  task_scale?: string;
+  source_of_truth?: ContextSnapshotSourceRef[];
+  /** false for runs created before Phase 3B snapshot saving (migration 032) */
+  available: boolean;
+}

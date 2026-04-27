@@ -393,6 +393,12 @@ export async function suggestRoleForCandidate(candidateId: string) {
   );
 }
 
+export async function getContextSnapshot(planningRunId: string) {
+  return request<import('../types').ContextSnapshot>(
+    `/planning-runs/${encodeURIComponent(planningRunId)}/context-snapshot`
+  );
+}
+
 export async function listCandidatesByEvidenceDocument(projectId: string, documentId: string) {
   return request<CandidateEvidenceSummary[]>(
     `/projects/${encodeURIComponent(projectId)}/backlog-candidates/by-evidence?document_id=${encodeURIComponent(documentId)}`
