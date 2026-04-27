@@ -106,6 +106,8 @@ export interface ProjectDashboardSummary {
   latest_sync_run: SyncRun | null;
   open_drift_count: number;
   recent_agent_runs: AgentRun[];
+  avg_planning_acceptance_rate?: number;
+  planning_runs_reviewed_count?: number;
 }
 
 export interface Requirement {
@@ -236,6 +238,39 @@ export interface LocalConnector {
   updated_at: string;
 }
 
+export type ConnectorPhase =
+  | 'idle'
+  | 'claiming_run'
+  | 'planning'
+  | 'claiming_task'
+  | 'dispatching'
+  | 'submitting';
+
+export interface ConnectorActivity {
+  phase: ConnectorPhase;
+  subject_kind?: string;
+  subject_id?: string;
+  subject_title?: string;
+  role_id?: string;
+  step?: string;
+  started_at: string;
+  updated_at: string;
+}
+
+export interface ConnectorActivityResponse {
+  activity: ConnectorActivity | null;
+  online: boolean;
+  age_seconds: number;
+}
+
+export interface ActiveConnectorEntry {
+  connector_id: string;
+  label: string;
+  activity: ConnectorActivity | null;
+  online: boolean;
+  age_seconds: number;
+}
+
 export interface ConnectorPairingSession {
   id: string;
   user_id: string;
@@ -339,6 +374,9 @@ export interface PlanningRun {
   completed_at: string | null;
   created_at: string;
   updated_at: string;
+  // Phase 3B PR-3: quality summary — only populated on single-run GET
+  // (GET /api/planning-runs/:id), not on list responses.
+  quality_summary?: QualitySummary;
 }
 
 export interface PlanningDocumentEvidence {
@@ -436,6 +474,9 @@ export interface BacklogCandidate {
   // execution_role field, populated server-side. Nil when no audit
   // row exists (pre-Phase-6c data; never set; cleared).
   execution_role_authoring?: ExecutionRoleAuthoring | null;
+  // Phase 3B PR-3: optional operator feedback on the PO decision.
+  feedback_kind?: string;
+  feedback_note?: string;
   created_at: string;
   updated_at: string;
 }
@@ -447,6 +488,17 @@ export interface ExecutionRoleAuthoring {
   rationale?: string;
   confidence?: number; // router-only
   set_at: string;
+}
+
+// Phase 3B PR-3: per-run quality summary computed server-side from
+// backlog_candidates. Only populated on single-run GET responses.
+export interface QualitySummary {
+  total: number;
+  approved: number;
+  rejected: number;
+  pending: number;
+  acceptance_rate: number;
+  feedback_distribution: Record<string, number>;
 }
 
 export interface TaskLineage {
@@ -468,6 +520,10 @@ export interface UpdateBacklogCandidatePayload {
   // empty string clears (NULL in DB). Not validated against the role catalog
   // on the server today; see DECISIONS.md 2026-04-24 Phase 5 B2.
   execution_role?: string;
+  // Phase 3B PR-3: optional quality feedback — never required, never blocks
+  // approve/reject flow.
+  feedback_kind?: string;
+  feedback_note?: string;
 }
 
 export interface ApplyBacklogCandidateResponse {

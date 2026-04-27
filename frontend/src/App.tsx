@@ -128,6 +128,16 @@ function App() {
           setUnreadCount(data.unread ?? 0)
         } catch { /* malformed — ignore */ }
       })
+      // Phase 6c PR-4: fan-out planning-run-changed to any mounted workspace.
+      es.addEventListener('planning-run-changed', (e: MessageEvent) => {
+        if (cancelled) return
+        try {
+          const data = JSON.parse(e.data) as {
+            run_id: string; status: string; project_id: string; requirement_id: string
+          }
+          window.dispatchEvent(new CustomEvent('anpm:planning-run-changed', { detail: data }))
+        } catch { /* malformed — ignore */ }
+      })
       es.onerror = () => {
         es?.close()
         es = null

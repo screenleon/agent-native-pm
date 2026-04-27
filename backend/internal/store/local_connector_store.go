@@ -1237,3 +1237,91 @@ func defaultCliConfigLabel(providerID string) string {
 	}
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 6c PR-4: connector activity persistence
+//
+// Activity snapshots are stored in two dedicated columns added by migration
+// 031 (current_activity_json, current_activity_at). The hub calls
+// PersistActivity asynchronously; ListActivities is called once at startup to
+// restore in-memory hub state.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// PersistActivity stores the latest activity snapshot for a connector.
+// Implements activity.Persister.
+func (s *LocalConnectorStore) PersistActivity(connectorID string, a models.ConnectorActivity) error {
+	raw, err := json.Marshal(a)
+	if err != nil {
+		return fmt.Errorf("marshal activity: %w", err)
+	}
+	now := time.Now().UTC()
+	_, err = s.db.Exec(`
+		UPDATE local_connectors
+		SET current_activity_json = $1, current_activity_at = $2
+		WHERE id = $3
+	`, string(raw), now, connectorID)
+	return err
+}
+
+// GetActivity returns the persisted activity for a connector. The second
+// return value is the server timestamp of the last update. If no activity has
+// been recorded (empty current_activity_json), activity is nil.
+func (s *LocalConnectorStore) GetActivity(connectorID string) (*models.ConnectorActivity, time.Time, error) {
+	var activityJSON string
+	var updatedAt sql.NullTime
+	err := s.db.QueryRow(`
+		SELECT current_activity_json, current_activity_at
+		FROM local_connectors
+		WHERE id = $1
+	`, connectorID).Scan(&activityJSON, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, time.Time{}, nil
+	}
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	if strings.TrimSpace(activityJSON) == "" {
+		return nil, time.Time{}, nil
+	}
+	var a models.ConnectorActivity
+	if err := json.Unmarshal([]byte(activityJSON), &a); err != nil {
+		return nil, time.Time{}, fmt.Errorf("unmarshal activity: %w", err)
+	}
+	var at time.Time
+	if updatedAt.Valid {
+		at = updatedAt.Time
+	}
+	return &a, at, nil
+}
+
+// ListActivities returns all connectors that have a non-empty activity
+// snapshot. Used at startup to restore the in-memory hub state.
+func (s *LocalConnectorStore) ListActivities() (map[string]models.ConnectorActivity, error) {
+	rows, err := s.db.Query(`
+		SELECT id, current_activity_json
+		FROM local_connectors
+		WHERE current_activity_json != ''
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]models.ConnectorActivity)
+	for rows.Next() {
+		var id, activityJSON string
+		if err := rows.Scan(&id, &activityJSON); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(activityJSON) == "" {
+			continue
+		}
+		var a models.ConnectorActivity
+		if err := json.Unmarshal([]byte(activityJSON), &a); err != nil {
+			// Malformed row: skip silently so a single bad row doesn't break
+			// startup for all connectors.
+			continue
+		}
+		out[id] = a
+	}
+	return out, rows.Err()
+}
+

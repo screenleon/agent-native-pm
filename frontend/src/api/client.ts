@@ -7,6 +7,7 @@ import type {
   PlanningSettingsView, UpdatePlanningSettingsPayload,
   AccountBinding, CreateAccountBindingPayload, UpdateAccountBindingPayload,
   LocalConnector, CreateLocalConnectorPairingSessionPayload, CreateLocalConnectorPairingSessionResponse,
+  ConnectorActivityResponse, ActiveConnectorEntry,
 } from '../types';
 
 const BASE_URL = '/api';
@@ -369,6 +370,29 @@ export async function listRoles() {
   return request<RoleInfo[]>('/roles');
 }
 
+// Phase 6c PR-3: suggest-role — advisory LLM router.
+// Returns a role suggestion WITHOUT persisting to actor_audit.
+// The operator confirms by setting execution_role on the candidate.
+export interface SuggestRoleAlternative {
+  role_id: string;
+  reason: string;
+  score: number;
+}
+
+export interface SuggestRoleResult {
+  role_id: string;
+  confidence: number;
+  reasoning: string;
+  alternatives: SuggestRoleAlternative[];
+}
+
+export async function suggestRoleForCandidate(candidateId: string) {
+  return request<SuggestRoleResult>(
+    `/backlog-candidates/${encodeURIComponent(candidateId)}/suggest-role`,
+    { method: 'POST' },
+  );
+}
+
 export async function listCandidatesByEvidenceDocument(projectId: string, documentId: string) {
   return request<CandidateEvidenceSummary[]>(
     `/projects/${encodeURIComponent(projectId)}/backlog-candidates/by-evidence?document_id=${encodeURIComponent(documentId)}`
@@ -692,5 +716,23 @@ export async function demoSeed(projectId: string) {
     `/projects/${encodeURIComponent(projectId)}/demo-seed`,
     { method: 'POST' },
   );
+}
+
+// ─── Phase 6c PR-4: connector activity ───────────────────────────────────────
+
+export async function getConnectorActivity(connectorId: string) {
+  return request<ConnectorActivityResponse>(
+    `/me/local-connectors/${encodeURIComponent(connectorId)}/activity`,
+  );
+}
+
+export async function listActiveConnectors(projectId: string) {
+  return request<ActiveConnectorEntry[]>(
+    `/projects/${encodeURIComponent(projectId)}/active-connectors`,
+  );
+}
+
+export function connectorActivityStreamURL(connectorId: string): string {
+  return `${BASE_URL}/me/local-connectors/${encodeURIComponent(connectorId)}/activity-stream`;
 }
 

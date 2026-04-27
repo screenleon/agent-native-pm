@@ -41,8 +41,9 @@ Violation = hard stop regardless of execution mode.
 ## Scope control
 
 - Do not expand the task beyond the requested outcome without stating why
-- If a task is ambiguous, reduce ambiguity through planning first
+- If a task is ambiguous, reduce ambiguity through planning first. If two reasonable interpretations exist, present both and ask — do not silently pick one. State what would break if an assumption is wrong.
 - Keep fixes local unless broader change is necessary for correctness
+- Touch only what the task requires. Do not clean up pre-existing dead code, style issues, or unbroken logic unless cleanup is the explicit goal (→ GLOBAL-010)
 - Apply Scrum-first order: backlog definition and prioritization must happen before implementation
 - Do not treat post-implementation requirement backfill as an acceptable workflow
 
@@ -68,6 +69,7 @@ After every code change:
 2. Run `make lint`
 3. Fix failures before marking complete
 4. Never skip or delete failing tests to make the suite pass
+5. **Bug fixes**: write a failing reproduction test first, confirm it reproduces the issue, then fix and verify the test passes. Do not write the fix before the test exists (→ GLOBAL-011)
 
 ## Pre-PR verification (mandatory before `gh pr create`)
 
@@ -176,3 +178,77 @@ make lint          # Run backend go vet and frontend lint
 cd frontend && npm run build  # Validate frontend production build
 make dev           # Start development server with hot reload
 ```
+
+---
+
+## Role-dispatch safety + visibility model
+
+Added in Phase 6c. Governs how roles are assigned, validated, and monitored during task dispatch.
+
+### L0 — subprocess safety boundary (Phase 6c PR-1)
+
+Applied inside `invokeBuiltinCLI` for every CLI invocation:
+
+| Constraint | Default | Override env var |
+|---|---|---|
+| Wall-clock timeout | per-role `DefaultTimeoutSec` | `ANPM_DISPATCH_TIMEOUT` (0 = disabled) |
+| Output cap | 5 MB | `ANPM_DISPATCH_MAX_OUTPUT_BYTES` (0 = disabled) |
+| Result schema validation | strict | not configurable |
+| SIGTERM → SIGKILL escalation | 5s | not configurable |
+
+**L0 is unconditional** — it applies to all CLI invocations regardless of role or connector. Operators can increase limits via env vars but cannot disable them in production without modifying source.
+
+**L1 (process-level jail)** and **L2 (container/VM isolation)** are deferred to Phase 6d / Phase 7.
+
+### L1 trigger conditions (Phase 6d)
+
+L1 activates when any of the following occur:
+- A connector executes external code from an untrusted source (non-catalog adapter).
+- Multi-tenancy is introduced (multiple users sharing a server).
+- A Phase 6d dogfood run shows L0 is being consistently bypassed.
+
+### L2 trigger conditions (Phase 7)
+
+L2 activates when:
+- The system accepts tasks from untrusted external repositories.
+- Compliance or legal requirements mandate isolation.
+
+### Catalog enforcement points
+
+`roles.IsKnown(roleID)` is checked at four points:
+
+1. **PATCH /api/backlog-candidates/:id** — when `execution_role` is set via the editor.
+2. **POST /api/backlog-candidates/:id/apply** — when mode=role_dispatch; missing role → 400.
+3. **POST /api/connector/claim-next-task** — when the task source includes a role suffix; stale role → `MarkTaskRoleNotFound` → `dispatch_status=failed`.
+4. **`invokeBuiltinCLI`** — checks `prompts.Exists(roleID)` before spawning subprocess.
+
+Empty role suffix (`role_dispatch:` without a role id) is treated as `error_kind=role_dispatch_malformed` at points 3 and 4.
+
+### Actor audit (Phase 6c PR-2)
+
+Every `execution_role` change is recorded in `actor_audit` with:
+- `actor_kind`: `user` (session), `api_key` (automation), `system` (claim-time enforcement), `connector` (connector-reported).
+- `actor_kind=router` is reserved for Phase 6d auto-apply; no code writes it in Phase 6c.
+- Audit rows are append-only; no cascade-delete with the subject row.
+
+### Activity SSE constraints (Phase 6c PR-4)
+
+| Constraint | Value | Notes |
+|---|---|---|
+| Heartbeat interval | 30s | SSE keepalive comment |
+| Stale threshold | 90s | 3× heartbeat; frontend dims badge |
+| Polling fallback interval | 15s | kicks in when SSE fails |
+| Coalesce window | 500ms | same-phase step changes merged by connector |
+| Phase changes | always enqueued | phase changes never coalesced |
+| Concurrent SSE per user | ≤ 3 (planned) | deferred to Phase 6d rate limiting |
+| Activity history | latest snapshot only | full history deferred to Phase 6d |
+
+**Activity is operational telemetry**, not an authoring lifecycle event. It is never written to `actor_audit`. The server persists only the latest snapshot per connector to `local_connectors.current_activity_json`.
+
+### Advisory router constraints (Phase 6c PR-3)
+
+- `POST /api/backlog-candidates/:id/suggest-role` is advisory-only; it never persists a result.
+- The operator must explicitly confirm the suggestion before it is saved (UI-008).
+- Router errors (`dispatch_timeout`, `output_too_large`, `invalid_result_schema`) surface in the suggest response body, not as 4xx/5xx HTTP errors (API-008).
+- `router_no_match` is a valid outcome when the dispatcher prompt returns `role_id = "no_match"`.
+- Auto-apply mode (`role_dispatch_auto`) is deferred to Phase 6d.

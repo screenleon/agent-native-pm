@@ -18,6 +18,46 @@ const (
 	ConnectorPairingStatusCancelled = "cancelled"
 )
 
+// Phase constants for ConnectorActivity — reported by the connector to
+// indicate its current execution phase. The server echoes these in the
+// activity response and SSE stream.
+const (
+	ConnectorPhaseIdle         = "idle"
+	ConnectorPhaseClaimingRun  = "claiming_run"
+	ConnectorPhasePlanning     = "planning"
+	ConnectorPhaseClaimingTask = "claiming_task"
+	ConnectorPhaseDispatching  = "dispatching"
+	ConnectorPhaseSubmitting   = "submitting"
+)
+
+// ConnectorActivity represents the current execution phase of a connector.
+type ConnectorActivity struct {
+	Phase        string    `json:"phase"`
+	SubjectKind  string    `json:"subject_kind,omitempty"`
+	SubjectID    string    `json:"subject_id,omitempty"`
+	SubjectTitle string    `json:"subject_title,omitempty"`
+	RoleID       string    `json:"role_id,omitempty"`
+	Step         string    `json:"step,omitempty"`
+	StartedAt    time.Time `json:"started_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// ConnectorActivityResponse is the HTTP response for GET /activity.
+type ConnectorActivityResponse struct {
+	Activity   *ConnectorActivity `json:"activity"`
+	Online     bool               `json:"online"`
+	AgeSeconds int                `json:"age_seconds"`
+}
+
+// ActiveConnectorEntry is one entry in the GET /projects/:id/active-connectors response.
+type ActiveConnectorEntry struct {
+	ConnectorID string             `json:"connector_id"`
+	Label       string             `json:"label"`
+	Activity    *ConnectorActivity `json:"activity"`
+	Online      bool               `json:"online"`
+	AgeSeconds  int                `json:"age_seconds"`
+}
+
 
 type LocalConnector struct {
 	ID            string                 `json:"id"`

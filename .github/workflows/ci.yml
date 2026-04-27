@@ -11,8 +11,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Detects which path groups changed so downstream jobs can be skipped.
+  # On direct pushes to main every job always runs (full validation before merge).
+  detect-changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      governance: ${{ steps.filter.outputs.governance }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+            governance:
+              - 'rules/**'
+              - 'docs/**'
+              - 'scripts/**'
+              - 'prompt-budget.yml'
+              - 'AGENTS.md'
+
   governance:
     name: Governance lints
+    needs: detect-changes
+    # Always run on push to main; on PRs only when governance files changed.
+    if: github.event_name == 'push' || needs.detect-changes.outputs.governance == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,6 +54,8 @@ jobs:
 
   frontend:
     name: Frontend (vitest + eslint + build)
+    needs: detect-changes
+    if: github.event_name == 'push' || needs.detect-changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -48,6 +79,8 @@ jobs:
 
   backend-sqlite:
     name: Backend (SQLite driver)
+    needs: detect-changes
+    if: github.event_name == 'push' || needs.detect-changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +97,8 @@ jobs:
 
   backend-postgres:
     name: Backend (PostgreSQL driver)
+    needs: detect-changes
+    if: github.event_name == 'push' || needs.detect-changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
