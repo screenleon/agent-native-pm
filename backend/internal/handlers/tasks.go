@@ -228,6 +228,20 @@ func (h *TaskHandler) RequeueDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := user.ID
 
+	// Check existence first so we can return 404 for unknown IDs rather than
+	// the ownership-conflict 409 that RequeueDispatchTask returns for any
+	// zero-row update (not-found, wrong state, wrong user are indistinguishable
+	// at the SQL level).
+	existing, err := h.store.GetByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to look up task")
+		return
+	}
+	if existing == nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
 	task, err := h.store.RequeueDispatchTask(id, userID)
 	if err != nil {
 		if errors.Is(err, store.ErrDispatchOwnership) {

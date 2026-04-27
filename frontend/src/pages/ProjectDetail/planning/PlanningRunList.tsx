@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { PlanningProviderOptions, PlanningRun } from '../../../types'
 import { formatDateTime, formatRelativeTime } from '../../../utils/formatters'
-import { ConnectorActivityBadge } from '../../../components/ConnectorActivityBadge'
+import { ConnectorActivityBadge } from './ConnectorActivityBadge'
 import { PlanningRunContextDrawer } from './PlanningRunContextDrawer'
 import {
   makeModelLabeler,

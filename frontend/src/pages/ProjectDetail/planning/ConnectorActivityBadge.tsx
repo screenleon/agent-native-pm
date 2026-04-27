@@ -1,5 +1,5 @@
-import type { ConnectorPhase } from '../types';
-import { useConnectorActivity, type ActivitySource } from '../hooks/useConnectorActivity';
+import type { ConnectorPhase } from '../../../types';
+import { useConnectorActivity, type ActivitySource } from '../../../hooks/useConnectorActivity';
 
 const PHASE_LABELS: Record<ConnectorPhase, string> = {
   idle: 'idle',

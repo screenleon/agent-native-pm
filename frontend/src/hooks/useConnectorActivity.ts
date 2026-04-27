@@ -1,11 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { ConnectorActivity } from '../types';
-import { getConnectorActivity, connectorActivityStreamURL } from '../api/client';
+import { getConnectorActivity } from '../api/client';
 
+// UI-007: EventSource must live only in App.tsx. Connector activity uses a
+// per-connector-ID stream that cannot be centralised in App.tsx without a
+// dedicated global-stream endpoint (Phase 8 TODO). Until then this hook uses
+// polling only. The 15s interval is acceptable for the dogfood use case.
 const STALE_MS = 90_000;
 const POLL_INTERVAL_MS = 15_000;
 
-export type ActivitySource = 'sse' | 'polling' | 'stale';
+export type ActivitySource = 'polling' | 'stale';
 
 export interface ConnectorActivityState {
   activity: ConnectorActivity | null;
@@ -13,74 +17,34 @@ export interface ConnectorActivityState {
   source: ActivitySource;
 }
 
-// useConnectorActivity subscribes to connector activity via SSE and degrades
-// to polling only when SSE fails. Both transports run simultaneously only for
-// the initial fetch; after that, polling is suppressed while SSE is healthy.
-// DECISIONS.md 2026-04-25 §(g): "auto-degrades SSE → polling → stale".
 export function useConnectorActivity(connectorId: string | null): ConnectorActivityState {
   const [state, setState] = useState<ConnectorActivityState>({
     activity: null,
     online: false,
     source: 'polling',
   });
-  const sseActiveRef = useRef(false);
   const lastUpdateRef = useRef<number>(0);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const esRef = useRef<EventSource | null>(null);
-
-  const applyResponse = useCallback((activity: ConnectorActivity | null, online: boolean, src: ActivitySource) => {
-    lastUpdateRef.current = Date.now();
-    setState({ activity, online, source: src });
-  }, []);
 
   const poll = useCallback(async () => {
     if (!connectorId) return;
     try {
       const res = await getConnectorActivity(connectorId);
       const src: ActivitySource =
-        sseActiveRef.current ? 'sse' :
         Date.now() - lastUpdateRef.current > STALE_MS ? 'stale' : 'polling';
-      applyResponse(res.data.activity, res.data.online, src);
+      lastUpdateRef.current = Date.now();
+      setState({ activity: res.data.activity, online: res.data.online, source: src });
     } catch {
       // ignore transient errors
     }
-  }, [connectorId, applyResponse]);
-
-  const startPolling = useCallback(() => {
-    if (pollTimerRef.current) return; // already running
-    pollTimerRef.current = setInterval(poll, POLL_INTERVAL_MS);
-  }, [poll]);
+  }, [connectorId]);
 
   useEffect(() => {
     if (!connectorId) return;
 
-    // Initial fetch so the UI is not blank while SSE connects.
     poll();
+    pollTimerRef.current = setInterval(poll, POLL_INTERVAL_MS);
 
-    // Try SSE first. Only fall back to interval polling if it errors.
-    let cancelled = false;
-    const url = connectorActivityStreamURL(connectorId);
-    const es = new EventSource(url, { withCredentials: true });
-    esRef.current = es;
-
-    es.addEventListener('activity', (e: MessageEvent) => {
-      if (cancelled) return;
-      try {
-        const data = JSON.parse(e.data) as { activity: ConnectorActivity | null; online: boolean };
-        sseActiveRef.current = true;
-        applyResponse(data.activity, data.online, 'sse');
-      } catch { /* malformed */ }
-    });
-
-    es.onerror = () => {
-      sseActiveRef.current = false;
-      es.close();
-      // SSE failed — start polling as fallback.
-      if (!cancelled) startPolling();
-    };
-
-    // Stale detection: if neither SSE nor polling have delivered an update
-    // recently, mark the source as stale.
     const staleTimer = setInterval(() => {
       if (Date.now() - lastUpdateRef.current > STALE_MS) {
         setState(prev => ({ ...prev, source: 'stale' }));
@@ -88,17 +52,13 @@ export function useConnectorActivity(connectorId: string | null): ConnectorActiv
     }, 10_000);
 
     return () => {
-      cancelled = true;
-      sseActiveRef.current = false;
-      es.close();
-      esRef.current = null;
       if (pollTimerRef.current) {
         clearInterval(pollTimerRef.current);
         pollTimerRef.current = null;
       }
       clearInterval(staleTimer);
     };
-  }, [connectorId, poll, applyResponse, startPolling]);
+  }, [connectorId, poll]);
 
   return state;
 }
