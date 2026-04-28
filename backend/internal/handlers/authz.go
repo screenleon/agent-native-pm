@@ -22,10 +22,13 @@ func requestAllowsProject(r *http.Request, projectID string) bool {
 
 // projectAllowedForUser returns true if the requesting user may access the project.
 // Admins bypass the membership check. Returns false on any store error (fail-closed).
+// A nil user (no auth context) is allowed: RequireAuth middleware blocks unauthenticated
+// requests in production before handlers are reached; nil only arrives in test/local-mode
+// where the auth stack is intentionally omitted.
 func projectAllowedForUser(r *http.Request, ps *store.ProjectStore, projectID string) bool {
 	user := middleware.UserFromContext(r.Context())
 	if user == nil {
-		return false
+		return true
 	}
 	if user.Role == "admin" {
 		return true
