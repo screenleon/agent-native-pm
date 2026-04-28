@@ -14,10 +14,6 @@ import (
 	"github.com/screenleon/agent-native-pm/internal/store"
 )
 
-// connectorOnlineWindow is how recently a connector must have been seen
-// for it to be considered "online". Mirrors LocalConnectorLivenessWindow
-// from the store package (90 seconds = 3x the 30s heartbeat interval).
-const connectorOnlineWindow = 90 * time.Second
 
 // ConnectorActivityHandler handles Phase 6c PR-4 connector activity endpoints.
 type ConnectorActivityHandler struct {
@@ -291,7 +287,7 @@ func isConnectorOnline(c *models.LocalConnector) bool {
 	if c == nil || c.LastSeenAt == nil {
 		return false
 	}
-	return time.Since(*c.LastSeenAt) <= connectorOnlineWindow
+	return time.Since(*c.LastSeenAt) <= store.LocalConnectorLivenessWindow
 }
 
 // sendActivityEvent writes a named SSE event containing the activity and
