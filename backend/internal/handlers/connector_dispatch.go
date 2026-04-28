@@ -153,10 +153,7 @@ func (h *LocalConnectorHandler) SubmitTaskResult(w http.ResponseWriter, r *http.
 		if errMsg == "" {
 			errMsg = "execution failed"
 		}
-		if errorKind != "" && errorKind != models.ErrorKindUnknown {
-			errMsg = errMsg + " [" + errorKind + "]"
-		}
-		if err := h.taskStore.FailDispatchTask(taskID, connector.UserID, errMsg); err != nil {
+		if err := h.taskStore.FailDispatchTask(taskID, connector.UserID, errMsg, errorKind); err != nil {
 			if errors.Is(err, store.ErrDispatchOwnership) {
 				writeError(w, http.StatusForbidden, "connector does not own this task")
 				return

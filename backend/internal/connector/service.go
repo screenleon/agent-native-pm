@@ -75,6 +75,13 @@ type knownCliBinding struct {
 	lastProbedAt time.Time
 }
 
+// reportPhase is a nil-safe wrapper around ActivityReporter.Report.
+func (s *Service) reportPhase(a models.ConnectorActivity) {
+	if s.ActivityReporter != nil {
+		s.ActivityReporter.Report(a)
+	}
+}
+
 func (s *Service) Run(ctx context.Context) error {
 	if s == nil || s.Client == nil || s.State == nil {
 		return fmt.Errorf("connector service requires client and state")
@@ -269,7 +276,7 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
 			Success:      false,
 			ErrorMessage: resolveErr,
-			ErrorKind:    "adapter_timeout",
+			ErrorKind:    models.ErrorKindCliNotFound,
 		}); err != nil {
 			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
 		}
@@ -297,7 +304,7 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 		if err := s.Client.SubmitTaskResult(ctx, task.ID, SubmitTaskResultRequest{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("prompt render error: %v", renderErr),
-			ErrorKind:    "unknown",
+			ErrorKind:    models.ErrorKindUnknown,
 		}); err != nil {
 			fmt.Fprintf(s.Stderr, "task %s: submit result failed: %v\n", task.ID, err)
 		}
@@ -464,25 +471,9 @@ func (s *Service) RunOnceTask(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// classifyDispatchRunError maps invokeBuiltinCLI error strings to the
-// dispatch-specific error_kind enum. Differs from classifyRunError
-// (used by planning runs) in that timeouts map to dispatch_timeout
-// rather than the generic adapter_timeout.
-func classifyDispatchRunError(msg string) string {
-	lower := strings.ToLower(msg)
-	switch {
-	case strings.Contains(lower, "timed out"):
-		return models.ErrorKindDispatchTimeout
-	case strings.Contains(lower, "session") && strings.Contains(lower, "expired"):
-		return models.ErrorKindSessionExpired
-	case strings.Contains(lower, "rate limit"):
-		return models.ErrorKindRateLimited
-	case strings.Contains(lower, "context") && strings.Contains(lower, "overflow"):
-		return models.ErrorKindContextOverflow
-	default:
-		return models.ErrorKindUnknown
-	}
-}
+// classifyDispatchRunError maps error strings to dispatch-specific error_kind values.
+// Timeouts are dispatch_timeout (not the generic adapter_timeout used by planning runs).
+func classifyDispatchRunError(msg string) string { return classifyError(msg, true) }
 
 // buildConnectorRequirementContext formats the requirement summary for prompt injection.
 func buildConnectorRequirementContext(req *ConnectorRequirementSummary) string {
@@ -507,6 +498,9 @@ func buildConnectorRequirementContext(req *ConnectorRequirementSummary) string {
 //
 // Safety: any path that is absolute or that resolves to a location outside the
 // repo root (starts with "..") is rejected.
+const applyMaxFiles = 50
+const applyMaxFileBytes = 1 << 20 // 1 MiB per file
+
 func applyExecutionResultFiles(repoPath string, payload map[string]json.RawMessage, stderr io.Writer) (applied int) {
 	repoPath = strings.TrimSpace(repoPath)
 	// Require an absolute path to prevent writes to unintended locations if a
@@ -515,6 +509,12 @@ func applyExecutionResultFiles(repoPath string, payload map[string]json.RawMessa
 		if repoPath != "" {
 			fmt.Fprintf(stderr, "apply files: rejected non-absolute repo_path %q\n", repoPath)
 		}
+		return 0
+	}
+	// Resolve symlinks in repoPath itself so containment checks are accurate.
+	resolvedRepo, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "apply files: cannot resolve repo_path %q: %v\n", repoPath, err)
 		return 0
 	}
 	rawFiles, ok := payload["files"]
@@ -530,7 +530,15 @@ func applyExecutionResultFiles(repoPath string, payload map[string]json.RawMessa
 		fmt.Fprintf(stderr, "apply files: unmarshal error: %v\n", err)
 		return 0
 	}
-	for _, f := range files {
+	for i, f := range files {
+		if i >= applyMaxFiles {
+			fmt.Fprintf(stderr, "apply files: file count limit (%d) reached, skipping remaining\n", applyMaxFiles)
+			break
+		}
+		if len(f.Contents) > applyMaxFileBytes {
+			fmt.Fprintf(stderr, "apply files: skipping %q — content exceeds %d bytes\n", f.Path, applyMaxFileBytes)
+			continue
+		}
 		relPath := filepath.Clean(f.Path)
 		// Safety: reject paths that escape the repo root or are absolute.
 		if filepath.IsAbs(relPath) || strings.HasPrefix(relPath, "..") {
@@ -538,6 +546,12 @@ func applyExecutionResultFiles(repoPath string, payload map[string]json.RawMessa
 			continue
 		}
 		dest := filepath.Join(repoPath, relPath)
+		// Symlink protection: resolve the deepest existing ancestor and verify it
+		// is still within resolvedRepo, preventing writes via in-repo symlinks.
+		if !pathContainedInRepo(dest, resolvedRepo) {
+			fmt.Fprintf(stderr, "apply files: rejected symlink escape at %q\n", f.Path)
+			continue
+		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 			fmt.Fprintf(stderr, "apply files: mkdir %q: %v\n", filepath.Dir(dest), err)
 			continue
@@ -549,6 +563,28 @@ func applyExecutionResultFiles(repoPath string, payload map[string]json.RawMessa
 		applied++
 	}
 	return applied
+}
+
+// pathContainedInRepo resolves the deepest existing ancestor of dest and
+// confirms it is a descendant of resolvedRepo. This catches symlink traversal
+// attacks where an intermediate path component is a symlink pointing outside
+// the repository root. Returns true when no existing ancestor is found (the
+// full path is being freshly created, so there is nothing to traverse).
+func pathContainedInRepo(dest, resolvedRepo string) bool {
+	rooted := resolvedRepo + string(filepath.Separator)
+	check := filepath.Dir(dest)
+	for {
+		resolved, err := filepath.EvalSymlinks(check)
+		if err == nil {
+			return resolved == resolvedRepo ||
+				strings.HasPrefix(resolved+string(filepath.Separator), rooted)
+		}
+		parent := filepath.Dir(check)
+		if parent == check {
+			return true // reached filesystem root with no existing ancestor — safe
+		}
+		check = parent
+	}
 }
 
 // resolveAgentFromBinary infers the agent name from the binary path.
@@ -565,19 +601,27 @@ func resolveAgentFromBinary(binary string) string {
 }
 
 // classifyRunError maps common error substrings to error_kind values.
-func classifyRunError(msg string) string {
+// Planning runs use adapter_timeout for timeouts; dispatch runs use dispatch_timeout.
+func classifyRunError(msg string) string { return classifyError(msg, false) }
+
+// classifyError is the shared implementation. When forDispatch is true,
+// "timed out" maps to ErrorKindDispatchTimeout instead of ErrorKindAdapterTimeout.
+func classifyError(msg string, forDispatch bool) string {
 	lower := strings.ToLower(msg)
 	switch {
-	case strings.Contains(lower, "session") && strings.Contains(lower, "expired"):
-		return "session_expired"
-	case strings.Contains(lower, "rate limit"):
-		return "rate_limited"
-	case strings.Contains(lower, "context") && strings.Contains(lower, "overflow"):
-		return "context_overflow"
 	case strings.Contains(lower, "timed out"):
-		return "adapter_timeout"
+		if forDispatch {
+			return models.ErrorKindDispatchTimeout
+		}
+		return models.ErrorKindAdapterTimeout
+	case strings.Contains(lower, "session") && strings.Contains(lower, "expired"):
+		return models.ErrorKindSessionExpired
+	case strings.Contains(lower, "rate limit"):
+		return models.ErrorKindRateLimited
+	case strings.Contains(lower, "context") && strings.Contains(lower, "overflow"):
+		return models.ErrorKindContextOverflow
 	default:
-		return "unknown"
+		return models.ErrorKindUnknown
 	}
 }
 
