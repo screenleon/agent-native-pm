@@ -65,6 +65,10 @@ func (h *TaskHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
+	if !projectAllowedForUser(r, h.projectStore, task.ProjectID) {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
 	writeSuccess(w, http.StatusOK, task, nil)
 }
 
@@ -110,6 +114,20 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+
+	existing, err := h.store.GetByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get task")
+		return
+	}
+	if existing == nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if !projectAllowedForUser(r, h.projectStore, existing.ProjectID) {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
 
 	var req models.UpdateTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -203,6 +221,10 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if existing == nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if !projectAllowedForUser(r, h.projectStore, existing.ProjectID) {
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
