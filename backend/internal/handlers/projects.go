@@ -20,7 +20,18 @@ func NewProjectHandler(s *store.ProjectStore, rms *store.ProjectRepoMappingStore
 }
 
 func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) {
-	projects, err := h.store.List()
+	user := middleware.UserFromContext(r.Context())
+	var (
+		projects []models.Project
+		err      error
+	)
+	if user != nil && user.Role == "admin" {
+		projects, err = h.store.List()
+	} else if user != nil {
+		projects, err = h.store.ListForUser(user.ID)
+	} else {
+		projects, err = h.store.List()
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list projects")
 		return
@@ -39,6 +50,10 @@ func (h *ProjectHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if project == nil {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if !projectAllowedForUser(r, h.store, project.ID) {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
@@ -96,10 +111,22 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
+	if !projectAllowedForUser(r, h.store, id) {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
 	var req models.UpdateProjectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+
+	if req.RepoPath != nil {
+		if err := validateRepoPath(*req.RepoPath); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	project, err := h.store.Update(id, req)
@@ -117,12 +144,7 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	existing, err := h.store.GetByID(id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check project")
-		return
-	}
-	if existing == nil {
+	if !projectAllowedForUser(r, h.store, id) {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}

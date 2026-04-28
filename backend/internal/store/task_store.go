@@ -608,20 +608,23 @@ func getRequirementForTask(tx *sql.Tx, taskID string) (*models.Requirement, erro
 // The connectorUserID parameter ensures cross-user protection via the project
 // ownership check.
 func (s *TaskStore) CompleteDispatchTask(taskID, connectorUserID string, result json.RawMessage) error {
-	return s.updateDispatchStatus(taskID, connectorUserID, models.TaskDispatchStatusCompleted, "", result)
+	return s.updateDispatchStatus(taskID, connectorUserID, models.TaskDispatchStatusCompleted, result)
 }
 
-// FailDispatchTask marks a task as failed and records an error message in the
-// result JSON.
-func (s *TaskStore) FailDispatchTask(taskID, connectorUserID, errorMsg string) error {
+// FailDispatchTask marks a task as failed and records the error message and kind
+// in the result JSON so the frontend can surface structured remediation hints.
+func (s *TaskStore) FailDispatchTask(taskID, connectorUserID, errorMsg, errorKind string) error {
+	if errorKind == "" {
+		errorKind = models.ErrorKindUnknown
+	}
 	errJSON, _ := json.Marshal(map[string]string{
 		"error_message": errorMsg,
-		"error_kind":    "dispatch_failed",
+		"error_kind":    errorKind,
 	})
-	return s.updateDispatchStatus(taskID, connectorUserID, models.TaskDispatchStatusFailed, "", json.RawMessage(errJSON))
+	return s.updateDispatchStatus(taskID, connectorUserID, models.TaskDispatchStatusFailed, json.RawMessage(errJSON))
 }
 
-func (s *TaskStore) updateDispatchStatus(taskID, connectorUserID, status, _ string, result json.RawMessage) error {
+func (s *TaskStore) updateDispatchStatus(taskID, connectorUserID, status string, result json.RawMessage) error {
 	now := time.Now().UTC()
 	var resultStr *string
 	if len(result) > 0 {

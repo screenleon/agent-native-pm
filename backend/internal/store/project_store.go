@@ -157,6 +157,42 @@ func (s *ProjectStore) Delete(id string) error {
 	return err
 }
 
+// ListForUser returns projects the given user is a member of.
+func (s *ProjectStore) ListForUser(userID string) ([]models.Project, error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT p.id, p.name, p.description, p.repo_url, p.repo_path,
+		       p.default_branch, p.last_sync_at, p.created_at, p.updated_at
+		FROM projects p
+		INNER JOIN project_members pm ON pm.project_id = p.id
+		WHERE pm.user_id = $1
+		ORDER BY p.created_at DESC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var projects []models.Project
+	for rows.Next() {
+		var p models.Project
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.RepoURL, &p.RepoPath, &p.DefaultBranch, &p.LastSyncAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		projects = append(projects, p)
+	}
+	return projects, rows.Err()
+}
+
+// IsUserMember reports whether the given user is a member of the project.
+func (s *ProjectStore) IsUserMember(projectID, userID string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM project_members WHERE project_id = $1 AND user_id = $2`,
+		projectID, userID,
+	).Scan(&count)
+	return count > 0, err
+}
+
 func (s *ProjectStore) Count() (int, error) {
 	var count int
 	err := s.db.QueryRow("SELECT COUNT(*) FROM projects").Scan(&count)

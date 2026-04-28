@@ -62,6 +62,7 @@ func New(deps Deps) http.Handler {
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
 	r.Use(cors.Handler(buildCORSOptions(deps.CORSAllowedOrigins)))
+	r.Use(securityHeaders)
 
 	// Local mode: inject synthetic admin before normal auth middlewares.
 	if deps.LocalModeMiddleware != nil {
@@ -279,6 +280,17 @@ func New(deps Deps) http.Handler {
 	}
 
 	return r
+}
+
+// securityHeaders adds standard defensive HTTP headers to every response.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // buildCORSOptions returns a CORS configuration based on the supplied
