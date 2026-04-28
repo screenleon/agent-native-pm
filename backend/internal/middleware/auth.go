@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -150,5 +151,6 @@ func extractToken(r *http.Request) string {
 func writeError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_, _ = w.Write([]byte(`{"data":null,"error":"` + msg + `","meta":{}}`))
+	escaped, _ := json.Marshal(msg)
+	_, _ = w.Write([]byte(`{"data":null,"error":` + string(escaped) + `,"meta":{}}`))
 }
