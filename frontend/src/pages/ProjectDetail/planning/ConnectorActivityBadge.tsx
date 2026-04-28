@@ -39,14 +39,16 @@ export function ConnectorActivityBadge({ connectorId, variant = 'standard', labe
   const color = online ? phaseColor(phase) : '#888';
   const stale = source === 'stale';
 
+  const phaseLabel = PHASE_LABELS[phase] ?? phase;
+
   if (variant === 'compact') {
     return (
       <span
         className="connector-activity-badge compact"
         style={{ color, opacity: stale ? 0.6 : 1, fontSize: '0.75rem' }}
-        title={`${label ?? connectorId}: ${PHASE_LABELS[phase]}${sourceSuffix(source)}`}
+        title={`${label ?? connectorId}: ${phaseLabel}${sourceSuffix(source)}`}
       >
-        ● {PHASE_LABELS[phase]}
+        ● {phaseLabel}
       </span>
     );
   }
@@ -56,7 +58,7 @@ export function ConnectorActivityBadge({ connectorId, variant = 'standard', labe
       <div className="connector-activity-badge full" style={{ opacity: stale ? 0.6 : 1 }}>
         <span className="connector-activity-dot" style={{ color }}>●</span>
         <span className="connector-activity-label">{label ?? connectorId}</span>
-        <span className="connector-activity-phase" style={{ color }}>{PHASE_LABELS[phase]}</span>
+        <span className="connector-activity-phase" style={{ color }}>{phaseLabel}</span>
         {activity?.subject_title && (
           <span className="connector-activity-subject" title={activity.subject_id}>
             {activity.subject_title}
@@ -77,7 +79,7 @@ export function ConnectorActivityBadge({ connectorId, variant = 'standard', labe
       style={{ color, opacity: stale ? 0.6 : 1, fontSize: '0.8rem' }}
     >
       <span style={{ marginRight: '0.25em' }}>●</span>
-      {PHASE_LABELS[phase]}
+      {phaseLabel}
       {activity?.subject_title && ` — ${activity.subject_title}`}
       {stale && <span style={{ color: '#888', marginLeft: '0.25em' }}>(stale)</span>}
     </span>

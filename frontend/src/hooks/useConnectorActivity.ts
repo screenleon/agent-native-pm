@@ -23,7 +23,7 @@ export function useConnectorActivity(connectorId: string | null): ConnectorActiv
     online: false,
     source: 'polling',
   });
-  const lastUpdateRef = useRef<number>(0);
+  const lastUpdateRef = useRef<number>(Date.now());
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const poll = useCallback(async () => {
