@@ -1,10 +1,11 @@
 :root {
-  --bg: #0f1117;
-  --bg-card: #1a1d27;
-  --bg-hover: #242736;
-  --border: #2d3044;
-  --text: #e4e4e7;
-  --text-muted: #9ca3af;
+  --bg: #0b0f17;
+  --bg-card: #141a24;
+  --bg-hover: #202938;
+  --border: #334155;
+  --text: #f8fafc;
+  --text-muted: #cbd5e1;
+  --text-subtle: #94a3b8;
   --primary: #6366f1;
   --primary-hover: #818cf8;
   --danger: #ef4444;
@@ -213,56 +214,76 @@ a:hover {
 
 /* Status badges */
 .badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 0.125rem 0.5rem;
   border-radius: 9999px;
   font-size: 0.75rem;
-  font-weight: 500;
+  font-weight: 600;
+  border: 1px solid transparent;
+  line-height: 1.35;
+  white-space: nowrap;
 }
 
 .badge-todo {
-  background: #374151;
-  color: #9ca3af;
+  background: #253044;
+  color: #e2e8f0;
+  border-color: #475569;
 }
 
 .badge-in_progress {
   background: #1e3a5f;
-  color: var(--info);
+  color: #bfdbfe;
+  border-color: #3b82f6;
 }
 
 .badge-done {
   background: #14532d;
-  color: var(--success);
+  color: #bbf7d0;
+  border-color: #22c55e;
 }
 
 .badge-cancelled {
   background: #451a1a;
-  color: #f87171;
+  color: #fecaca;
+  border-color: #ef4444;
 }
 
 .badge-low {
-  background: #374151;
-  color: #9ca3af;
+  background: #253044;
+  color: #e2e8f0;
+  border-color: #475569;
 }
 
 .badge-medium {
-  background: #422006;
-  color: var(--warning);
+  background: #51350b;
+  color: #fde68a;
+  border-color: #d97706;
 }
 
 .badge-high {
-  background: #451a1a;
-  color: #f87171;
+  background: #7f1d1d;
+  color: #fecaca;
+  border-color: #f87171;
+}
+
+.badge-urgent {
+  background: #881337;
+  color: #ffe4e6;
+  border-color: #fb7185;
 }
 
 .badge-stale {
-  background: #451a1a;
-  color: #f87171;
+  background: #7f1d1d;
+  color: #fecaca;
+  border-color: #ef4444;
 }
 
 .badge-fresh {
   background: #14532d;
-  color: var(--success);
+  color: #bbf7d0;
+  border-color: #22c55e;
 }
 
 /* Grid */
@@ -575,6 +596,115 @@ a:hover {
 .toolbar-control--wide {
   min-width: 12rem;
   flex: 1 1 12rem;
+}
+
+.backlog-focus-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.backlog-focus-item {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg-card);
+  padding: 0.8rem 0.9rem;
+}
+
+.backlog-focus-item span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.backlog-focus-item strong {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+.backlog-focus-item small {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--text-subtle);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.backlog-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.backlog-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg-card);
+  color: var(--text);
+  padding: 0.9rem 1rem;
+  transition: border-color 0.2s, background-color 0.2s, transform 0.2s;
+}
+
+.backlog-row:hover,
+.backlog-row:focus-visible {
+  border-color: var(--primary);
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.backlog-row:focus-visible {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.35);
+}
+
+.backlog-row-main {
+  min-width: 0;
+}
+
+.backlog-row-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.backlog-row-title strong {
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.backlog-row p {
+  margin: 0.45rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.backlog-row-meta {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 0.65rem;
+}
+
+.backlog-muted {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.backlog-row-action {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .planning-shell {
@@ -1042,6 +1172,15 @@ a:hover {
   .planning-candidate-review-layout {
     grid-template-columns: 1fr;
   }
+  .backlog-focus-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .backlog-row {
+    grid-template-columns: 1fr;
+  }
+  .backlog-row-action {
+    justify-content: flex-start;
+  }
   .table {
     min-width: 620px;
   }
@@ -1502,8 +1641,9 @@ a:hover {
   background: var(--bg-hover, rgba(255, 255, 255, 0.03));
 }
 .project-rail button.is-active {
-  background: var(--primary);
-  color: white;
+  background: #4f46e5;
+  color: #ffffff;
+  box-shadow: inset 3px 0 0 #c7d2fe;
 }
 .project-rail .rail-count {
   background: rgba(255, 255, 255, 0.18);
@@ -1514,8 +1654,9 @@ a:hover {
   text-align: center;
 }
 .project-rail button:not(.is-active) .rail-count {
-  background: var(--border);
-  color: var(--text-muted);
+  background: #1f2937;
+  border: 1px solid var(--border);
+  color: var(--text);
 }
 
 /* P4-2: Model Settings hub card grid. */

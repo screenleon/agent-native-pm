@@ -57,6 +57,10 @@ vi.mock('../api/client', () => ({
   listDocuments: vi.fn(() => Promise.resolve({ data: [] })),
   refreshDocumentSummary: vi.fn(() => Promise.resolve({ data: null })),
   discoverMirrorRepos: vi.fn(() => Promise.resolve({ data: { repos: [] } })),
+  listBacklogItems: vi.fn(() => Promise.resolve({ data: [] })),
+  createBacklogItem: vi.fn(() => Promise.resolve({ data: null })),
+  updateBacklogItem: vi.fn(() => Promise.resolve({ data: null })),
+  commitBacklogItemToTask: vi.fn(() => Promise.resolve({ data: null })),
   // PlanningTab + planning/ siblings call these; stub so they don't error.
   listPlanningRuns: vi.fn(() => Promise.resolve({ data: [] })),
   listBacklogCandidates: vi.fn(() => Promise.resolve({ data: [] })),
@@ -88,40 +92,37 @@ beforeEach(() => {
 })
 
 describe('<ProjectDetail /> P4-1 IA', () => {
-  // T-P4-1-1: primary rail contains exactly Workspace, Overview, Tasks,
-  // Documents — plus exactly one More ▾ button. This test codifies the
-  // 2026-04-24 DECISIONS.md entry "the primary rail's four tabs are a stable
-  // set" (N-2): a future PR that adds a fifth primary tab without amending
-  // DECISIONS will fail this count assertion in CI.
-  it('T-P4-1-1: primary rail exposes exactly 4 primary tabs + More ▾', async () => {
+  // Backlog is now the default command surface; planning/tasks/docs remain
+  // primary, while overview/drift/activity live behind More.
+  it('T-P4-1-1: primary rail exposes Backlog, Planning, Tasks, Documents + More ▾', async () => {
     renderAt('/projects/p1')
     await waitLoaded()
     const rail = screen.getByRole('navigation', { name: /Project sections/i })
 
-    // Exactly 5 buttons: 4 primary tabs + 1 More ▾ trigger. A new rail entry
-    // forces either updating this number (and DECISIONS.md) or routing it
-    // through the More popover instead.
+    // Exactly 5 buttons: 4 primary workflow tabs + 1 More ▾ trigger.
     const railButtons = within(rail).getAllByRole('button')
     expect(railButtons).toHaveLength(5)
 
-    expect(within(rail).getByRole('button', { name: /Workspace/ })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: /^Overview$/i })).toBeInTheDocument()
+    expect(within(rail).getByRole('button', { name: /Backlog/ })).toBeInTheDocument()
+    expect(within(rail).getByRole('button', { name: /Planning/ })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: /^Tasks/ })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: /^Documents/ })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: /More/i })).toBeInTheDocument()
-    // Drift + Activity must NOT be directly visible — they live in More ▾.
+    // Overview + Drift + Activity must NOT be directly visible — they live in More ▾.
+    expect(within(rail).queryByRole('button', { name: /^Overview$/i })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: /^Drift$/i })).not.toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: /^Activity$/i })).not.toBeInTheDocument()
     // Settings has moved to the gear icon in the page header.
     expect(within(rail).queryByRole('button', { name: /^Settings/i })).not.toBeInTheDocument()
   })
 
-  // T-P4-1-3: click "More ▾" → popover reveals Drift + Activity.
-  it('T-P4-1-3: More popover reveals Drift + Activity', async () => {
+  // T-P4-1-3: click "More ▾" → popover reveals Overview, Drift + Activity.
+  it('T-P4-1-3: More popover reveals Overview, Drift + Activity', async () => {
     renderAt('/projects/p1')
     await waitLoaded()
     await userEvent.click(screen.getByRole('button', { name: /More/i }))
     const menu = screen.getByRole('menu')
+    expect(within(menu).getByRole('menuitem', { name: /Overview/i })).toBeInTheDocument()
     expect(within(menu).getByRole('menuitem', { name: /Drift/i })).toBeInTheDocument()
     expect(within(menu).getByRole('menuitem', { name: /Activity/i })).toBeInTheDocument()
   })

@@ -34,8 +34,9 @@ import { DriftTab } from './ProjectDetail/DriftTab'
 import { AgentsTab } from './ProjectDetail/AgentsTab'
 import { SettingsTab } from './ProjectDetail/SettingsTab'
 import { PlanningTab } from './ProjectDetail/PlanningTab'
+import { BacklogTab } from './ProjectDetail/BacklogTab'
 
-type Tab = 'overview' | 'planning' | 'tasks' | 'documents' | 'drift' | 'agents' | 'settings'
+type Tab = 'backlog' | 'overview' | 'planning' | 'tasks' | 'documents' | 'drift' | 'agents' | 'settings'
 type TaskFilterState = { status: '' | Task['status']; priority: '' | Task['priority']; assignee: string }
 
 function ProjectDetail() {
@@ -48,22 +49,13 @@ function ProjectDetail() {
   const [syncRuns, setSyncRuns] = useState<SyncRun[]>([])
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([])
   const [driftSignals, setDriftSignals] = useState<DriftSignal[]>([])
-  // Per Phase 2 S5 / design-decision D1: the Planning Workspace is the
-  // per-project default landing surface (the operator's "what needs my
-  // review?" surface). Overview remains at its tab index for read-only
-  // status browsing.
-  //
-  // The initial tab is seeded from `?tab=<slug>` (if the value matches a
-  // known Tab slug) so deep links like `/projects/:id?tab=overview`
-  // continue to resolve to the expected surface; otherwise the default
-  // is the Workspace. Clicks on the project rail keep the URL in sync
-  // via setTabAndSync so the browser back/forward buttons land on the
-  // correct tab.
+  // Backlog is the per-project default working surface. Deep links still
+  // resolve when `?tab=<slug>` matches a known tab.
   const [searchParams, setSearchParams] = useSearchParams()
   const initialTab: Tab = (() => {
     const raw = searchParams.get('tab') as Tab | null
-    const known: Tab[] = ['overview', 'planning', 'tasks', 'documents', 'drift', 'agents', 'settings']
-    return raw && known.includes(raw) ? raw : 'planning'
+    const known: Tab[] = ['backlog', 'overview', 'planning', 'tasks', 'documents', 'drift', 'agents', 'settings']
+    return raw && known.includes(raw) ? raw : 'backlog'
   })()
   const [tab, setTabState] = useState<Tab>(initialTab)
   const setTab = (next: Tab) => {
@@ -578,12 +570,12 @@ function ProjectDetail() {
 
       <div className="project-rail-layout">
         <nav className="project-rail" aria-label="Project sections">
-          <button className={tab === 'planning' ? 'is-active' : ''} onClick={() => setTab('planning')}>
-            <span>Workspace</span>
-            <span className="rail-count">{requirements.length}</span>
+          <button className={tab === 'backlog' ? 'is-active' : ''} onClick={() => setTab('backlog')}>
+            <span>Backlog</span>
           </button>
-          <button className={tab === 'overview' ? 'is-active' : ''} onClick={() => setTab('overview')}>
-            <span>Overview</span>
+          <button className={tab === 'planning' ? 'is-active' : ''} onClick={() => setTab('planning')}>
+            <span>Planning</span>
+            <span className="rail-count">{requirements.length}</span>
           </button>
           <button className={tab === 'tasks' ? 'is-active' : ''} onClick={() => setTab('tasks')}>
             <span>Tasks</span>
@@ -596,7 +588,7 @@ function ProjectDetail() {
           <div className="project-rail-more" ref={moreMenuRef} style={{ position: 'relative' }}>
             <button
               type="button"
-              className={(tab === 'drift' || tab === 'agents') ? 'is-active' : ''}
+              className={(tab === 'overview' || tab === 'drift' || tab === 'agents') ? 'is-active' : ''}
               aria-expanded={showMoreMenu}
               aria-haspopup="menu"
               onClick={() => setShowMoreMenu(v => !v)}
@@ -610,6 +602,14 @@ function ProjectDetail() {
             </button>
             {showMoreMenu && (
               <div role="menu" className="project-rail-more-menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={tab === 'overview' ? 'is-active' : ''}
+                  onClick={() => { setTab('overview'); setShowMoreMenu(false) }}
+                >
+                  <span>Overview</span>
+                </button>
                 <button
                   type="button"
                   role="menuitem"
@@ -633,6 +633,15 @@ function ProjectDetail() {
           </div>
         </nav>
         <div className="project-rail-content">
+          {tab === 'backlog' && (
+            <BacklogTab
+              projectId={id!}
+              onReload={loadData}
+              onError={setError}
+              onSuccess={setSuccessMessage}
+              onNavigateToTasks={() => setTab('tasks')}
+            />
+          )}
 
           {tab === 'overview' && (
             <ProjectOverviewTab

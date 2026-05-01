@@ -314,6 +314,7 @@ export function TasksTab({
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
+              <option value="urgent">Urgent</option>
             </select>
             <input
               className="toolbar-control toolbar-control--wide"
@@ -355,6 +356,7 @@ export function TasksTab({
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
+              <option value="urgent">Urgent</option>
             </select>
             <input
               className="toolbar-control toolbar-control--wide"
@@ -395,6 +397,7 @@ export function TasksTab({
                   <option value="low">Low</option>
                   <option value="medium">Medium</option>
                   <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
                 </select>
               </div>
               <div className="form-group">
@@ -438,6 +441,7 @@ export function TasksTab({
                   <option value="low">Low</option>
                   <option value="medium">Medium</option>
                   <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
                 </select>
               </div>
               <div className="form-group">

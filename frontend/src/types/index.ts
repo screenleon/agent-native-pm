@@ -54,7 +54,7 @@ export interface Task {
   title: string;
   description: string;
   status: 'todo' | 'in_progress' | 'done' | 'cancelled';
-  priority: 'low' | 'medium' | 'high';
+  priority: 'low' | 'medium' | 'high' | 'urgent';
   assignee: string;
   source: string;
   /** Phase 6b — connector execution lifecycle status. */
@@ -63,6 +63,62 @@ export interface Task {
   execution_result?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface BacklogItem {
+  id: string;
+  project_id: string;
+  requirement_id?: string;
+  planning_run_id?: string;
+  backlog_candidate_id?: string;
+  task_id?: string;
+  title: string;
+  description: string;
+  status: 'triage' | 'ready' | 'committed' | 'blocked' | 'archived';
+  priority: Task['priority'];
+  source: 'human' | 'planning_run' | 'backlog_candidate' | 'connector';
+  rank: number;
+  labels: string[];
+  acceptance_criteria: string;
+  blocked_reason: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CreateBacklogItemPayload = {
+  title: string;
+  description?: string;
+  status?: BacklogItem['status'];
+  priority?: BacklogItem['priority'];
+  source?: BacklogItem['source'];
+  rank?: number;
+  labels?: string[];
+  acceptance_criteria?: string;
+  blocked_reason?: string;
+  requirement_id?: string;
+  planning_run_id?: string;
+  backlog_candidate_id?: string;
+};
+
+export type UpdateBacklogItemPayload = Partial<Pick<BacklogItem,
+  'title' | 'description' | 'status' | 'priority' | 'rank' | 'labels' | 'acceptance_criteria' | 'blocked_reason'
+>>;
+
+export interface CommitBacklogItemResponse {
+  backlog_item: BacklogItem;
+  task: Task;
+  lineage: {
+    id: string;
+    project_id: string;
+    task_id: string;
+    requirement_id?: string;
+    planning_run_id?: string;
+    backlog_candidate_id?: string;
+    backlog_item_id?: string;
+    lineage_kind: string;
+    created_at: string;
+  };
+  already_applied: boolean;
 }
 
 export interface Document {
