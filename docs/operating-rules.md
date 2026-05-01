@@ -163,6 +163,7 @@ Every behavior change that affects:
 
 ### Testing expectations
 
+- Test design follows `~/github/qa-testing-rules/AGENT.md` / `screenleon/qa-testing-rules`: enumerate the 12 categories before writing cases, document intentional N/A categories, avoid happy-path-only coverage, and mutation-check core tests before handoff. [agent:documentation-architect]
 - Unit tests for all business logic in Go
 - API integration tests for endpoint contracts
 - Frontend: component tests for critical UI paths

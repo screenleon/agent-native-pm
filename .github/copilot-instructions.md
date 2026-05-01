@@ -25,6 +25,7 @@
 - Agent-generated content must include a source marker.
 - Dashboard state must be computed from system data, not manual input.
 - Consult `docs/mvp-scope.md` before adding features.
+- For test work, read `~/github/qa-testing-rules/AGENT.md` or the canonical `screenleon/qa-testing-rules` copy first; apply the 12-category matrix and avoid happy-path-only coverage. [agent:documentation-architect]
 
 ## Mandatory workflow
 
