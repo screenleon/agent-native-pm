@@ -34,6 +34,7 @@ func setupTestServer(t *testing.T) http.Handler {
 	rs := store.NewRequirementStore(db)
 	prs := store.NewPlanningRunStore(db, testutil.TestDialect())
 	bcs := store.NewBacklogCandidateStore(db, testutil.TestDialect())
+	bis := store.NewBacklogItemStore(db, testutil.TestDialect())
 	ts := store.NewTaskStore(db)
 	ds := store.NewDocumentStore(db)
 	srs := store.NewSyncRunStore(db)
@@ -50,6 +51,7 @@ func setupTestServer(t *testing.T) http.Handler {
 		ProjectHandler:            handlers.NewProjectHandler(ps, rms),
 		RequirementHandler:        handlers.NewRequirementHandler(rs, ps),
 		PlanningRunHandler:        handlers.NewPlanningRunHandler(prs, bcs, ps, rs, ars, planner),
+		BacklogItemHandler:        handlers.NewBacklogItemHandler(bis, ps),
 		TaskHandler:               handlers.NewTaskHandler(ts, ps),
 		DocumentHandler:           handlers.NewDocumentHandler(ds, ps, rms),
 		SummaryHandler:            handlers.NewSummaryHandler(ss, ps),
@@ -306,7 +308,7 @@ func TestTaskListFilters(t *testing.T) {
 		t.Fatalf("invalid status filter: expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 
-	req = httptest.NewRequest("GET", "/api/projects/"+projectID+"/tasks?priority=urgent", nil)
+	req = httptest.NewRequest("GET", "/api/projects/"+projectID+"/tasks?priority=now", nil)
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -402,6 +404,180 @@ func TestTaskBatchUpdate(t *testing.T) {
 	srv.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("invalid batch status: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBacklogItemCreateListAndCommitUrgent(t *testing.T) {
+	srv := setupTestServer(t)
+
+	req := httptest.NewRequest("POST", "/api/projects", strings.NewReader(`{"name":"Backlog Project"}`))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create project: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var projResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&projResp); err != nil {
+		t.Fatalf("decode project: %v", err)
+	}
+	projectID := projResp.Data.(map[string]interface{})["id"].(string)
+
+	createBody := `{
+		"title":"Patch production incident path",
+		"description":"Keep urgent distinct from high",
+		"priority":"urgent",
+		"labels":["api","incident"],
+		"acceptance_criteria":"Task keeps urgent priority"
+	}`
+	req = httptest.NewRequest("POST", "/api/projects/"+projectID+"/backlog-items", strings.NewReader(createBody))
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create backlog item: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var createResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&createResp); err != nil {
+		t.Fatalf("decode backlog item: %v", err)
+	}
+	item := createResp.Data.(map[string]interface{})
+	itemID := item["id"].(string)
+	if got := item["priority"]; got != "urgent" {
+		t.Fatalf("expected urgent backlog priority, got %v", got)
+	}
+
+	req = httptest.NewRequest("GET", "/api/projects/"+projectID+"/backlog-items?priority=urgent&label=incident", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list backlog items: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var listResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&listResp); err != nil {
+		t.Fatalf("decode backlog list: %v", err)
+	}
+	items := listResp.Data.([]interface{})
+	if len(items) != 1 {
+		t.Fatalf("expected one filtered backlog item, got %d", len(items))
+	}
+
+	req = httptest.NewRequest("POST", "/api/backlog-items/"+itemID+"/commit-to-task", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("commit backlog item: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var commitResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&commitResp); err != nil {
+		t.Fatalf("decode commit response: %v", err)
+	}
+	commitData := commitResp.Data.(map[string]interface{})
+	task := commitData["task"].(map[string]interface{})
+	if got := task["priority"]; got != "urgent" {
+		t.Fatalf("expected committed task priority urgent, got %v", got)
+	}
+	lineage := commitData["lineage"].(map[string]interface{})
+	if got := lineage["lineage_kind"]; got != models.TaskLineageKindBacklogItem {
+		t.Fatalf("expected backlog_item lineage, got %v", got)
+	}
+	if got := lineage["backlog_item_id"]; got != itemID {
+		t.Fatalf("expected backlog item lineage id %s, got %v", itemID, got)
+	}
+
+	req = httptest.NewRequest("POST", "/api/backlog-items/"+itemID+"/commit-to-task", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("commit already committed backlog item: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var secondCommitResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&secondCommitResp); err != nil {
+		t.Fatalf("decode second commit response: %v", err)
+	}
+	secondCommitData := secondCommitResp.Data.(map[string]interface{})
+	if got := secondCommitData["already_applied"]; got != true {
+		t.Fatalf("expected already_applied true, got %v", got)
+	}
+
+	req = httptest.NewRequest("PATCH", "/api/backlog-items/"+itemID, strings.NewReader(`{"labels":["api","incident","committed"],"status":"committed"}`))
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("patch committed backlog item labels: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest("PATCH", "/api/backlog-items/"+itemID, strings.NewReader(`{"title":"Patch production incident path v2","status":"committed"}`))
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("patch committed backlog item task fields: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBacklogItemCreateRejectsCrossProjectOrigin(t *testing.T) {
+	srv := setupTestServer(t)
+
+	createProject := func(name string) string {
+		req := httptest.NewRequest("POST", "/api/projects", strings.NewReader(fmt.Sprintf(`{"name":%q}`, name)))
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create project %s: expected 201, got %d: %s", name, w.Code, w.Body.String())
+		}
+		var resp models.Envelope
+		json.NewDecoder(w.Body).Decode(&resp)
+		return resp.Data.(map[string]interface{})["id"].(string)
+	}
+	projectAID := createProject("Backlog Origin A")
+	projectBID := createProject("Backlog Origin B")
+
+	req := httptest.NewRequest("POST", "/api/projects/"+projectAID+"/requirements", strings.NewReader(`{"title":"Origin requirement"}`))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create requirement: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var reqResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&reqResp); err != nil {
+		t.Fatalf("decode requirement: %v", err)
+	}
+	requirementID := reqResp.Data.(map[string]interface{})["id"].(string)
+
+	req = httptest.NewRequest("POST", "/api/projects/"+projectBID+"/backlog-items", strings.NewReader(fmt.Sprintf(`{"title":"Cross-project origin","requirement_id":%q}`, requirementID)))
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("cross-project origin: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBacklogItemCommitRejectsBlockedStatus(t *testing.T) {
+	srv := setupTestServer(t)
+
+	req := httptest.NewRequest("POST", "/api/projects", strings.NewReader(`{"name":"Blocked Backlog Project"}`))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create project: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var projResp models.Envelope
+	json.NewDecoder(w.Body).Decode(&projResp)
+	projectID := projResp.Data.(map[string]interface{})["id"].(string)
+
+	req = httptest.NewRequest("POST", "/api/projects/"+projectID+"/backlog-items", strings.NewReader(`{"title":"Blocked item","status":"blocked","priority":"urgent","blocked_reason":"Needs API contract"}`))
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create blocked item: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var createResp models.Envelope
+	json.NewDecoder(w.Body).Decode(&createResp)
+	itemID := createResp.Data.(map[string]interface{})["id"].(string)
+
+	req = httptest.NewRequest("POST", "/api/backlog-items/"+itemID+"/commit-to-task", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("commit blocked item: expected 409, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

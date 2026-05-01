@@ -19,11 +19,11 @@ import (
 )
 
 var (
-	ErrBacklogCandidateNotMutable  = errors.New("backlog candidate is not mutable")
-	ErrBacklogCandidateNoChanges   = errors.New("no backlog candidate changes requested")
-	ErrBacklogCandidateBlankTitle  = errors.New("backlog candidate title cannot be blank")
-	ErrBacklogCandidateBadStatus   = errors.New("invalid backlog candidate status")
-	ErrBacklogCandidateNotApproved         = errors.New("backlog candidate must be approved before applying")
+	ErrBacklogCandidateNotMutable           = errors.New("backlog candidate is not mutable")
+	ErrBacklogCandidateNoChanges            = errors.New("no backlog candidate changes requested")
+	ErrBacklogCandidateBlankTitle           = errors.New("backlog candidate title cannot be blank")
+	ErrBacklogCandidateBadStatus            = errors.New("invalid backlog candidate status")
+	ErrBacklogCandidateNotApproved          = errors.New("backlog candidate must be approved before applying")
 	ErrBacklogCandidateInvalidExecutionMode = errors.New("invalid execution_mode (expected 'manual' or 'role_dispatch')")
 	// Phase 6c PR-2: apply payload now carries execution_role; these
 	// errors fire when the role is missing or unknown for role_dispatch.
@@ -790,6 +790,7 @@ func scanTaskLineage(row rowScanner) (*models.TaskLineage, error) {
 	var requirementID sql.NullString
 	var planningRunID sql.NullString
 	var backlogCandidateID sql.NullString
+	var backlogItemID sql.NullString
 	err := row.Scan(
 		&lineage.ID,
 		&lineage.ProjectID,
@@ -797,6 +798,7 @@ func scanTaskLineage(row rowScanner) (*models.TaskLineage, error) {
 		&requirementID,
 		&planningRunID,
 		&backlogCandidateID,
+		&backlogItemID,
 		&lineage.LineageKind,
 		&lineage.CreatedAt,
 	)
@@ -815,6 +817,9 @@ func scanTaskLineage(row rowScanner) (*models.TaskLineage, error) {
 	if backlogCandidateID.Valid {
 		lineage.BacklogCandidateID = backlogCandidateID.String
 	}
+	if backlogItemID.Valid {
+		lineage.BacklogItemID = backlogItemID.String
+	}
 	return &lineage, nil
 }
 
@@ -827,7 +832,7 @@ func scanTaskLineage(row rowScanner) (*models.TaskLineage, error) {
 // FK semantics from migration 009 determine the join types:
 //   - task_lineage.task_id: ON DELETE CASCADE (lineage row dies with the
 //     task, so INNER JOIN would normally be safe) — we still use LEFT JOIN
-//     + COALESCE defensively so a future FK change or a stray NULL never
+//   - COALESCE defensively so a future FK change or a stray NULL never
 //     makes a lineage row disappear silently from the lane.
 //   - requirement_id / planning_run_id / backlog_candidate_id:
 //     ON DELETE SET NULL — the lineage row survives with NULL refs, so
@@ -899,7 +904,7 @@ func (s *BacklogCandidateStore) ListAppliedLineageByProject(projectID string) ([
 func getTaskLineageByCandidateID(tx *sql.Tx, candidateID string) (*models.TaskLineage, error) {
 	return scanTaskLineage(
 		tx.QueryRow(`
-			SELECT id, project_id, task_id, requirement_id, planning_run_id, backlog_candidate_id, lineage_kind, created_at
+			SELECT id, project_id, task_id, requirement_id, planning_run_id, backlog_candidate_id, backlog_item_id, lineage_kind, created_at
 			FROM task_lineage
 			WHERE backlog_candidate_id = $1
 			ORDER BY created_at ASC, id ASC
