@@ -36,6 +36,7 @@ planning_runs 1---* backlog_candidates
 planning_runs 1---* task_lineage
 planning_runs 1---* planning_context_snapshots
 backlog_candidates 1---* task_lineage
+backlog_items 1---* task_lineage
 tasks 1---* task_lineage
 
 documents 1---* document_links
@@ -86,11 +87,33 @@ Notes:
 | `title` | TEXT | NOT NULL | Task title |
 | `description` | TEXT | DEFAULT '' | Task details |
 | `status` | TEXT | NOT NULL DEFAULT 'todo' | `todo`, `in_progress`, `done`, `cancelled` |
-| `priority` | TEXT | DEFAULT 'medium' | `low`, `medium`, `high` |
+| `priority` | TEXT | DEFAULT 'medium' | `low`, `medium`, `high`, `urgent` |
 | `assignee` | TEXT | DEFAULT '' | Human name or agent identifier |
 | `source` | TEXT | DEFAULT '' | `human` or `agent:<name>` or `role_dispatch:<role_id>` |
 | `dispatch_status` | TEXT | NOT NULL DEFAULT 'none' | (Phase 6b, migration 029) `none`, `queued`, `running`, `completed`, `failed` |
 | `execution_result` | JSONB | | (Phase 6b, migration 029) Raw JSON result from connector execution; null until completed or failed |
+| `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
+| `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
+
+### Table: `backlog_items`
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | TEXT | PRIMARY KEY | UUID v4 |
+| `project_id` | TEXT | NOT NULL, FK -> projects.id | Parent project |
+| `requirement_id` | TEXT | FK -> requirements.id, nullable | Optional originating requirement |
+| `planning_run_id` | TEXT | FK -> planning_runs.id, nullable | Optional originating planning run |
+| `backlog_candidate_id` | TEXT | FK -> backlog_candidates.id, nullable, unique when present | Optional compatibility/evidence candidate |
+| `task_id` | TEXT | FK -> tasks.id, nullable, unique when present | Task created when committed |
+| `title` | TEXT | NOT NULL | Backlog item title |
+| `description` | TEXT | NOT NULL DEFAULT '' | Backlog item details |
+| `status` | TEXT | NOT NULL DEFAULT 'triage' | `triage`, `ready`, `committed`, `blocked`, `archived` |
+| `priority` | TEXT | NOT NULL DEFAULT 'medium' | `low`, `medium`, `high`, `urgent` |
+| `source` | TEXT | NOT NULL DEFAULT 'human' | `human`, `planning_run`, `backlog_candidate`, `connector` |
+| `rank` | INTEGER | NOT NULL DEFAULT 0 | Manual or generated ordering |
+| `labels` | JSONB | NOT NULL DEFAULT '[]' | User-facing labels |
+| `acceptance_criteria` | TEXT | NOT NULL DEFAULT '' | Optional completion criteria |
+| `blocked_reason` | TEXT | NOT NULL DEFAULT '' | Optional blocked-state context |
 | `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 
@@ -342,7 +365,8 @@ JSON response. `audit.QueryLatest` is the underlying primitive.
 | `requirement_id` | TEXT | FK -> requirements.id | Optional requirement ancestor |
 | `planning_run_id` | TEXT | FK -> planning_runs.id | Optional planning run ancestor |
 | `backlog_candidate_id` | TEXT | FK -> backlog_candidates.id | Optional candidate ancestor |
-| `lineage_kind` | TEXT | NOT NULL DEFAULT 'applied_candidate' | `applied_candidate`, `manual_requirement`, `merged_requirement` |
+| `backlog_item_id` | TEXT | FK -> backlog_items.id | Optional backlog item ancestor |
+| `lineage_kind` | TEXT | NOT NULL DEFAULT 'applied_candidate' | `applied_candidate`, `manual_requirement`, `merged_requirement`, `backlog_item` |
 | `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT NOW() | |
 
 Notes:
