@@ -55,6 +55,10 @@ Precedence: Project Context > Domain Rules > Global Rules.
 - Dashboard state must be computed from system data, not from free-form human input.
 - PostgreSQL is the active runtime data store. Treat older SQLite references as historical unless a task explicitly targets legacy assumptions.
 
+## Testing rules
+
+When writing or reviewing tests, read `~/github/qa-testing-rules/AGENT.md` (or the canonical upstream `screenleon/qa-testing-rules` copy) before adding cases. Apply the 12-category matrix, prefer integration tests for owned DB/HTTP boundaries, avoid happy-path-only coverage, and perform a mutation self-check for core tests before handoff. [agent:documentation-architect]
+
 ## Source of truth
 
 - `docs/operating-rules.md` — safety, scope, validation, review rules

@@ -83,4 +83,5 @@ var ValidTaskPriorities = map[string]bool{
 	"low":    true,
 	"medium": true,
 	"high":   true,
+	"urgent": true,
 }

@@ -704,7 +704,7 @@ Source: `[agent:backend-architect]`
 - `page`, `per_page`: pagination
 - `sort`, `order`: list ordering
 - `status`: exact match. Allowed values: `todo`, `in_progress`, `done`, `cancelled`
-- `priority`: exact match. Allowed values: `low`, `medium`, `high`
+- `priority`: exact match. Allowed values: `low`, `medium`, `high`, `urgent`
 - `assignee`: exact match assignee filter
 
 Invalid `status` or `priority` values return `400`.
@@ -719,6 +719,56 @@ Invalid `status` or `priority` values return `400`.
     "priority": "high",
     "assignee": ""
   }
+}
+```
+
+### Backlog Items
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/projects/:id/backlog-items` | List backlog items for a project |
+| POST | `/api/projects/:id/backlog-items` | Create a backlog item |
+| GET | `/api/backlog-items/:id` | Get a backlog item by ID |
+| PATCH | `/api/backlog-items/:id` | Update a backlog item |
+| POST | `/api/backlog-items/:id/commit-to-task` | Create or replay the committed task for a backlog item |
+
+#### List backlog items query parameters
+
+- `page`, `per_page`: pagination
+- `sort`, `order`: list ordering. Supported sort fields: `rank`, `created_at`, `updated_at`, `priority`, `status`, `title`
+- `status`: exact match. Allowed values: `triage`, `ready`, `committed`, `blocked`, `archived`
+- `priority`: exact match. Allowed values: `low`, `medium`, `high`, `urgent`
+- `source`: exact match. Allowed values: `human`, `planning_run`, `backlog_candidate`, `connector`
+- `label`: exact label match
+- `q`: case-insensitive title/description search
+
+`committed` is a system-owned backlog status. Clients cannot set it through create or patch; use `POST /api/backlog-items/:id/commit-to-task`.
+
+#### Create backlog item request
+
+```json
+{
+  "title": "Define API-backed backlog lifecycle",
+  "description": "Backlog items should exist before connector execution.",
+  "priority": "urgent",
+  "status": "triage",
+  "labels": ["api", "backlog"],
+  "acceptance_criteria": "Manual items can be committed into urgent tasks."
+}
+```
+
+#### Commit backlog item response
+
+```json
+{
+  "data": {
+    "backlog_item": { "id": "backlog-id", "status": "committed", "task_id": "task-id" },
+    "task": { "id": "task-id", "priority": "urgent" },
+    "lineage": { "lineage_kind": "backlog_item", "backlog_item_id": "backlog-id", "task_id": "task-id" },
+    "already_applied": false
+  },
+  "error": null,
+  "meta": null
 }
 ```
 

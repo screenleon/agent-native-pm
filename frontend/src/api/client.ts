@@ -8,6 +8,7 @@ import type {
   AccountBinding, CreateAccountBindingPayload, UpdateAccountBindingPayload,
   LocalConnector, CreateLocalConnectorPairingSessionPayload, CreateLocalConnectorPairingSessionResponse,
   ConnectorActivityResponse, ActiveConnectorEntry,
+  BacklogItem, CreateBacklogItemPayload, UpdateBacklogItemPayload, CommitBacklogItemResponse,
 } from '../types';
 
 const BASE_URL = '/api';
@@ -174,6 +175,56 @@ export async function deleteTask(id: string) {
 
 export async function requeueDispatchTask(id: string) {
   return request<import('../types').Task>(`/tasks/${encodeURIComponent(id)}/requeue-dispatch`, {
+    method: 'POST',
+  });
+}
+
+export type BacklogItemListFilters = {
+  status?: string;
+  priority?: string;
+  source?: string;
+  label?: string;
+  q?: string;
+};
+
+export async function listBacklogItems(
+  projectId: string,
+  page = 1,
+  perPage = 100,
+  sort = 'rank',
+  order = 'asc',
+  filters?: BacklogItemListFilters,
+) {
+  const params = new URLSearchParams({
+    page: page.toString(),
+    per_page: perPage.toString(),
+    sort,
+    order,
+    ...(filters?.status && { status: filters.status }),
+    ...(filters?.priority && { priority: filters.priority }),
+    ...(filters?.source && { source: filters.source }),
+    ...(filters?.label && { label: filters.label }),
+    ...(filters?.q && { q: filters.q }),
+  });
+  return request<BacklogItem[]>(`/projects/${encodeURIComponent(projectId)}/backlog-items?${params}`);
+}
+
+export async function createBacklogItem(projectId: string, data: CreateBacklogItemPayload) {
+  return request<BacklogItem>(`/projects/${encodeURIComponent(projectId)}/backlog-items`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateBacklogItem(id: string, data: UpdateBacklogItemPayload) {
+  return request<BacklogItem>(`/backlog-items/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function commitBacklogItemToTask(id: string) {
+  return request<CommitBacklogItemResponse>(`/backlog-items/${encodeURIComponent(id)}/commit-to-task`, {
     method: 'POST',
   });
 }
@@ -747,4 +798,3 @@ export async function listActiveConnectors(projectId: string) {
 export function connectorActivityStreamURL(connectorId: string): string {
   return `${BASE_URL}/me/local-connectors/${encodeURIComponent(connectorId)}/activity-stream`;
 }
-

@@ -23,8 +23,8 @@ const maxProviderResponseBytes = 1 << 20 // 1 MiB
 // RemoteModelsHandler proxies model-discovery and connection-probe requests
 // to any OpenAI-compatible endpoint on behalf of the frontend.
 type RemoteModelsHandler struct {
-	fetchClient *http.Client // short timeout — models list should be fast
-	probeClient *http.Client // longer timeout — chat completion may be slow
+	fetchClient  *http.Client // short timeout — models list should be fast
+	probeClient  *http.Client // longer timeout — chat completion may be slow
 	bindingStore *store.AccountBindingStore
 }
 
@@ -34,6 +34,21 @@ func NewRemoteModelsHandler(bindingStore *store.AccountBindingStore) *RemoteMode
 		probeClient:  &http.Client{Timeout: 45 * time.Second},
 		bindingStore: bindingStore,
 	}
+}
+
+// WithHTTPClients replaces the outbound provider clients. It is used by tests
+// to exercise provider calls without opening a listening socket.
+func (h *RemoteModelsHandler) WithHTTPClients(fetchClient, probeClient *http.Client) *RemoteModelsHandler {
+	if h == nil {
+		return nil
+	}
+	if fetchClient != nil {
+		h.fetchClient = fetchClient
+	}
+	if probeClient != nil {
+		h.probeClient = probeClient
+	}
+	return h
 }
 
 // ── Fetch models ──────────────────────────────────────────────────────────────

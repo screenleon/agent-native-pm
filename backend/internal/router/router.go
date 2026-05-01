@@ -23,6 +23,7 @@ type Deps struct {
 	AccountBindingHandler     *handlers.AccountBindingHandler
 	LocalConnectorHandler     *handlers.LocalConnectorHandler
 	ConnectorActivityHandler  *handlers.ConnectorActivityHandler
+	BacklogItemHandler        *handlers.BacklogItemHandler
 	TaskHandler               *handlers.TaskHandler
 	DocumentHandler           *handlers.DocumentHandler
 	SummaryHandler            *handlers.SummaryHandler
@@ -153,6 +154,13 @@ func New(deps Deps) http.Handler {
 				r.Patch("/backlog-candidates/{id}", deps.PlanningRunHandler.UpdateBacklogCandidate)
 				r.Post("/backlog-candidates/{id}/apply", deps.PlanningRunHandler.ApplyBacklogCandidate)
 				r.Post("/backlog-candidates/{id}/suggest-role", deps.PlanningRunHandler.SuggestRole)
+			}
+			if deps.BacklogItemHandler != nil {
+				r.Get("/projects/{id}/backlog-items", deps.BacklogItemHandler.ListByProject)
+				r.Post("/projects/{id}/backlog-items", deps.BacklogItemHandler.Create)
+				r.Get("/backlog-items/{id}", deps.BacklogItemHandler.Get)
+				r.Patch("/backlog-items/{id}", deps.BacklogItemHandler.Update)
+				r.Post("/backlog-items/{id}/commit-to-task", deps.BacklogItemHandler.CommitToTask)
 			}
 
 			// Tasks

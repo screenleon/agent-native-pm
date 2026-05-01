@@ -106,6 +106,7 @@ func main() {
 	planningSettingsStore := store.NewPlanningSettingsStore(db, settingsBox)
 	accountBindingStore := store.NewAccountBindingStore(db, settingsBox)
 	localConnectorStore := store.NewLocalConnectorStore(db, dialect)
+	backlogItemStore := store.NewBacklogItemStore(db, dialect)
 
 	// Phase 3B stores
 	contextSnapshotStore := store.NewContextSnapshotStore(db)
@@ -122,6 +123,7 @@ func main() {
 	// Phase 1 handlers
 	projectHandler := handlers.NewProjectHandler(projectStore, repoMappingStore)
 	requirementHandler := handlers.NewRequirementHandler(requirementStore, projectStore)
+	backlogItemHandler := handlers.NewBacklogItemHandler(backlogItemStore, projectStore)
 	taskHandler := handlers.NewTaskHandler(taskStore, projectStore)
 	documentHandler := handlers.NewDocumentHandler(documentStore, projectStore, repoMappingStore)
 	summaryHandler := handlers.NewSummaryHandler(summaryStore, projectStore)
@@ -215,6 +217,7 @@ func main() {
 		ProjectHandler:            projectHandler,
 		RequirementHandler:        requirementHandler,
 		PlanningRunHandler:        planningRunHandler,
+		BacklogItemHandler:        backlogItemHandler,
 		TaskHandler:               taskHandler,
 		DocumentHandler:           documentHandler,
 		SummaryHandler:            summaryHandler,

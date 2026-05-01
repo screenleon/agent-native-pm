@@ -34,6 +34,7 @@ func setupTestServer(t *testing.T) http.Handler {
 	rs := store.NewRequirementStore(db)
 	prs := store.NewPlanningRunStore(db, testutil.TestDialect())
 	bcs := store.NewBacklogCandidateStore(db, testutil.TestDialect())
+	bis := store.NewBacklogItemStore(db, testutil.TestDialect())
 	ts := store.NewTaskStore(db)
 	ds := store.NewDocumentStore(db)
 	srs := store.NewSyncRunStore(db)
@@ -50,6 +51,7 @@ func setupTestServer(t *testing.T) http.Handler {
 		ProjectHandler:            handlers.NewProjectHandler(ps, rms),
 		RequirementHandler:        handlers.NewRequirementHandler(rs, ps),
 		PlanningRunHandler:        handlers.NewPlanningRunHandler(prs, bcs, ps, rs, ars, planner),
+		BacklogItemHandler:        handlers.NewBacklogItemHandler(bis, ps),
 		TaskHandler:               handlers.NewTaskHandler(ts, ps),
 		DocumentHandler:           handlers.NewDocumentHandler(ds, ps, rms),
 		SummaryHandler:            handlers.NewSummaryHandler(ss, ps),
@@ -306,7 +308,7 @@ func TestTaskListFilters(t *testing.T) {
 		t.Fatalf("invalid status filter: expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 
-	req = httptest.NewRequest("GET", "/api/projects/"+projectID+"/tasks?priority=urgent", nil)
+	req = httptest.NewRequest("GET", "/api/projects/"+projectID+"/tasks?priority=now", nil)
 	w = httptest.NewRecorder()
 	srv.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -402,6 +404,382 @@ func TestTaskBatchUpdate(t *testing.T) {
 	srv.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("invalid batch status: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func createProjectForBacklogTest(t *testing.T, srv http.Handler, name string) string {
+	t.Helper()
+	if name == "" {
+		name = "Backlog Project"
+	}
+	req := httptest.NewRequest("POST", "/api/projects", strings.NewReader(fmt.Sprintf(`{"name":%q}`, name)))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create project: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var projResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&projResp); err != nil {
+		t.Fatalf("decode project: %v", err)
+	}
+	return projResp.Data.(map[string]interface{})["id"].(string)
+}
+
+func createBacklogItemForTest(t *testing.T, srv http.Handler, projectID, body string) map[string]interface{} {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/api/projects/"+projectID+"/backlog-items", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create backlog item: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var createResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&createResp); err != nil {
+		t.Fatalf("decode backlog item: %v", err)
+	}
+	return createResp.Data.(map[string]interface{})
+}
+
+// Commits an urgent backlog item to a task while preserving priority and lineage.
+// Steps:
+// 1. Create a project and one urgent backlog item with labels.
+// 2. List it through priority+label filters and commit it to a task twice.
+// 3. Assert urgent priority, backlog-item lineage, and idempotent already_applied response.
+func TestBacklogItemCreateListAndCommitUrgent(t *testing.T) {
+	srv := setupTestServer(t)
+	projectID := createProjectForBacklogTest(t, srv, "Backlog Project")
+
+	createBody := `{
+		"title":"Patch production incident path",
+		"description":"Keep urgent distinct from high",
+		"priority":"urgent",
+		"labels":["api","incident"],
+		"acceptance_criteria":"Task keeps urgent priority"
+	}`
+	item := createBacklogItemForTest(t, srv, projectID, createBody)
+	itemID := item["id"].(string)
+	if got := item["priority"]; got != "urgent" {
+		t.Fatalf("expected urgent backlog priority, got %v", got)
+	}
+
+	req := httptest.NewRequest("GET", "/api/projects/"+projectID+"/backlog-items?priority=urgent&label=incident", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list backlog items: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var listResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&listResp); err != nil {
+		t.Fatalf("decode backlog list: %v", err)
+	}
+	items := listResp.Data.([]interface{})
+	if len(items) != 1 {
+		t.Fatalf("expected one filtered backlog item, got %d", len(items))
+	}
+
+	req = httptest.NewRequest("POST", "/api/backlog-items/"+itemID+"/commit-to-task", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("commit backlog item: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var commitResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&commitResp); err != nil {
+		t.Fatalf("decode commit response: %v", err)
+	}
+	commitData := commitResp.Data.(map[string]interface{})
+	task := commitData["task"].(map[string]interface{})
+	if got := task["priority"]; got != "urgent" {
+		t.Fatalf("expected committed task priority urgent, got %v", got)
+	}
+	lineage := commitData["lineage"].(map[string]interface{})
+	if got := lineage["lineage_kind"]; got != models.TaskLineageKindBacklogItem {
+		t.Fatalf("expected backlog_item lineage, got %v", got)
+	}
+	if got := lineage["backlog_item_id"]; got != itemID {
+		t.Fatalf("expected backlog item lineage id %s, got %v", itemID, got)
+	}
+
+	req = httptest.NewRequest("POST", "/api/backlog-items/"+itemID+"/commit-to-task", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("commit already committed backlog item: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var secondCommitResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&secondCommitResp); err != nil {
+		t.Fatalf("decode second commit response: %v", err)
+	}
+	secondCommitData := secondCommitResp.Data.(map[string]interface{})
+	if got := secondCommitData["already_applied"]; got != true {
+		t.Fatalf("expected already_applied true, got %v", got)
+	}
+}
+
+// Allows metadata edits on committed backlog items while locking task-owned fields.
+// Steps:
+// 1. Create and commit a backlog item.
+// 2. Patch labels with status still committed, then attempt to change the title.
+// 3. Assert labels save but task-owned title changes are rejected with 409.
+func TestBacklogItemUpdateCommittedItemLocksTaskOwnedFields(t *testing.T) {
+	srv := setupTestServer(t)
+	projectID := createProjectForBacklogTest(t, srv, "Committed Backlog Project")
+	item := createBacklogItemForTest(t, srv, projectID, `{"title":"Patch production incident path","priority":"urgent","labels":["api","incident"]}`)
+	itemID := item["id"].(string)
+
+	req := httptest.NewRequest("POST", "/api/backlog-items/"+itemID+"/commit-to-task", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("commit backlog item: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest("PATCH", "/api/backlog-items/"+itemID, strings.NewReader(`{"labels":["api","incident","committed"],"status":"committed"}`))
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("patch committed backlog item labels: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var patchResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&patchResp); err != nil {
+		t.Fatalf("decode committed patch response: %v", err)
+	}
+	labels := patchResp.Data.(map[string]interface{})["labels"].([]interface{})
+	if len(labels) != 3 {
+		t.Fatalf("expected 3 committed labels, got %d", len(labels))
+	}
+
+	req = httptest.NewRequest("PATCH", "/api/backlog-items/"+itemID, strings.NewReader(`{"title":"Patch production incident path v2","status":"committed"}`))
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("patch committed backlog item task fields: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// Rejects committed status on create because only commit-to-task can set it.
+// Steps:
+// 1. Create a project.
+// 2. POST a backlog item with status=committed.
+// 3. Assert the API rejects the request before any item is created.
+func TestBacklogItemCreateRejectsCommittedStatus(t *testing.T) {
+	srv := setupTestServer(t)
+	projectID := createProjectForBacklogTest(t, srv, "Reject Committed Create")
+
+	req := httptest.NewRequest("POST", "/api/projects/"+projectID+"/backlog-items", strings.NewReader(`{"title":"Invalid committed create","status":"committed"}`))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("create committed backlog item: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest("GET", "/api/projects/"+projectID+"/backlog-items", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list after rejected create: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var listResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&listResp); err != nil {
+		t.Fatalf("decode backlog list: %v", err)
+	}
+	if got := len(listResp.Data.([]interface{})); got != 0 {
+		t.Fatalf("expected rejected committed create to leave 0 backlog items, got %d", got)
+	}
+}
+
+func assertBacklogListFilterRejected(t *testing.T, srv http.Handler, projectID, query string) {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/api/projects/"+projectID+"/backlog-items"+query, nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for query %s, got %d: %s", query, w.Code, w.Body.String())
+	}
+}
+
+// Rejects invalid backlog status filters with a concrete 400 contract.
+// Steps:
+// 1. Create a project.
+// 2. Request the list endpoint with an invalid status value.
+// 3. Assert the API rejects the filter instead of silently widening results.
+func TestBacklogItemListRejectsInvalidStatusFilter(t *testing.T) {
+	srv := setupTestServer(t)
+	projectID := createProjectForBacklogTest(t, srv, "Invalid Filter Backlog Project")
+	assertBacklogListFilterRejected(t, srv, projectID, "?status=done")
+}
+
+// Rejects invalid backlog priority filters with a concrete 400 contract.
+// Steps:
+// 1. Create a project.
+// 2. Request the list endpoint with an invalid priority value.
+// 3. Assert the API rejects the filter instead of silently widening results.
+func TestBacklogItemListRejectsInvalidPriorityFilter(t *testing.T) {
+	srv := setupTestServer(t)
+	projectID := createProjectForBacklogTest(t, srv, "Invalid Filter Backlog Project")
+	assertBacklogListFilterRejected(t, srv, projectID, "?priority=critical")
+}
+
+// Rejects invalid backlog source filters with a concrete 400 contract.
+// Steps:
+// 1. Create a project.
+// 2. Request the list endpoint with an invalid source value.
+// 3. Assert the API rejects the filter instead of silently widening results.
+func TestBacklogItemListRejectsInvalidSourceFilter(t *testing.T) {
+	srv := setupTestServer(t)
+	projectID := createProjectForBacklogTest(t, srv, "Invalid Filter Backlog Project")
+	assertBacklogListFilterRejected(t, srv, projectID, "?source=automation")
+}
+
+// Paginates backlog items by rank while returning the unpaginated total.
+// Steps:
+// 1. Create three backlog items with out-of-order ranks.
+// 2. List page 1 and page 2 with per_page=2 sorted by rank.
+// 3. Assert rank ordering and meta.total remain stable across pages.
+func TestBacklogItemListPaginatesByRankWithTotal(t *testing.T) {
+	srv := setupTestServer(t)
+	projectID := createProjectForBacklogTest(t, srv, "Paged Backlog Project")
+	createBacklogItemForTest(t, srv, projectID, `{"title":"Third ranked","rank":3}`)
+	createBacklogItemForTest(t, srv, projectID, `{"title":"First ranked","rank":1}`)
+	createBacklogItemForTest(t, srv, projectID, `{"title":"Second ranked","rank":2}`)
+
+	req := httptest.NewRequest("GET", "/api/projects/"+projectID+"/backlog-items?sort=rank&order=asc&page=1&per_page=2", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list page 1: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var pageOne models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&pageOne); err != nil {
+		t.Fatalf("decode page 1: %v", err)
+	}
+	pageOneItems := pageOne.Data.([]interface{})
+	if got := len(pageOneItems); got != 2 {
+		t.Fatalf("expected page 1 to contain 2 items, got %d", got)
+	}
+	if got := pageOneItems[0].(map[string]interface{})["title"]; got != "First ranked" {
+		t.Fatalf("expected first page item to be First ranked, got %v", got)
+	}
+	if got := pageOneItems[1].(map[string]interface{})["title"]; got != "Second ranked" {
+		t.Fatalf("expected second page item to be Second ranked, got %v", got)
+	}
+	if got := pageOne.Meta.(map[string]interface{})["total"]; got != float64(3) {
+		t.Fatalf("expected total 3 on page 1, got %v", got)
+	}
+
+	req = httptest.NewRequest("GET", "/api/projects/"+projectID+"/backlog-items?sort=rank&order=asc&page=2&per_page=2", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list page 2: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var pageTwo models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&pageTwo); err != nil {
+		t.Fatalf("decode page 2: %v", err)
+	}
+	pageTwoItems := pageTwo.Data.([]interface{})
+	if got := len(pageTwoItems); got != 1 {
+		t.Fatalf("expected page 2 to contain 1 item, got %d", got)
+	}
+	if got := pageTwoItems[0].(map[string]interface{})["title"]; got != "Third ranked" {
+		t.Fatalf("expected page 2 item to be Third ranked, got %v", got)
+	}
+	if got := pageTwo.Meta.(map[string]interface{})["total"]; got != float64(3) {
+		t.Fatalf("expected total 3 on page 2, got %v", got)
+	}
+}
+
+// Rejects backlog origins that belong to a different project.
+// Steps:
+// 1. Create two projects and a requirement under project A.
+// 2. Attempt to create a project B backlog item pointing at project A's requirement.
+// 3. Assert the API returns 400 instead of creating cross-project lineage.
+func TestBacklogItemCreateRejectsCrossProjectOrigin(t *testing.T) {
+	srv := setupTestServer(t)
+
+	createProject := func(name string) string {
+		req := httptest.NewRequest("POST", "/api/projects", strings.NewReader(fmt.Sprintf(`{"name":%q}`, name)))
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create project %s: expected 201, got %d: %s", name, w.Code, w.Body.String())
+		}
+		var resp models.Envelope
+		json.NewDecoder(w.Body).Decode(&resp)
+		return resp.Data.(map[string]interface{})["id"].(string)
+	}
+	projectAID := createProject("Backlog Origin A")
+	projectBID := createProject("Backlog Origin B")
+
+	req := httptest.NewRequest("POST", "/api/projects/"+projectAID+"/requirements", strings.NewReader(`{"title":"Origin requirement"}`))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create requirement: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var reqResp models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&reqResp); err != nil {
+		t.Fatalf("decode requirement: %v", err)
+	}
+	requirementID := reqResp.Data.(map[string]interface{})["id"].(string)
+
+	req = httptest.NewRequest("POST", "/api/projects/"+projectBID+"/backlog-items", strings.NewReader(fmt.Sprintf(`{"title":"Cross-project origin","requirement_id":%q}`, requirementID)))
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("cross-project origin: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// Rejects archived backlog items at commit time and leaves the task list untouched.
+// Steps:
+// 1. Create an archived backlog item.
+// 2. Attempt to commit it to a task.
+// 3. Assert the API returns 409 and no task side effect is created.
+func TestBacklogItemCommitRejectsArchivedStatusWithoutCreatingTask(t *testing.T) {
+	srv := setupTestServer(t)
+	projectID := createProjectForBacklogTest(t, srv, "Archived Backlog Project")
+	item := createBacklogItemForTest(t, srv, projectID, `{"title":"Archived item","status":"archived","priority":"urgent"}`)
+	itemID := item["id"].(string)
+
+	req := httptest.NewRequest("POST", "/api/backlog-items/"+itemID+"/commit-to-task", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("commit archived item: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest("GET", "/api/projects/"+projectID+"/tasks", nil)
+	w = httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list tasks after archived commit rejection: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var taskList models.Envelope
+	if err := json.NewDecoder(w.Body).Decode(&taskList); err != nil {
+		t.Fatalf("decode task list: %v", err)
+	}
+	if got := len(taskList.Data.([]interface{})); got != 0 {
+		t.Fatalf("expected archived commit rejection to create 0 tasks, got %d", got)
+	}
+}
+
+// Rejects blocked backlog items at commit time before any task side effect exists.
+// Steps:
+// 1. Create a blocked urgent backlog item with a blocked reason.
+// 2. Attempt to commit it to a task.
+// 3. Assert the API returns 409 instead of creating a task.
+func TestBacklogItemCommitRejectsBlockedStatus(t *testing.T) {
+	srv := setupTestServer(t)
+	projectID := createProjectForBacklogTest(t, srv, "Blocked Backlog Project")
+	item := createBacklogItemForTest(t, srv, projectID, `{"title":"Blocked item","status":"blocked","priority":"urgent","blocked_reason":"Needs API contract"}`)
+	itemID := item["id"].(string)
+
+	req := httptest.NewRequest("POST", "/api/backlog-items/"+itemID+"/commit-to-task", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("commit blocked item: expected 409, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

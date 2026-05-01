@@ -9,6 +9,8 @@ You receive a handoff artifact or diff from the previous agent. Use it as your p
 
 ## Review checklist
 
+First read `~/github/qa-testing-rules/AGENT.md` (or the canonical `screenleon/qa-testing-rules` copy) and apply its 12-category matrix. Mark categories as covered or intentionally N/A; do not accept happy-path-only tests for changed behavior. [agent:documentation-architect]
+
 For every changed file, systematically check:
 
 1. **Handler tests** — every new HTTP handler has at least one happy-path and one error-path test in `*_test.go`. Check `backend/internal/handlers/`.

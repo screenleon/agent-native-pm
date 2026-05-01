@@ -80,6 +80,7 @@ const (
 	TaskLineageKindAppliedCandidate  = "applied_candidate"
 	TaskLineageKindManualRequirement = "manual_requirement"
 	TaskLineageKindMergedRequirement = "merged_requirement"
+	TaskLineageKindBacklogItem       = "backlog_item"
 )
 
 var ValidRequirementStatuses = map[string]bool{
@@ -238,8 +239,8 @@ type PlanningRun struct {
 	LeaseExpiresAt    *time.Time `json:"lease_expires_at"`
 	DispatchError     string     `json:"dispatch_error"`
 	ErrorMessage      string     `json:"error_message"`
-	AdapterType      string        `json:"adapter_type,omitempty"`
-	ModelOverride    string        `json:"model_override,omitempty"`
+	AdapterType       string     `json:"adapter_type,omitempty"`
+	ModelOverride     string     `json:"model_override,omitempty"`
 	// AccountBindingID is the account_bindings.id chosen at run-create time
 	// (Path B S2). Nullable to distinguish "no binding selected" from
 	// "explicitly empty" — exposed as a pointer so JSON omits the key when
@@ -276,23 +277,23 @@ type PlanningRun struct {
 // is preserved as the embedded `Invocation` field; new sub-blocks are
 // optional so old rows decode cleanly.
 type PlanningRunCliInfo struct {
-	BindingSnapshot  *PlanningRunBindingSnapshot `json:"binding_snapshot,omitempty"`
-	Invocation       *CliUsageInfo               `json:"cli_invocation,omitempty"`
-	ErrorKind        string                      `json:"error_kind,omitempty"`
-	RemediationHint  string                      `json:"remediation_hint,omitempty"`
-	DispatchWarning  string                      `json:"dispatch_warning,omitempty"`
+	BindingSnapshot *PlanningRunBindingSnapshot `json:"binding_snapshot,omitempty"`
+	Invocation      *CliUsageInfo               `json:"cli_invocation,omitempty"`
+	ErrorKind       string                      `json:"error_kind,omitempty"`
+	RemediationHint string                      `json:"remediation_hint,omitempty"`
+	DispatchWarning string                      `json:"dispatch_warning,omitempty"`
 }
 
 const (
-	ErrorKindUnknown             = "unknown"
-	ErrorKindSessionExpired      = "session_expired"
-	ErrorKindRateLimited         = "rate_limited"
-	ErrorKindContextOverflow     = "context_overflow"
-	ErrorKindAdapterTimeout      = "adapter_timeout"
-	ErrorKindCliNotFound         = "cli_not_found"
-	ErrorKindCliTimeout          = "cli_timeout"
-	ErrorKindModelNotAvailable   = "model_not_available"
-	ErrorKindAdapterProtocol     = "adapter_protocol_error"
+	ErrorKindUnknown           = "unknown"
+	ErrorKindSessionExpired    = "session_expired"
+	ErrorKindRateLimited       = "rate_limited"
+	ErrorKindContextOverflow   = "context_overflow"
+	ErrorKindAdapterTimeout    = "adapter_timeout"
+	ErrorKindCliNotFound       = "cli_not_found"
+	ErrorKindCliTimeout        = "cli_timeout"
+	ErrorKindModelNotAvailable = "model_not_available"
+	ErrorKindAdapterProtocol   = "adapter_protocol_error"
 	// Phase 6c: dispatch safety boundary error kinds. These are produced
 	// by the role_dispatch loop in connector/service.go (NOT by planning
 	// runs) — see docs/phase6c-plan.md §3 C2.
@@ -302,7 +303,7 @@ const (
 	// Phase 6c PR-2 will populate role_not_found from the server-side
 	// claim-next-task enforcement; the constant ships in PR-1 so the
 	// allowlist + remediation catalog is finalised in one place.
-	ErrorKindRoleNotFound        = "role_not_found"
+	ErrorKindRoleNotFound = "role_not_found"
 	// Phase 6c PR-2 (Copilot review #4): distinct kind for tasks whose
 	// source string does NOT carry a "<role>" suffix after
 	// "role_dispatch:". This is structurally different from
@@ -324,17 +325,17 @@ const (
 // submitted by the adapter. Anything outside this set is normalised to
 // ErrorKindUnknown (S5a/S5b, design §5 D7).
 var AllowedErrorKinds = map[string]bool{
-	ErrorKindUnknown:             true,
-	ErrorKindSessionExpired:      true,
-	ErrorKindRateLimited:         true,
-	ErrorKindContextOverflow:     true,
-	ErrorKindAdapterTimeout:      true,
-	ErrorKindCliNotFound:         true,
-	ErrorKindCliTimeout:          true,
-	ErrorKindModelNotAvailable:   true,
-	ErrorKindAdapterProtocol:     true,
-	ErrorKindDispatchTimeout:     true,
-	ErrorKindOutputTooLarge:      true,
+	ErrorKindUnknown:               true,
+	ErrorKindSessionExpired:        true,
+	ErrorKindRateLimited:           true,
+	ErrorKindContextOverflow:       true,
+	ErrorKindAdapterTimeout:        true,
+	ErrorKindCliNotFound:           true,
+	ErrorKindCliTimeout:            true,
+	ErrorKindModelNotAvailable:     true,
+	ErrorKindAdapterProtocol:       true,
+	ErrorKindDispatchTimeout:       true,
+	ErrorKindOutputTooLarge:        true,
 	ErrorKindInvalidResultSchema:   true,
 	ErrorKindRoleNotFound:          true,
 	ErrorKindRoleDispatchMalformed: true,
@@ -346,20 +347,20 @@ var AllowedErrorKinds = map[string]bool{
 // computes the hint from this map and persists it alongside error_kind in
 // connector_cli_info — adapters never supply free-text hints.
 var ErrorKindRemediations = map[string]string{
-	ErrorKindSessionExpired:      "Re-authenticate your CLI (run `claude` or `codex` once interactively) then retry the planning run.",
-	ErrorKindRateLimited:         "Your CLI subscription has hit a rate limit. Wait a few minutes before retrying.",
-	ErrorKindContextOverflow:     "The planning context was too large for the model. Try reducing the number of open requirements or documents in scope.",
-	ErrorKindAdapterTimeout:      "The adapter timed out waiting for the CLI. Check that your CLI is healthy (`anpm-connector doctor`) and retry.",
-	ErrorKindCliNotFound:         "The CLI command was not found on the connector's PATH. Check the cli_command field on your CLI binding and ensure the binary is installed.",
-	ErrorKindCliTimeout:          "The CLI process timed out. Check that your CLI is healthy and retry.",
-	ErrorKindModelNotAvailable:   "The requested model is not available for this CLI. Check the model_id on your CLI binding.",
-	ErrorKindAdapterProtocol:     "The adapter produced unexpected output. Check your adapter script and retry.",
-	ErrorKindDispatchTimeout:     "The role-dispatch CLI ran past its wall-clock budget and was killed. The role's typical budget is shown in the Apply panel; set ANPM_DISPATCH_TIMEOUT (seconds) to override globally for unusually long tasks, or 0 to disable.",
-	ErrorKindOutputTooLarge:      "The CLI produced more output than the dispatch boundary allows (default 5 MB). Re-run with a tighter task scope, or set ANPM_DISPATCH_OUTPUT_MAX (bytes) to raise the limit (0 disables).",
-	ErrorKindInvalidResultSchema: "The CLI returned output that does not match the role result schema (must include a `files` array). Check the role prompt and retry.",
+	ErrorKindSessionExpired:        "Re-authenticate your CLI (run `claude` or `codex` once interactively) then retry the planning run.",
+	ErrorKindRateLimited:           "Your CLI subscription has hit a rate limit. Wait a few minutes before retrying.",
+	ErrorKindContextOverflow:       "The planning context was too large for the model. Try reducing the number of open requirements or documents in scope.",
+	ErrorKindAdapterTimeout:        "The adapter timed out waiting for the CLI. Check that your CLI is healthy (`anpm-connector doctor`) and retry.",
+	ErrorKindCliNotFound:           "The CLI command was not found on the connector's PATH. Check the cli_command field on your CLI binding and ensure the binary is installed.",
+	ErrorKindCliTimeout:            "The CLI process timed out. Check that your CLI is healthy and retry.",
+	ErrorKindModelNotAvailable:     "The requested model is not available for this CLI. Check the model_id on your CLI binding.",
+	ErrorKindAdapterProtocol:       "The adapter produced unexpected output. Check your adapter script and retry.",
+	ErrorKindDispatchTimeout:       "The role-dispatch CLI ran past its wall-clock budget and was killed. The role's typical budget is shown in the Apply panel; set ANPM_DISPATCH_TIMEOUT (seconds) to override globally for unusually long tasks, or 0 to disable.",
+	ErrorKindOutputTooLarge:        "The CLI produced more output than the dispatch boundary allows (default 5 MB). Re-run with a tighter task scope, or set ANPM_DISPATCH_OUTPUT_MAX (bytes) to raise the limit (0 disables).",
+	ErrorKindInvalidResultSchema:   "The CLI returned output that does not match the role result schema (must include a `files` array). Check the role prompt and retry.",
 	ErrorKindRoleNotFound:          "The task references an execution role that is not in the current catalog. The role may have been renamed or removed; create a new candidate with a current role.",
 	ErrorKindRoleDispatchMalformed: "The task source is missing a role suffix (expected `role_dispatch:<role>`). This typically means the task was created before role suffixes were required; create a new candidate with a current role.",
-	ErrorKindRouterNoMatch: "The role dispatcher could not match the task to a known execution role. Try selecting a role manually from the dropdown.",
+	ErrorKindRouterNoMatch:         "The role dispatcher could not match the task to a known execution role. Try selecting a role manually from the dropdown.",
 }
 
 // PlanningRunBindingSnapshot freezes the fields of an account_bindings row
@@ -445,24 +446,24 @@ type PlanningEvidenceDetail struct {
 }
 
 type BacklogCandidate struct {
-	ID                  string                 `json:"id"`
-	ProjectID           string                 `json:"project_id"`
-	RequirementID       string                 `json:"requirement_id"`
-	PlanningRunID       string                 `json:"planning_run_id"`
-	ParentCandidateID   string                 `json:"parent_candidate_id,omitempty"`
-	SuggestionType      string                 `json:"suggestion_type"`
-	Title               string                 `json:"title"`
-	Description         string                 `json:"description"`
-	Status              string                 `json:"status"`
-	Rationale           string                 `json:"rationale"`
-	ValidationCriteria  string                 `json:"validation_criteria,omitempty"`
-	PODecision          string                 `json:"po_decision,omitempty"`
-	PriorityScore       float64                `json:"priority_score"`
-	Confidence          float64                `json:"confidence"`
-	Rank                int                    `json:"rank"`
-	Evidence            []string               `json:"evidence"`
-	EvidenceDetail      PlanningEvidenceDetail `json:"evidence_detail"`
-	DuplicateTitles     []string               `json:"duplicate_titles"`
+	ID                 string                 `json:"id"`
+	ProjectID          string                 `json:"project_id"`
+	RequirementID      string                 `json:"requirement_id"`
+	PlanningRunID      string                 `json:"planning_run_id"`
+	ParentCandidateID  string                 `json:"parent_candidate_id,omitempty"`
+	SuggestionType     string                 `json:"suggestion_type"`
+	Title              string                 `json:"title"`
+	Description        string                 `json:"description"`
+	Status             string                 `json:"status"`
+	Rationale          string                 `json:"rationale"`
+	ValidationCriteria string                 `json:"validation_criteria,omitempty"`
+	PODecision         string                 `json:"po_decision,omitempty"`
+	PriorityScore      float64                `json:"priority_score"`
+	Confidence         float64                `json:"confidence"`
+	Rank               int                    `json:"rank"`
+	Evidence           []string               `json:"evidence"`
+	EvidenceDetail     PlanningEvidenceDetail `json:"evidence_detail"`
+	DuplicateTitles    []string               `json:"duplicate_titles"`
 	// ExecutionRole names the specialist that should execute this
 	// candidate if apply is dispatched via role_dispatch (Phase 5 B2).
 	// Phase 6c PR-2: catalog enforcement applies — non-empty values
@@ -485,7 +486,7 @@ type BacklogCandidate struct {
 	FeedbackKind string `json:"feedback_kind,omitempty"`
 	// FeedbackNote is a free-text annotation paired with FeedbackKind.
 	// Phase 3B PR-3.
-	FeedbackNote string `json:"feedback_note,omitempty"`
+	FeedbackNote string    `json:"feedback_note,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -494,10 +495,10 @@ type BacklogCandidate struct {
 // actor_audit row for a candidate's execution_role field.
 // Confidence is only populated when ActorKind == "router".
 type ExecutionRoleAuthoring struct {
-	ActorKind  string    `json:"actor_kind"`             // "user" | "api_key" | "router" | "system" | "connector"
-	ActorID    string    `json:"actor_id,omitempty"`     // user id, api-key id, etc
+	ActorKind  string    `json:"actor_kind"`         // "user" | "api_key" | "router" | "system" | "connector"
+	ActorID    string    `json:"actor_id,omitempty"` // user id, api-key id, etc
 	Rationale  string    `json:"rationale,omitempty"`
-	Confidence *float64  `json:"confidence,omitempty"`   // router-only
+	Confidence *float64  `json:"confidence,omitempty"` // router-only
 	SetAt      time.Time `json:"set_at"`
 }
 
@@ -535,6 +536,7 @@ type TaskLineage struct {
 	RequirementID      string    `json:"requirement_id,omitempty"`
 	PlanningRunID      string    `json:"planning_run_id,omitempty"`
 	BacklogCandidateID string    `json:"backlog_candidate_id,omitempty"`
+	BacklogItemID      string    `json:"backlog_item_id,omitempty"`
 	LineageKind        string    `json:"lineage_kind"`
 	CreatedAt          time.Time `json:"created_at"`
 }
@@ -594,17 +596,17 @@ type CandidateEvidenceSummary struct {
 // BacklogCandidateStore.ListAppliedLineageByProject and exposed via
 // GET /api/projects/:id/task-lineage.
 type AppliedLineageEntry struct {
-	LineageID            string    `json:"lineage_id"`
-	ProjectID            string    `json:"project_id"`
-	TaskID               string    `json:"task_id"`
-	TaskTitle            string    `json:"task_title"`
-	TaskStatus           string    `json:"task_status"`
-	RequirementID        string    `json:"requirement_id,omitempty"`
-	RequirementTitle     string    `json:"requirement_title,omitempty"`
-	PlanningRunID        string    `json:"planning_run_id,omitempty"`
-	PlanningRunStatus    string    `json:"planning_run_status,omitempty"`
-	BacklogCandidateID   string    `json:"backlog_candidate_id,omitempty"`
-	BacklogCandidateTitle string   `json:"backlog_candidate_title,omitempty"`
-	LineageKind          string    `json:"lineage_kind"`
-	CreatedAt            time.Time `json:"created_at"`
+	LineageID             string    `json:"lineage_id"`
+	ProjectID             string    `json:"project_id"`
+	TaskID                string    `json:"task_id"`
+	TaskTitle             string    `json:"task_title"`
+	TaskStatus            string    `json:"task_status"`
+	RequirementID         string    `json:"requirement_id,omitempty"`
+	RequirementTitle      string    `json:"requirement_title,omitempty"`
+	PlanningRunID         string    `json:"planning_run_id,omitempty"`
+	PlanningRunStatus     string    `json:"planning_run_status,omitempty"`
+	BacklogCandidateID    string    `json:"backlog_candidate_id,omitempty"`
+	BacklogCandidateTitle string    `json:"backlog_candidate_title,omitempty"`
+	LineageKind           string    `json:"lineage_kind"`
+	CreatedAt             time.Time `json:"created_at"`
 }
