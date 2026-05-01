@@ -6,6 +6,7 @@ package handlers_test
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,18 +19,35 @@ import (
 	"github.com/screenleon/agent-native-pm/internal/testutil"
 )
 
-// fakeLLMServer returns a minimal OpenAI-compatible chat completion response
-// for any POST /chat/completions request.
-func fakeLLMServer(t *testing.T) *httptest.Server {
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+// fakeLLMClient returns a minimal OpenAI-compatible response without opening
+// a TCP listener. The sandbox used in CI/test agents may forbid socket binds,
+// so this exercises the same handler path through an in-memory RoundTripper.
+func fakeLLMClient(t *testing.T) *http.Client {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
+	return &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
+			return fakeJSONResponse(http.StatusNotFound, `{"error":{"message":"not found"}}`), nil
+		}
+		return fakeJSONResponse(http.StatusOK, `{
 			"model": "test-model",
 			"choices": [{"message": {"content": "ok"}}],
 			"usage": {"prompt_tokens": 5, "completion_tokens": 1}
-		}`))
-	}))
+		}`), nil
+	})}
+}
+
+func fakeJSONResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader([]byte(body))),
+	}
 }
 
 // probeFixture wires AccountBindingHandler + RemoteModelsHandler into one
@@ -51,7 +69,7 @@ func newProbeFixture(t *testing.T) probeFixture {
 	}
 	bs := store.NewAccountBindingStore(db, nil)
 	abh := handlers.NewAccountBindingHandler(bs).WithLocalMode(true)
-	rmh := handlers.NewRemoteModelsHandler(bs)
+	rmh := handlers.NewRemoteModelsHandler(bs).WithHTTPClients(nil, fakeLLMClient(t))
 
 	srv := router.New(router.Deps{
 		AccountBindingHandler: abh,
@@ -170,11 +188,8 @@ func Test3A1_6ListUserNullProbeColumns(t *testing.T) {
 // T-3A1-7: POST /api/me/probe-model with binding_id persists probe result.
 // Uses a fake LLM server so the probe HTTP call succeeds without a real provider.
 func Test3A1_7ProbeWithBindingIDPersists(t *testing.T) {
-	llm := fakeLLMServer(t)
-	defer llm.Close()
-
 	f := newProbeFixture(t)
-	bindingID := createAPIBinding(t, f.srv, llm.URL+"/v1")
+	bindingID := createAPIBinding(t, f.srv, "http://localhost:11434/v1")
 
 	// POST probe-model referencing the binding.
 	probeBody, _ := json.Marshal(map[string]interface{}{
@@ -230,16 +245,13 @@ func Test3A1_7ProbeWithBindingIDPersists(t *testing.T) {
 
 // T-3A1-8: POST /api/me/probe-model without binding_id does not touch any binding row.
 func Test3A1_8ProbeWithoutBindingIDNoPersist(t *testing.T) {
-	llm := fakeLLMServer(t)
-	defer llm.Close()
-
 	f := newProbeFixture(t)
 	// Create a binding so we can verify it was untouched afterwards.
 	createAPIBinding(t, f.srv, "http://localhost:11434/v1")
 
 	// POST probe-model with inline credentials (no binding_id).
 	probeBody, _ := json.Marshal(map[string]interface{}{
-		"base_url": llm.URL + "/v1",
+		"base_url": "http://localhost:11434/v1",
 		"model_id": "test-model",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/me/probe-model", bytes.NewReader(probeBody))
