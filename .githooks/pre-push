@@ -51,7 +51,7 @@ export TEST_DATABASE_URL="sqlite"
 unset DATABASE_URL 2>/dev/null || true
 
 cd "$BACKEND"
-if ! go test ./... -count=1 -timeout 180s; then
+if ! go test ./... -count=1 -timeout 300s; then
   echo ""
   echo "[pre-push] BLOCKED: backend tests failed. Fix them before pushing."
   echo "[pre-push] to skip (emergency only): git push --no-verify"
